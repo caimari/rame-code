@@ -1,6 +1,6 @@
 # RAME Code
 
-**A local-first coding agent for VS Code with verifiable, resumable missions.**
+**An experimental local-first coding agent for VS Code with verifiable, resumable missions.**
 
 RAME Code is a new independent open-source project started during the Meta Global AI Developer Hackathon 2026. Its goal is to let a developer delegate a software mission without losing the decisions, evidence, and unfinished work that make the result trustworthy.
 
@@ -8,7 +8,9 @@ RAME Code is a new independent open-source project started during the Meta Globa
 
 This repository is a clean project bootstrap. No functional agent or VS Code extension has been released yet.
 
-The first public implementation is being built during the hackathon in this repository. It is not copied from, and does not depend on, any earlier private RAME implementation.
+The first public implementation is being built during the hackathon in this repository. It is not copied from, and does not depend on, any earlier private implementation.
+
+Fully local execution and data locality are design goals until validated, not established properties of this bootstrap.
 
 ## Planned hackathon MVP
 
@@ -20,9 +22,20 @@ The first installable VS Code extension is intended to:
 - run a bounded coding loop that can inspect files, propose changes, and execute verification commands;
 - preserve an explicit mission goal, user-authorized versioned decisions, changed files, test evidence, and remaining work across restarts;
 - detect when verified work has become stale after a decision changes;
-- escalate a concrete blocker from Glimmer to Spark only within an authorized data and cost budget.
+- evaluate a reversible Glimmer-to-Spark cascade under an authorized data and cost budget.
 
 These are development goals, not claims about the current bootstrap.
+
+## Technical hypothesis under evaluation
+
+The hypothesis to be tested is a reversible local-to-remote cascade:
+
+1. Muse Glimmer works locally on the assigned mission.
+2. An observable, verifier-backed blocker can trigger bounded Muse Spark 1.3 assistance.
+3. The relevant verifier is rerun after the assisted change.
+4. When recovery is verified and cooldown rules allow it, work returns to Glimmer without losing the mission state.
+
+No novelty or superiority is claimed before evaluation. The comparison to be reported is between candidate cascade policies, not against other systems.
 
 ## Core idea
 
@@ -34,13 +47,15 @@ goal -> authorized decisions -> changes -> verification evidence -> current stat
 
 Models may observe, reason, and propose. Durable decisions, permissions, and promotion of a candidate release remain under explicit user control.
 
+Previously authorized policies can permit routine actions without repeated prompts. Scope expansion, out-of-policy remote data, and candidate release promotion require control.
+
 ## Model modes
 
 | Mode | Intended behavior |
 | --- | --- |
-| Local | Muse Glimmer runs on the user's hardware. Project data stays local. |
+| Local | Muse Glimmer runs on the user's hardware. Keeping project data local is a design goal until validated. |
 | Remote | Muse Spark runs through Meta Model API while tools remain local. |
-| Hybrid | Glimmer works locally and RAME Code may request bounded Spark assistance when observable progress rules identify a blocker. |
+| Hybrid | Glimmer works locally and RAME Code may request bounded Spark assistance when observable, verifier-backed progress rules identify a blocker, then return to Glimmer when recovery is verified and cooldown rules allow it. |
 
 ## Trust principles
 
@@ -50,6 +65,10 @@ Models may observe, reason, and propose. Durable decisions, permissions, and pro
 - Candidate changes must be shown and verified before promotion.
 - A future version cannot silently weaken the checks that authorize its installation.
 
+## Planned cascade comparison
+
+Using the same tasks and models, the planned evaluation compares ascending-only escalation against verified return, measuring task success, cost, latency, verification overhead, and oscillations between models.
+
 ## Development provenance
 
 - Public implementation start: **2026-10-31**.
@@ -58,6 +77,8 @@ Models may observe, reason, and propose. Durable decisions, permissions, and pro
 - Repository: <https://github.com/caimari/rame-code>
 - Author: **Antoni Caimari Caldés**.
 
+Design choices are informed by Antoni Caimari Caldés's prior private experiments. All public implementation code and Git history start independently in this repository on 2026-10-31; no private code, services, data, documents, results, or history are included or required. Only independently reproduced public results may be claimed.
+
 Development milestones and model/tool participation are recorded in [`HACKATHON_WORK.md`](HACKATHON_WORK.md).
 
 ## Roadmap
@@ -65,7 +86,7 @@ Development milestones and model/tool participation are recorded in [`HACKATHON_
 - `0.1.0`: installable extension, one model endpoint, bounded file/test tools.
 - `0.2.0`: first verified improvement produced with assistance from the previous RAME Code version.
 - `0.3.0`: persistent and resumable missions.
-- `0.4.0`: policy-controlled Glimmer-to-Spark escalation.
+- `0.4.0`: reversible policy-controlled Glimmer-to-Spark cascade with verified return to Glimmer.
 - Hackathon release: reproducible demo, packaged VSIX, independent verification, and frozen evidence.
 
 The roadmap may be reduced to protect reliability. Only implemented and reproducible behavior will be presented as complete.

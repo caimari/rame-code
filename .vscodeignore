@@ -1,0 +1,9 @@
+.github/**
+.gitignore
+HACKATHON_WORK.md
+src/**
+test/**
+out/test/**
+out/**/*.map
+tsconfig.json
+*.vsix

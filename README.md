@@ -6,11 +6,13 @@ RAME Code is a new independent open-source project started during the Meta Globa
 
 ## Current status
 
-This repository is a clean project bootstrap. No functional agent or VS Code extension has been released yet.
+Version `0.1.0` is under active development. Its first bounded vertical slice lets a user store a Meta Model API key in VS Code SecretStorage, submit a mission goal to Muse Spark 1.3, and inspect a schema-constrained plan in a dedicated output channel.
 
 The first public implementation is being built during the hackathon in this repository. It is not copied from, and does not depend on, any earlier private implementation.
 
 Fully local execution and data locality are design goals until validated, not established properties of this bootstrap.
+
+The current slice is not yet a coding agent: it cannot read or change workspace files and cannot run commands. Those permissions will be introduced incrementally with explicit boundaries and tests.
 
 ## Planned hackathon MVP
 
@@ -83,8 +85,8 @@ Development milestones and model/tool participation are recorded in [`HACKATHON_
 
 ## Roadmap
 
-- `0.1.0`: installable extension, one model endpoint, bounded file/test tools.
-- `0.2.0`: first verified improvement produced with assistance from the previous RAME Code version.
+- `0.1.0`: installable extension, secret-backed Meta Model API connection, and structured mission planning.
+- `0.2.0`: bounded read-only workspace inspection and verifier execution.
 - `0.3.0`: persistent and resumable missions.
 - `0.4.0`: reversible policy-controlled Glimmer-to-Spark cascade with verified return to Glimmer.
 - Hackathon release: reproducible demo, packaged VSIX, independent verification, and frozen evidence.
@@ -93,7 +95,24 @@ The roadmap may be reduced to protect reliability. Only implemented and reproduc
 
 ## Development
 
-Setup instructions will be added with the first executable implementation.
+Requirements:
+
+- Node.js 22 or later for the complete development and packaging toolchain;
+- VS Code 1.95 or later;
+- a separate Meta Model API key with access to `muse-spark-1.3`.
+
+```bash
+npm ci
+npm run check
+npm run package
+```
+
+Press `F5` in VS Code to open an Extension Development Host. Then run:
+
+1. `RAME Code: Set Meta API Key`
+2. `RAME Code: Start Mission`
+
+The API key is stored in VS Code SecretStorage. The current mission command sends only the goal entered in the prompt to Meta Model API; it does not read or transmit workspace content.
 
 Do not commit API keys or local model files. RAME Code will require users to supply their own model endpoints and credentials.
 

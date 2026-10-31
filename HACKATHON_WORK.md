@@ -17,6 +17,16 @@ This log separates work created during the Meta Global AI Developer Hackathon 20
 - Made no functional implementation change: no agent or extension code was added or modified.
 - Documentation assistance is recorded here separately from functional implementation.
 
+## 2026-10-31 — Version 0.1.0 vertical slice
+
+- Used Muse Code 1.4.10 with `muse-spark-1.3`, Contributor Mode off, and no write or shell permission to propose and later review a minimal extension slice.
+- Human review corrected the proposed Meta Model API contract before integration: Standard mode is selected by model ID `muse-spark-1.3`; no invented `mode` request field is sent.
+- Added API-key storage through VS Code SecretStorage and a bounded command that sends only a user-entered mission goal to Meta Model API.
+- Added strict schema-constrained mission plans, defensive response parsing, cancellation, concurrent-run prevention, and unit tests.
+- The Muse review incorrectly reported that a test expected a redacted key because its safe review view replaced the test credential. The actual test uses a synthetic key and passed; valid findings from the review were fixed and retested.
+- No live Model API call from the extension has yet been claimed. A separate user-supplied Model API key is still required for that verification.
+- The extension currently has no workspace read, write, or shell capability.
+
 ## Provenance boundary
 
 - This repository must not copy code or Git history from any earlier private implementation.

@@ -18,11 +18,22 @@
   ],
   "activationEvents": [
     "onCommand:rameCode.setMetaApiKey",
-    "onCommand:rameCode.startMission"
+    "onCommand:rameCode.startMission",
+    "onCommand:rameCode.openPanel",
+    "onCommand:rameCode.newThread",
+    "onView:rameCode.main"
   ],
   "main": "./out/src/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "rameCode.openPanel",
+        "title": "RAME Code: Open RAME Code"
+      },
+      {
+        "command": "rameCode.newThread",
+        "title": "RAME Code: New Thread"
+      },
       {
         "command": "rameCode.setMetaApiKey",
         "title": "RAME Code: Set Meta API Key"
@@ -31,7 +42,25 @@
         "command": "rameCode.startMission",
         "title": "RAME Code: Start Mission"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rameCode",
+          "title": "RAME Code",
+          "icon": "media/rame-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "rameCode": [
+        {
+          "id": "rameCode.main",
+          "name": "RAME Code",
+          "type": "webview"
+        }
+      ]
+    }
   },
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",

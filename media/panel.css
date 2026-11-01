@@ -1,0 +1,102 @@
+/* RAME Code panel: native-feeling styles built only on VS Code tokens. */
+
+body {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background-color: var(--vscode-sideBar-background);
+  margin: 0;
+  padding: 0;
+}
+
+h2 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 8px 0 0;
+  color: var(--vscode-sideBarTitle-foreground, var(--vscode-foreground));
+}
+
+p {
+  margin: 0;
+}
+
+label {
+  font-weight: 600;
+}
+
+input[type="password"],
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  color: var(--vscode-input-foreground);
+  background-color: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 2px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+input[type="password"]:focus,
+textarea:focus,
+button:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+textarea {
+  resize: vertical;
+  line-height: 1.4;
+}
+
+button {
+  color: var(--vscode-button-foreground);
+  background-color: var(--vscode-button-background);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  padding: 4px 14px;
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: var(--vscode-button-hoverBackground);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.secondary {
+  color: var(--vscode-button-secondaryForeground);
+  background-color: var(--vscode-button-secondaryBackground);
+}
+
+button.secondary:hover {
+  background-color: var(--vscode-button-secondaryHoverBackground);
+}
+
+#connection {
+  font-weight: 600;
+}
+
+#status {
+  min-height: 1.4em;
+}
+
+#plan {
+  border: 1px solid var(--vscode-panel-border, transparent);
+  border-radius: 2px;
+  padding: 8px;
+  background-color: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+}
+
+#plan h3 {
+  font-size: inherit;
+  margin: 0 0 4px;
+}

@@ -1,7 +1,14 @@
+import { withBoundedRequest } from './boundedRequest.js';
 import type { MissionPlan } from './types.js';
+import { parseUsage, type ProviderUsage } from './usage.js';
 
 export const META_API_ENDPOINT = 'https://api.meta.ai/v1/chat/completions';
 export const META_MODEL = 'muse-spark-1.3';
+
+export interface ChatMessageInput {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
 
 type FetchLike = (
   input: string | URL | Request,
@@ -17,6 +24,17 @@ interface ChatCompletionResponse {
   error?: {
     message?: string;
   };
+  usage?: unknown;
+}
+
+export interface ChatTextResult {
+  text: string;
+  usage: ProviderUsage;
+}
+
+export interface MissionPlanResult {
+  plan: MissionPlan;
+  usage: ProviderUsage;
 }
 
 export interface CreateMissionPlanOptions {
@@ -25,6 +43,49 @@ export interface CreateMissionPlanOptions {
   signal?: AbortSignal;
   fetchImpl?: FetchLike;
   endpoint?: string;
+  /** Exact validated cloud model selection; defaults to `muse-spark-1.3`. */
+  model?: string;
+  /** Deadline covering headers and body; defaults to 120 seconds. */
+  timeoutMs?: number;
+}
+
+const META_TIMEOUT_MESSAGE = 'Meta Model API request timed out after 120 seconds.';
+
+/**
+ * POST one Meta request and read its whole body under one deadline, so a
+ * response that never finishes cannot hang the caller.
+ */
+async function postMetaRequest(
+  options: CreateMissionPlanOptions,
+  body: Record<string, unknown>,
+): Promise<{ response: Response; rawPayload: string }> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  return withBoundedRequest(options.signal, options.timeoutMs, META_TIMEOUT_MESSAGE, async (signal) => {
+    const response = await fetchImpl(options.endpoint ?? META_API_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${options.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      signal,
+      body: JSON.stringify(body),
+    });
+    return { response, rawPayload: await response.text() };
+  });
+}
+
+function selectedModel(value: unknown): string {
+  if (typeof value === 'string') {
+    const id = value.trim();
+    if (
+      id.length > 0 &&
+      id.length <= 128 &&
+      /^muse-(spark|wonder)-[A-Za-z0-9._-]+$/.test(id)
+    ) {
+      return id;
+    }
+  }
+  return META_MODEL;
 }
 
 const missionPlanSchema = {
@@ -67,34 +128,23 @@ const missionPlanSchema = {
 export async function createMissionPlan(
   options: CreateMissionPlanOptions,
 ): Promise<MissionPlan> {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const response = await fetchImpl(options.endpoint ?? META_API_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${options.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    signal: options.signal,
-    body: JSON.stringify({
-      model: META_MODEL,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Create a bounded software mission plan. Do not claim to have inspected files or run tools. Return only the requested structured output.',
-        },
-        {
-          role: 'user',
-          content: options.goal,
-        },
-      ],
-      max_completion_tokens: 1200,
-      response_format: missionPlanSchema,
-      store: false,
-    }),
+  const { response, rawPayload } = await postMetaRequest(options, {
+    model: selectedModel(options.model),
+    messages: [
+      {
+        role: 'system',
+        content:
+          'Create a bounded software mission plan. Do not claim to have inspected files or run tools. Return only the requested structured output.',
+      },
+      {
+        role: 'user',
+        content: options.goal,
+      },
+    ],
+    max_completion_tokens: 1200,
+    response_format: missionPlanSchema,
+    store: false,
   });
-
-  const rawPayload = await response.text();
   const payload = parseResponsePayload(rawPayload);
   if (!response.ok) {
     const detail = payload.error?.message?.trim();
@@ -118,6 +168,86 @@ export async function createMissionPlan(
   }
 
   return validateMissionPlan(decoded);
+}
+
+/**
+ * Conversational Chat-mode call against Meta Model API. Returns the
+ * assistant prose plus defensively parsed usage. A successful result lets
+ * the caller mark the connection verified.
+ */
+export async function createChatCompletion(
+  options: CreateMissionPlanOptions & { messages: ChatMessageInput[] },
+): Promise<ChatTextResult> {
+  const { response, rawPayload } = await postMetaRequest(options, {
+    model: selectedModel(options.model),
+    messages: options.messages,
+    max_completion_tokens: 1200,
+    store: false,
+  });
+  const payload = parseResponsePayload(rawPayload);
+  if (!response.ok) {
+    const detail = payload.error?.message?.trim();
+    throw new Error(
+      detail
+        ? `Meta Model API returned HTTP ${response.status}: ${detail}`
+        : `Meta Model API returned HTTP ${response.status}.`,
+    );
+  }
+
+  const content = payload.choices?.[0]?.message?.content;
+  if (typeof content !== 'string' || content.length === 0) {
+    throw new Error('Meta Model API returned no assistant reply.');
+  }
+  return { text: content, usage: parseUsage(payload) };
+}
+
+/**
+ * Mission-plan call that also returns defensively parsed usage. The
+ * existing {@link createMissionPlan} behavior is unchanged.
+ */
+export async function createMissionPlanWithUsage(
+  options: CreateMissionPlanOptions,
+): Promise<MissionPlanResult> {
+  const { response, rawPayload } = await postMetaRequest(options, {
+    model: selectedModel(options.model),
+    messages: [
+      {
+        role: 'system',
+        content:
+          'Create a bounded software mission plan. Do not claim to have inspected files or run tools. Return only the requested structured output.',
+      },
+      {
+        role: 'user',
+        content: options.goal,
+      },
+    ],
+    max_completion_tokens: 1200,
+    response_format: missionPlanSchema,
+    store: false,
+  });
+  const payload = parseResponsePayload(rawPayload);
+  if (!response.ok) {
+    const detail = payload.error?.message?.trim();
+    throw new Error(
+      detail
+        ? `Meta Model API returned HTTP ${response.status}: ${detail}`
+        : `Meta Model API returned HTTP ${response.status}.`,
+    );
+  }
+
+  const content = payload.choices?.[0]?.message?.content;
+  if (typeof content !== 'string' || content.length === 0) {
+    throw new Error('Meta Model API returned no mission plan.');
+  }
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(content) as unknown;
+  } catch {
+    throw new Error('Meta Model API returned an invalid JSON mission plan.');
+  }
+
+  return { plan: validateMissionPlan(decoded), usage: parseUsage(payload) };
 }
 
 export function validateMissionPlan(value: unknown): MissionPlan {

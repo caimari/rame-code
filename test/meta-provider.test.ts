@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createChatCompletion,
   createMissionPlan,
   META_API_ENDPOINT,
   META_MODEL,
@@ -55,6 +56,23 @@ test('sends a bounded official chat-completions request', async () => {
     'json_schema',
   );
   assert.equal(plan.steps[0]?.id, 'step-1');
+});
+
+test('uses the exact selected cloud model when provided', async () => {
+  let capturedBody: Record<string, unknown> | undefined;
+  await createChatCompletion({
+    apiKey: 'dummy-test-key',
+    goal: 'Explain closures.',
+    model: 'muse-wonder-1.0',
+    messages: [{ role: 'user', content: 'Explain closures.' }],
+    fetchImpl: async (_input, init) => {
+      capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({
+        choices: [{ message: { content: 'A wonder reply.' } }],
+      });
+    },
+  });
+  assert.equal(capturedBody?.model, 'muse-wonder-1.0');
 });
 
 test('rejects malformed mission plans', () => {

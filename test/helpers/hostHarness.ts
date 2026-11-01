@@ -259,7 +259,7 @@ export interface PostedState {
   status: string;
   connection: string;
   activeThreadId: string | null;
-  turns: Array<{ kind: string; text?: string; message?: string }>;
+  turns: Array<{ kind: string; text?: string; message?: string; hostRecord?: string[] }>;
   agentPending: null | { actionId: string; digest: string; tool: string; threadId: string; bodyPreview: string; targets: string[] };
   agentLog: Array<{ tool: string; decision: string; result: string }>;
   escalation: { pending: boolean; reason: string };

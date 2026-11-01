@@ -56,6 +56,7 @@
   var activityListEl = el('activityList');
   var resultSectionEl = el('resultSection');
   var resultBodyEl = el('resultBody');
+  var resultHostRecordEl = el('resultHostRecord');
   var agentSectionEl = el('agentSection');
   var agentWarningEl = el('agentWarning');
   var permissionWarningEl = el('permissionWarning');
@@ -287,12 +288,36 @@
     return String(text || '').replace(/^(?:Agent \([^)]*\):\s*)+/, '');
   }
 
+  // The host record is a separate field written by RAME Code itself; it is
+  // never parsed out of model text, so the model cannot render one.
+  function renderHostRecord(container, record) {
+    if (!container || !Array.isArray(record) || record.length === 0) {
+      return;
+    }
+    var box = document.createElement('div');
+    box.className = 'host-record';
+    box.setAttribute('role', 'group');
+    box.setAttribute('aria-label', 'Host record, verified by RAME Code');
+    var head = document.createElement('h5');
+    head.textContent = 'Host record \u2014 verified by RAME Code, not written by the model';
+    box.appendChild(head);
+    var list = document.createElement('ul');
+    record.forEach(function (line) {
+      var item = document.createElement('li');
+      item.textContent = String(line).replace(/^\u2022\s*/, '');
+      list.appendChild(item);
+    });
+    box.appendChild(list);
+    container.appendChild(box);
+  }
+
   function renderTurns(turns, isRunning) {
     clearEl(transcriptEl);
     if (resultSectionEl) {
       resultSectionEl.hidden = true;
     }
     setText(resultBodyEl, '');
+    clearEl(resultHostRecordEl);
     if (!Array.isArray(turns) || turns.length === 0) {
       if (emptyStateEl) {
         emptyStateEl.hidden = false;
@@ -306,6 +331,7 @@
     if (!isRunning && turns.length > 0 && turns[turns.length - 1] && turns[turns.length - 1].kind === 'assistant') {
       finalResultIndex = turns.length - 1;
       setText(resultBodyEl, cleanAgentResult(turns[finalResultIndex].text));
+      renderHostRecord(resultHostRecordEl, turns[finalResultIndex].hostRecord);
       if (resultSectionEl) {
         resultSectionEl.hidden = false;
       }
@@ -332,6 +358,7 @@
         var reply = document.createElement('p');
         reply.textContent = String(turn.text || '');
         card.appendChild(reply);
+        renderHostRecord(card, turn.hostRecord);
       } else if (turn.kind === 'plan') {
         card.classList.add('turn-plan');
         renderPlanTurn(card, turn.plan || {});

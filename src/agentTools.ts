@@ -150,286 +150,164 @@ function fail(message: string): never {
   throw new AgentToolProtocolError(message);
 }
 
+/*
+ * Validation messages name the field and its rule so the model can fix the
+ * actual mistake on the next step. They are fixed host text: values the
+ * model sent are never echoed back.
+ */
+function failArgs(tool: string, detail: string): never {
+  fail(`Invalid ${tool} arguments: ${detail}.`);
+}
+
+function requireExactArgs(tool: string, raw: unknown, keys: string[]): Record<string, unknown> {
+  if (!isRecord(raw) || !hasExactKeys(raw, keys)) {
+    failArgs(tool, `use exactly the keys ${keys.join(', ')}`);
+  }
+  return raw as Record<string, unknown>;
+}
+
+function requireString(tool: string, value: unknown, key: string, nonEmpty: boolean, max: number): string {
+  if (typeof value !== 'string' || (nonEmpty && value.length === 0) || value.length > max) {
+    failArgs(tool, `${key} must be a ${nonEmpty ? 'non-empty ' : ''}string of at most ${max} characters`);
+  }
+  return value as string;
+}
+
+function requireInteger(tool: string, value: unknown, key: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    failArgs(tool, `${key} must be an integer from ${min} to ${max}`);
+  }
+  return value as number;
+}
+
+function requireBoolean(tool: string, value: unknown, key: string): boolean {
+  if (typeof value !== 'boolean') {
+    failArgs(tool, `${key} must be true or false`);
+  }
+  return value;
+}
+
+function requireSha256(tool: string, value: unknown, key: string): string {
+  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) {
+    failArgs(tool, `${key} must be the 64-character lowercase hex SHA-256 returned by read_file`);
+  }
+  return value as string;
+}
+
 /** Validate `list_files` args with exact keys. */
 export function validateListFilesArgs(raw: unknown): ListFilesArgs {
-  if (!isRecord(raw) || !hasExactKeys(raw, ['dir', 'limit'])) {
-    fail('Invalid list_files arguments.');
-  }
-  const record = raw as Record<string, unknown>;
-  if (typeof record.dir !== 'string' || record.dir.length > 512) {
-    fail('Invalid list_files arguments.');
-  }
-  if (
-    typeof record.limit !== 'number' ||
-    !Number.isInteger(record.limit) ||
-    record.limit < 1 ||
-    record.limit > 200
-  ) {
-    fail('Invalid list_files arguments.');
-  }
-  return { dir: record.dir as string, limit: record.limit as number };
+  const record = requireExactArgs('list_files', raw, ['dir', 'limit']);
+  return {
+    dir: requireString('list_files', record.dir, 'dir', false, 512),
+    limit: requireInteger('list_files', record.limit, 'limit', 1, 200),
+  };
 }
 
 /** Validate bounded recursive workspace inspection. */
 export function validateInspectWorkspaceArgs(raw: unknown): InspectWorkspaceArgs {
-  if (!isRecord(raw) || !hasExactKeys(raw, ['dir', 'maxDepth', 'maxEntries'])) {
-    fail('Invalid inspect_workspace arguments.');
-  }
-  const record = raw as Record<string, unknown>;
-  if (typeof record.dir !== 'string' || record.dir.length > 512) {
-    fail('Invalid inspect_workspace arguments.');
-  }
-  if (typeof record.maxDepth !== 'number' || !Number.isInteger(record.maxDepth) || record.maxDepth < 0 || record.maxDepth > 12) {
-    fail('Invalid inspect_workspace arguments.');
-  }
-  if (typeof record.maxEntries !== 'number' || !Number.isInteger(record.maxEntries) || record.maxEntries < 1 || record.maxEntries > 2000) {
-    fail('Invalid inspect_workspace arguments.');
-  }
+  const record = requireExactArgs('inspect_workspace', raw, ['dir', 'maxDepth', 'maxEntries']);
   return {
-    dir: record.dir as string,
-    maxDepth: record.maxDepth as number,
-    maxEntries: record.maxEntries as number,
+    dir: requireString('inspect_workspace', record.dir, 'dir', false, 512),
+    maxDepth: requireInteger('inspect_workspace', record.maxDepth, 'maxDepth', 0, 12),
+    maxEntries: requireInteger('inspect_workspace', record.maxEntries, 'maxEntries', 1, 2000),
   };
 }
 
 export function validateFilesystemUsageArgs(raw: unknown): FilesystemUsageArgs {
   if (!isRecord(raw) || Object.keys(raw).length !== 0) {
-    fail('Invalid filesystem_usage arguments.');
+    failArgs('filesystem_usage', 'use exactly {} with no keys');
   }
   return {};
 }
 
-/**
- * Conservative ReDoS screen for model-supplied regexes. Matching runs
- * synchronously on the extension host, so one exponential pattern would
- * freeze every extension (including Cancel). Rejects backreferences and any
- * repeated group whose body itself repeats or alternates, e.g. `(a+)+`,
- * `(a|aa)*`, `(.*x){20}`. Plain quantified atoms and optional groups stay
- * allowed.
- */
-export function isBacktrackingRiskPattern(pattern: string): boolean {
-  if (/\\[1-9]|\\k</.test(pattern)) {
-    return true;
-  }
-  // Each open group tracks whether its body repeats or alternates.
-  const stack: boolean[] = [];
-  let inClass = false;
-  // More than two unbounded repeats (`.*a.*b.*c`) backtrack polynomially.
-  let unbounded = 0;
-  for (let index = 0; index < pattern.length; index++) {
-    const ch = pattern[index] as string;
-    if (ch === '\\') {
-      index += 1;
-      continue;
-    }
-    if (inClass) {
-      if (ch === ']') {
-        inClass = false;
-      }
-      continue;
-    }
-    if (ch === '[') {
-      inClass = true;
-      continue;
-    }
-    const markRisky = (): void => {
-      if (stack.length > 0) {
-        stack[stack.length - 1] = true;
-      }
-    };
-    if (ch === '(') {
-      stack.push(false);
-    } else if (ch === '|') {
-      markRisky();
-    } else if (ch === '*' || ch === '+' || ch === '{') {
-      if (ch !== '{' || /^\{\s*\d+\s*,\s*\}/.test(pattern.slice(index))) {
-        unbounded += 1;
-        if (unbounded > 2) {
-          return true;
-        }
-      }
-      markRisky();
-    } else if (ch === ')') {
-      const bodyRepeats = stack.pop() ?? false;
-      const next = pattern[index + 1];
-      const repeated = next === '*' || next === '+' || (next === '{' && !/^\{\s*[01]?\s*\}/.test(pattern.slice(index + 1)));
-      if (repeated && bodyRepeats) {
-        return true;
-      }
-      if (bodyRepeats) {
-        // A repeating inner group makes its enclosing group repeat too.
-        markRisky();
-      }
-    }
-  }
-  return false;
-}
-
 /** Validate `search_text` args with exact keys. */
 export function validateSearchTextArgs(raw: unknown): SearchTextArgs {
-  if (!isRecord(raw) || !hasExactKeys(raw, ['query', 'dir', 'isRegex', 'maxResults'])) {
-    fail('Invalid search_text arguments.');
-  }
-  const record = raw as Record<string, unknown>;
-  if (
-    typeof record.query !== 'string' ||
-    record.query.length === 0 ||
-    record.query.length > 200
-  ) {
-    fail('Invalid search_text arguments.');
-  }
-  if (typeof record.dir !== 'string' || record.dir.length > 512) {
-    fail('Invalid search_text arguments.');
-  }
-  if (typeof record.isRegex !== 'boolean') {
-    fail('Invalid search_text arguments.');
-  }
-  if (
-    typeof record.maxResults !== 'number' ||
-    !Number.isInteger(record.maxResults) ||
-    record.maxResults < 1 ||
-    record.maxResults > MAX_SEARCH_RESULTS
-  ) {
-    fail('Invalid search_text arguments.');
-  }
-  // Reject patterns that are almost certainly ReDoS-prone nested quantifiers.
-  if (record.isRegex === true) {
+  const record = requireExactArgs('search_text', raw, ['query', 'dir', 'isRegex', 'maxResults']);
+  const query = requireString('search_text', record.query, 'query', true, 200);
+  const dir = requireString('search_text', record.dir, 'dir', false, 512);
+  const isRegex = requireBoolean('search_text', record.isRegex, 'isRegex');
+  const maxResults = requireInteger('search_text', record.maxResults, 'maxResults', 1, MAX_SEARCH_RESULTS);
+  // Only syntax is checked here. Pathological backtracking is not guessed
+  // from the pattern's shape: the host runs every regex under a time budget.
+  if (isRegex) {
     try {
       // eslint-disable-next-line no-new
-      new RegExp(record.query as string);
+      new RegExp(query);
     } catch {
-      fail('Invalid search_text arguments.');
-    }
-    if (isBacktrackingRiskPattern(record.query as string)) {
-      fail('Invalid search_text arguments: that regex could backtrack catastrophically; use a simpler pattern or a literal search.');
+      fail('Invalid search_text arguments: the regex does not compile.');
     }
   }
-  return {
-    query: record.query as string,
-    dir: record.dir as string,
-    isRegex: record.isRegex as boolean,
-    maxResults: record.maxResults as number,
-  };
+  return { query, dir, isRegex, maxResults };
 }
 
 /** Validate `read_file` args with exact keys. */
 export function validateReadFileArgs(raw: unknown): ReadFileArgs {
-  if (!isRecord(raw) || !hasExactKeys(raw, ['path', 'maxBytes'])) {
-    fail('Invalid read_file arguments.');
-  }
-  const record = raw as Record<string, unknown>;
-  if (typeof record.path !== 'string' || record.path.length === 0 || record.path.length > 512) {
-    fail('Invalid read_file arguments.');
-  }
-  if (
-    typeof record.maxBytes !== 'number' ||
-    !Number.isInteger(record.maxBytes) ||
-    record.maxBytes < 1 ||
-    record.maxBytes > 262144
-  ) {
-    fail('Invalid read_file arguments.');
-  }
-  return { path: record.path as string, maxBytes: record.maxBytes as number };
-}
-
-function validateSha256(value: unknown, message: string): string {
-  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) {
-    fail(message);
-  }
-  return value as string;
+  const record = requireExactArgs('read_file', raw, ['path', 'maxBytes']);
+  return {
+    path: requireString('read_file', record.path, 'path', true, 512),
+    maxBytes: requireInteger('read_file', record.maxBytes, 'maxBytes', 1, 262144),
+  };
 }
 
 export function validateCreateDirectoryArgs(raw: unknown): CreateDirectoryArgs {
-  if (!isRecord(raw) || !hasExactKeys(raw, ['path']) || typeof raw.path !== 'string' || raw.path.length === 0 || raw.path.length > 512) {
-    fail('Invalid create_directory arguments.');
-  }
-  return { path: raw.path };
+  const record = requireExactArgs('create_directory', raw, ['path']);
+  return { path: requireString('create_directory', record.path, 'path', true, 512) };
 }
 
 export function validateMoveFileArgs(raw: unknown): MoveFileArgs {
-  if (!isRecord(raw) || !hasExactKeys(raw, ['source', 'destination', 'expectedHash'])) {
-    fail('Invalid move_file arguments.');
-  }
-  if (typeof raw.source !== 'string' || raw.source.length === 0 || raw.source.length > 512 || typeof raw.destination !== 'string' || raw.destination.length === 0 || raw.destination.length > 512) {
-    fail('Invalid move_file arguments.');
-  }
+  const record = requireExactArgs('move_file', raw, ['source', 'destination', 'expectedHash']);
   return {
-    source: raw.source,
-    destination: raw.destination,
-    expectedHash: validateSha256(raw.expectedHash, 'Invalid move_file arguments.'),
+    source: requireString('move_file', record.source, 'source', true, 512),
+    destination: requireString('move_file', record.destination, 'destination', true, 512),
+    expectedHash: requireSha256('move_file', record.expectedHash, 'expectedHash'),
   };
 }
 
 export function validateDeleteFileArgs(raw: unknown): DeleteFileArgs {
-  if (!isRecord(raw) || !hasExactKeys(raw, ['path', 'expectedHash']) || typeof raw.path !== 'string' || raw.path.length === 0 || raw.path.length > 512) {
-    fail('Invalid delete_file arguments.');
-  }
+  const record = requireExactArgs('delete_file', raw, ['path', 'expectedHash']);
   return {
-    path: raw.path,
-    expectedHash: validateSha256(raw.expectedHash, 'Invalid delete_file arguments.'),
+    path: requireString('delete_file', record.path, 'path', true, 512),
+    expectedHash: requireSha256('delete_file', record.expectedHash, 'expectedHash'),
   };
 }
 
 export function validateSetExecutableArgs(raw: unknown): SetExecutableArgs {
-  if (!isRecord(raw) || !hasExactKeys(raw, ['path', 'expectedHash', 'executable']) || typeof raw.path !== 'string' || raw.path.length === 0 || raw.path.length > 512 || typeof raw.executable !== 'boolean') {
-    fail('Invalid set_executable arguments.');
-  }
+  const record = requireExactArgs('set_executable', raw, ['path', 'expectedHash', 'executable']);
   return {
-    path: raw.path,
-    expectedHash: validateSha256(raw.expectedHash, 'Invalid set_executable arguments.'),
-    executable: raw.executable,
+    path: requireString('set_executable', record.path, 'path', true, 512),
+    expectedHash: requireSha256('set_executable', record.expectedHash, 'expectedHash'),
+    executable: requireBoolean('set_executable', record.executable, 'executable'),
   };
 }
 
 /** Validate `apply_patch` args with exact keys and size/file-count bounds. */
 export function validateApplyPatchArgs(raw: unknown): ApplyPatchArgs {
-  if (!isRecord(raw) || !hasExactKeys(raw, ['files'])) {
-    fail('Invalid apply_patch arguments.');
-  }
-  const record = raw as Record<string, unknown>;
+  const record = requireExactArgs('apply_patch', raw, ['files']);
   if (!Array.isArray(record.files) || record.files.length === 0 || record.files.length > MAX_PATCH_FILES) {
-    fail('Invalid apply_patch arguments.');
+    failArgs('apply_patch', `files must be an array of 1 to ${MAX_PATCH_FILES} entries`);
   }
   let totalBytes = 0;
-  const files: PatchFileInput[] = (record.files as unknown[]).map((entry) => {
+  const files: PatchFileInput[] = (record.files as unknown[]).map((entry, index) => {
     if (!isRecord(entry) || !hasExactKeys(entry, ['path', 'expectedHash', 'newContent'])) {
-      fail('Invalid apply_patch arguments.');
+      failArgs('apply_patch', `files[${index}] must use exactly the keys path, expectedHash, newContent`);
     }
-    if (
-      typeof entry.path !== 'string' ||
-      entry.path.length === 0 ||
-      entry.path.length > 512
-    ) {
-      fail('Invalid apply_patch arguments.');
-    }
-    if (typeof entry.expectedHash !== 'string' || !/^[0-9a-f]{64}$/.test(entry.expectedHash)) {
-      fail('Invalid apply_patch arguments.');
-    }
-    if (typeof entry.newContent !== 'string' || entry.newContent.length > MAX_PATCH_BYTES) {
-      fail('Invalid apply_patch arguments.');
-    }
-    totalBytes += (entry.newContent as string).length;
+    const file = entry as Record<string, unknown>;
+    const path = requireString('apply_patch', file.path, `files[${index}].path`, true, 512);
+    const expectedHash = requireSha256('apply_patch', file.expectedHash, `files[${index}].expectedHash`);
+    const newContent = requireString('apply_patch', file.newContent, `files[${index}].newContent`, false, MAX_PATCH_BYTES);
+    totalBytes += newContent.length;
     if (totalBytes > MAX_PATCH_BYTES) {
-      fail('Invalid apply_patch arguments.');
+      failArgs('apply_patch', `the newContent of all files together must be at most ${MAX_PATCH_BYTES} characters; split the change into smaller patches`);
     }
-    return {
-      path: entry.path as string,
-      expectedHash: entry.expectedHash as string,
-      newContent: entry.newContent as string,
-    };
+    return { path, expectedHash, newContent };
   });
   return { files };
 }
 
 /** Validate `run_tests` args with exact keys. */
 export function validateRunTestsArgs(raw: unknown): RunTestsArgs {
-  if (!isRecord(raw) || !hasExactKeys(raw, ['commandId'])) {
-    fail('Invalid run_tests arguments.');
-  }
-  if (typeof raw.commandId !== 'string' || raw.commandId.length === 0 || raw.commandId.length > 128) {
-    fail('Invalid run_tests arguments.');
-  }
-  return { commandId: raw.commandId as string };
+  const record = requireExactArgs('run_tests', raw, ['commandId']);
+  return { commandId: requireString('run_tests', record.commandId, 'commandId', true, 128) };
 }
 
 /** Dispatch to the per-tool exact validator. */
@@ -465,18 +343,18 @@ export function validateToolArgs(tool: string, raw: unknown): Record<string, unk
 function parseArgumentsField(value: unknown): unknown {
   if (typeof value === 'string') {
     if (value.length > 131072) {
-      fail('Invalid tool arguments.');
+      fail('Invalid tool arguments: they exceed 131072 characters.');
     }
     try {
       return JSON.parse(value) as unknown;
     } catch {
-      fail('Invalid tool arguments.');
+      fail('Invalid tool arguments: they are not complete, valid JSON.');
     }
   }
   if (isRecord(value)) {
     return value;
   }
-  fail('Invalid tool arguments.');
+  fail('Invalid tool arguments: they must be a JSON object.');
 }
 
 /**

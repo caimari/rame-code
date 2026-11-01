@@ -142,3 +142,39 @@ test('tool definitions cover the bounded allowlisted tools and bound output', ()
   assert.equal(truncateToolOutput('abc', 10), 'abc');
   assert.match(truncateToolOutput('x'.repeat(100), 10), /truncated/);
 });
+
+test('validation messages name the field and its rule, never echoing model values', () => {
+  const hash = 'a'.repeat(64);
+  const cases: Array<[() => unknown, string]> = [
+    // The real Glimmer mistake on calculator.js: maxResults 100 over the limit of 50.
+    [() => validateSearchTextArgs({ query: 'add', dir: '', isRegex: false, maxResults: 100 }), 'Invalid search_text arguments: maxResults must be an integer from 1 to 50.'],
+    [() => validateSearchTextArgs({ query: 'add', dir: '', isRegex: 'yes', maxResults: 5 }), 'Invalid search_text arguments: isRegex must be true or false.'],
+    [() => validateSearchTextArgs({ query: '', dir: '', isRegex: false, maxResults: 5 }), 'Invalid search_text arguments: query must be a non-empty string of at most 200 characters.'],
+    [() => validateSearchTextArgs({ query: 'add', dir: '', isRegex: false, maxResults: 5, path: 'x' }), 'Invalid search_text arguments: use exactly the keys query, dir, isRegex, maxResults.'],
+    [() => validateReadFileArgs({ path: 'a.js' }), 'Invalid read_file arguments: use exactly the keys path, maxBytes.'],
+    [() => validateReadFileArgs({ path: 'a.js', maxBytes: 0 }), 'Invalid read_file arguments: maxBytes must be an integer from 1 to 262144.'],
+    [() => validateListFilesArgs({ dir: '', limit: 500 }), 'Invalid list_files arguments: limit must be an integer from 1 to 200.'],
+    [() => validateInspectWorkspaceArgs({ dir: '', maxDepth: 20, maxEntries: 10 }), 'Invalid inspect_workspace arguments: maxDepth must be an integer from 0 to 12.'],
+    [() => validateFilesystemUsageArgs({ path: '' }), 'Invalid filesystem_usage arguments: use exactly {} with no keys.'],
+    [() => validateDeleteFileArgs({ path: 'a.js', expectedHash: 'SECRET-VALUE' }), 'Invalid delete_file arguments: expectedHash must be the 64-character lowercase hex SHA-256 returned by read_file.'],
+    [() => validateSetExecutableArgs({ path: 'a.sh', expectedHash: hash, executable: 1 }), 'Invalid set_executable arguments: executable must be true or false.'],
+    [() => validateMoveFileArgs({ source: 'a', destination: '', expectedHash: hash }), 'Invalid move_file arguments: destination must be a non-empty string of at most 512 characters.'],
+    [() => validateRunTestsArgs({ commandId: '' }), 'Invalid run_tests arguments: commandId must be a non-empty string of at most 128 characters.'],
+    [() => validateApplyPatchArgs({ files: [] }), 'Invalid apply_patch arguments: files must be an array of 1 to 10 entries.'],
+    [() => validateApplyPatchArgs({ files: [{ path: 'a.js', newContent: 'x' }] }), 'Invalid apply_patch arguments: files[0] must use exactly the keys path, expectedHash, newContent.'],
+    [() => validateApplyPatchArgs({ files: [{ path: 'a.js', expectedHash: hash, newContent: 'x' }, { path: 'b.js', expectedHash: 'short', newContent: 'y' }] }), 'Invalid apply_patch arguments: files[1].expectedHash must be the 64-character lowercase hex SHA-256 returned by read_file.'],
+    [() => validateApplyPatchArgs({ files: [{ path: 'a.js', expectedHash: hash, newContent: 'x'.repeat(70000) }, { path: 'b.js', expectedHash: hash, newContent: 'y'.repeat(70000) }] }), 'Invalid apply_patch arguments: the newContent of all files together must be at most 131072 characters; split the change into smaller patches.'],
+    [() => validateOneToolCall(toolCall('t1', 'read_file', '{"path":"a.js","maxBy')), 'Invalid tool arguments: they are not complete, valid JSON.'],
+  ];
+  for (const [run, message] of cases) {
+    assert.throws(run, (error: unknown) => {
+      assert.equal((error as Error).message, message);
+      assert.ok(message.length <= 200 && /^[\x20-\x7e]+$/.test(message), 'fits the repair channel unchanged');
+      assert.doesNotMatch(message, /SECRET-VALUE|short/);
+      return true;
+    });
+  }
+  // Valid arguments still pass with the same bounds as before.
+  assert.equal(validateSearchTextArgs({ query: 'add', dir: '', isRegex: false, maxResults: 50 }).maxResults, 50);
+  assert.equal(validateApplyPatchArgs({ files: [{ path: 'a.js', expectedHash: hash, newContent: '' }] }).files.length, 1);
+});

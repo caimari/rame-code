@@ -382,6 +382,24 @@ p {
   background-color: var(--vscode-editor-background);
 }
 
+.host-record {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--vscode-textLink-foreground, #3794ff);
+  background-color: var(--vscode-textBlockQuote-background, transparent);
+}
+
+.host-record h5 {
+  margin: 0 0 4px;
+  font-size: 0.9em;
+  font-weight: 600;
+}
+
+.host-record ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
 .turn-error {
   border-color: var(--vscode-inputValidation-errorBorder, #be1100);
 }

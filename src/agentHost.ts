@@ -7,6 +7,8 @@
  * Direct APIs/spawn only; nothing is ever interpolated into a shell.
  */
 
+import * as vm from 'node:vm';
+
 import {
   checkAgentRelPath,
   type HostPlatform,
@@ -24,6 +26,54 @@ import type { ValidatedToolCall } from './agentTools.js';
 import { truncateToolOutput } from './agentTools.js';
 
 const MAX_REGEX_LINE_CHARS = 2000;
+/** Total regex time one search_text call may spend on the extension host. */
+export const REGEX_SEARCH_BUDGET_MS = 1000;
+export const REGEX_SEARCH_TIMEOUT_MESSAGE =
+  'The regex search was stopped after 1 s (the pattern backtracks too much). No results were returned; use a simpler pattern or isRegex false.';
+
+const MATCH_SCRIPT = new vm.Script(
+  'out = []; for (let i = 0; i < lines.length; i++) { if (re.test(lines[i])) { out.push(i); } }',
+);
+
+/**
+ * Regex matching runs synchronously on the extension host, where a
+ * pathological pattern such as `(a+)+$` would freeze every extension,
+ * Cancel included. Patterns are not guessed at by shape (that rejected
+ * ordinary searches); each call instead runs in a `vm` context whose
+ * timeout V8 enforces inside the regex engine. The budget is shared by the
+ * whole search but counts only time spent matching: reading and listing
+ * files between calls does not consume it. Only data enters the context:
+ * the pattern is compiled with `RegExp`, never evaluated as code.
+ */
+export function createBudgetedRegexSearch(
+  pattern: string,
+  budgetMs: number,
+  now: () => number = () => performance.now(),
+): (lines: string[]) => number[] {
+  const context = vm.createContext({ re: new RegExp(pattern), lines: [] as string[], out: [] as number[] });
+  let spentMs = 0;
+  return (lines) => {
+    // vm timeouts are whole milliseconds; below 1 ms the budget is spent.
+    const remaining = Math.floor(budgetMs - spentMs);
+    if (remaining < 1) {
+      throw new Error(REGEX_SEARCH_TIMEOUT_MESSAGE);
+    }
+    context.lines = lines;
+    const started = now();
+    try {
+      MATCH_SCRIPT.runInContext(context, { timeout: remaining });
+    } catch (error) {
+      if ((error as { code?: string }).code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') {
+        spentMs = budgetMs;
+        throw new Error(REGEX_SEARCH_TIMEOUT_MESSAGE);
+      }
+      throw error;
+    } finally {
+      spentMs += now() - started;
+    }
+    return Array.from(context.out as number[]);
+  };
+}
 
 export interface AgentFsEntry {
   name: string;
@@ -714,19 +764,27 @@ export async function executeSearchText(
     }
     await guardFsPath(fs, (gate as { ok: true; rel: string }).rel, canonicalRoot ?? null);
   }
-  let matcher: (line: string) => boolean;
+  let matchLines: (lines: string[]) => number[];
   if (isRegex) {
-    let re: RegExp;
     try {
-      re = new RegExp(query);
+      // eslint-disable-next-line no-new
+      new RegExp(query);
     } catch {
       throw new Error('That search pattern is invalid.');
     }
-    // Matching is synchronous on the extension host: bound the input of
-    // even screened patterns so one minified line cannot stall it.
-    matcher = (line) => re.test(line.length > MAX_REGEX_LINE_CHARS ? line.slice(0, MAX_REGEX_LINE_CHARS) : line);
+    const regexSearch = createBudgetedRegexSearch(query, REGEX_SEARCH_BUDGET_MS);
+    matchLines = (lines) =>
+      regexSearch(lines.map((line) => (line.length > MAX_REGEX_LINE_CHARS ? line.slice(0, MAX_REGEX_LINE_CHARS) : line)));
   } else {
-    matcher = (line) => line.includes(query);
+    matchLines = (lines) => {
+      const out: number[] = [];
+      lines.forEach((line, index) => {
+        if (line.includes(query)) {
+          out.push(index);
+        }
+      });
+      return out;
+    };
   }
   const candidates = await walkTextFiles(fs, dir, MAX_DIR_ENTRIES);
   const hits: string[] = [];
@@ -756,15 +814,13 @@ export async function executeSearchText(
       continue;
     }
     const lines = text.split('\n');
-    for (let index = 0; index < lines.length; index++) {
+    for (const index of matchLines(lines)) {
       const line = lines[index] as string;
-      if (matcher(line)) {
-        const hit = `${rel}:${index + 1}:${line.slice(0, 240)}`;
-        hits.push(hit);
-        bytes += hit.length;
-        if (hits.length >= maxResults || bytes > MAX_SEARCH_BYTES) {
-          return truncateToolOutput(hits.join('\n'), MAX_TOOL_OUTPUT_BYTES);
-        }
+      const hit = `${rel}:${index + 1}:${line.slice(0, 240)}`;
+      hits.push(hit);
+      bytes += hit.length;
+      if (hits.length >= maxResults || bytes > MAX_SEARCH_BYTES) {
+        return truncateToolOutput(hits.join('\n'), MAX_TOOL_OUTPUT_BYTES);
       }
     }
   }

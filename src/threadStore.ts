@@ -17,6 +17,7 @@
  *   any `apiKey`) cause the record to be rejected.
  */
 
+import { isValidHostRecord } from './hostRecord.js';
 import { validateMissionPlan } from './meta-provider.js';
 import type { MissionPlan } from './types.js';
 
@@ -53,6 +54,11 @@ export interface AssistantTurn {
   kind: 'assistant';
   text: string;
   timestamp: number;
+  /**
+   * Agent runs only: actions RAME Code verified, kept apart from the
+   * model's text so the webview can show them as host-written.
+   */
+  hostRecord?: string[];
 }
 
 export interface ErrorTurn {
@@ -199,8 +205,14 @@ function validateErrorTurn(value: unknown): ErrorTurn | null {
 function validateAssistantTurn(value: unknown): AssistantTurn | null {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ['kind', 'text', 'timestamp'])
+    !(
+      hasExactKeys(value, ['kind', 'text', 'timestamp']) ||
+      hasExactKeys(value, ['kind', 'text', 'timestamp', 'hostRecord'])
+    )
   ) {
+    return null;
+  }
+  if ('hostRecord' in value && !isValidHostRecord(value.hostRecord)) {
     return null;
   }
   if (value.kind !== 'assistant') {
@@ -216,7 +228,9 @@ function validateAssistantTurn(value: unknown): AssistantTurn | null {
   if (!isValidTimestamp(value.timestamp)) {
     return null;
   }
-  return { kind: 'assistant', text: value.text, timestamp: value.timestamp };
+  return 'hostRecord' in value
+    ? { kind: 'assistant', text: value.text, timestamp: value.timestamp, hostRecord: [...(value.hostRecord as string[])] }
+    : { kind: 'assistant', text: value.text, timestamp: value.timestamp };
 }
 
 function validateTurn(value: unknown): ThreadTurn | null {
@@ -375,17 +389,28 @@ export function appendPlanTurn(
   };
 }
 
-/** Append a conversational assistant reply, returning a new thread record. */
+/**
+ * Append a conversational assistant reply, returning a new thread record.
+ * `hostRecord` (Agent runs) is stored beside the text, never inside it.
+ */
 export function appendAssistantTurn(
   thread: ChatThread,
   text: string,
   now?: number,
+  hostRecord?: string[],
 ): ChatThread {
   const timestamp = now ?? Date.now();
+  const turn: AssistantTurn = { kind: 'assistant', text: fitTurnText(text, MAX_ASSISTANT_TEXT_LENGTH), timestamp };
+  if (hostRecord !== undefined) {
+    if (!isValidHostRecord(hostRecord)) {
+      throw new Error('Invalid host record.');
+    }
+    turn.hostRecord = [...hostRecord];
+  }
   return {
     ...thread,
     updatedAt: timestamp,
-    turns: [...thread.turns, { kind: 'assistant', text: fitTurnText(text, MAX_ASSISTANT_TEXT_LENGTH), timestamp }],
+    turns: [...thread.turns, turn],
   };
 }
 

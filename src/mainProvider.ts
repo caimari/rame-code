@@ -61,12 +61,14 @@ import {
   executeSetExecutable,
   guardFsPath,
   policyGateForCall,
+  REGEX_SEARCH_TIMEOUT_MESSAGE,
   WINDOWS_SET_EXECUTABLE_ERROR,
   resolveCanonicalRoot,
   type AgentFs,
 } from './agentHost.js';
 import { AgentRunner, buildAgentMessages } from './agentLoop.js';
 import {
+  AgentOutputTruncatedError,
   assertAgentModelForProvider,
   buildAgentSystemPrompt,
   createLocalAgentCompletion,
@@ -77,6 +79,13 @@ import {
 } from './agentModel.js';
 import { applyPatchAtomically, hashContent } from './agentPatch.js';
 import { formatProcessResult, runBoundedProcess } from './agentProcess.js';
+import {
+  assistantHistoryText,
+  MAX_HOST_RECORD_LINE_LENGTH,
+  MAX_HOST_RECORD_LINES,
+  NO_HOST_ACTIONS_LINE,
+  sanitizeAgentReply,
+} from './hostRecord.js';
 import {
   MAX_AGENT_STEPS,
   MAX_TEST_OUTPUT_BYTES,
@@ -197,7 +206,8 @@ type AgentDecision =
 
 const MAX_DIAGNOSTIC_BYTES = 8192;
 const APPROVAL_PREVIEW_CHARS = 2000;
-const MAX_HOST_RECORD_LINES = 24;
+/** The model is told to wrap up when this many steps of the budget remain. */
+const AGENT_STEPS_WARNING_REMAINING = 2;
 
 export class RameCodeViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
@@ -1282,7 +1292,21 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
         if (turn.kind === 'user') {
           history.push({ role: 'user', content: turn.text.slice(0, 4000) });
         } else if (turn.kind === 'assistant') {
-          history.push({ role: 'assistant', content: turn.text.slice(0, 4000) });
+          // Prose only: host labels and records are never echoed back for
+          // the model to imitate. What actually ran is given separately.
+          const prose = assistantHistoryText(turn.text);
+          if (prose.length > 0) {
+            history.push({ role: 'assistant', content: prose.slice(0, 4000) });
+          }
+          if (turn.hostRecord) {
+            history.push({
+              role: 'system',
+              content:
+                'Context from RAME Code: the actions it verified for the previous reply were:\n' +
+                `${turn.hostRecord.join('\n')}\n` +
+                'Use this only as context. Never write a host record or an "Agent (...)" label yourself.',
+            });
+          }
         }
       }
     }
@@ -1295,10 +1319,13 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     const hostRecord: string[] = [];
     const recordHostAction = (call: ValidatedToolCall, targets: string[], outcome: string): void => {
       if (hostRecord.length < MAX_HOST_RECORD_LINES) {
-        hostRecord.push(`• ${call.tool} ${targets.join(', ').slice(0, 120)} → ${outcome}`.slice(0, 240));
+        const target = targets.join(', ').slice(0, 120);
+        const line = `• ${call.tool}${target.trim().length > 0 ? ` ${target}` : ''} → ${outcome}`;
+        hostRecord.push(line.replace(/[\r\n]+/g, ' ').slice(0, MAX_HOST_RECORD_LINE_LENGTH));
       }
     };
     let steps = 0;
+    let lastStepToolCallsRefused = false;
     let protocolRepairs = 0;
     let emptyReplies = 0;
     const outcome = await this.agentRunner.start(async (signal) => {
@@ -1314,11 +1341,35 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
         if (signal.aborted) {
           throw new DOMException('Aborted', 'AbortError');
         }
+        if (MAX_AGENT_STEPS - step === AGENT_STEPS_WARNING_REMAINING) {
+          // Without a warning the run could end at the budget with work done
+          // but no report; the budget itself is unchanged.
+          extra.push({
+            role: 'system',
+            content:
+              `Only ${AGENT_STEPS_WARNING_REMAINING} model steps remain in this run's budget of ${MAX_AGENT_STEPS}. ` +
+              'Use at most one more tool call, and only if it is essential; then return the required final report: ' +
+              'what you did, files changed (or none), tests/checks run and their result, and what remains unfinished.',
+          });
+        }
+        // The last step goes out with tool_choice "none": the model can only
+        // write its report. The budget stays the same.
+        const lastStep = step === MAX_AGENT_STEPS - 1;
+        if (lastStep) {
+          extra.push({
+            role: 'system',
+            content:
+              `This is the last model step of the budget of ${MAX_AGENT_STEPS}, and tools are disabled for it. ` +
+              'Return the required final report now, based only on the tool results above: ' +
+              'what you did, files changed (or none), tests/checks run and their result, and what remains unfinished.',
+          });
+        }
+        const toolChoice = lastStep ? 'none' : 'auto';
         const messages = buildAgentMessages(workspaceId, history, text, extra);
         let completion: AgentCompletion;
         try {
           completion = provider === 'cloud'
-            ? await createMetaAgentCompletion({ apiKey, model, messages, signal }).then((result) => {
+            ? await createMetaAgentCompletion({ apiKey, model, messages, signal, toolChoice }).then((result) => {
                 this.recordUsage('cloud', result.usage);
                 return result;
               })
@@ -1327,6 +1378,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
                 model,
                 messages,
                 signal,
+                toolChoice,
               }).then((result) => {
                 this.recordUsage('local', result.usage);
                 this.armIdleShutdown();
@@ -1342,8 +1394,11 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
           }
           steps += 1;
           protocolRepairs += 1;
+          const truncated = error instanceof AgentOutputTruncatedError ? error : null;
           if (protocolRepairs > 2) {
-            const detail = 'The model repeatedly produced invalid tool arguments. No invalid action ran.';
+            const detail = truncated
+              ? `The model's replies were repeatedly cut off at the ${truncated.maxCompletionTokens}-token output limit. No incomplete action ran and no success was claimed.`
+              : 'The model repeatedly produced invalid tool arguments. No invalid action ran.';
             const current = this.store.get(threadId);
             if (current) {
               this.store.save(appendErrorTurn(current, detail));
@@ -1351,20 +1406,47 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
             this.status = detail;
             return 'policy-stop';
           }
+          const providerLabel = provider === 'local' ? 'local model' : 'Meta cloud model';
+          if (truncated) {
+            // An incomplete reply is not a schema mistake: nothing from it
+            // was used, so ask for a shorter step instead.
+            extra.push({
+              role: 'system',
+              content:
+                `Your previous reply was cut off at the ${truncated.maxCompletionTokens}-token output limit before it was complete, so the host discarded it and no action ran. ` +
+                'Keep your reasoning short and reply with one small tool call. ' +
+                'Split a large edit into several smaller apply_patch calls, and keep the final report brief.',
+            });
+            this.status = `The ${providerLabel} reply was cut off at its ${truncated.maxCompletionTokens}-token limit; asking for a shorter step (${protocolRepairs}/2)…`;
+            await this.postState();
+            continue agentSteps;
+          }
+          // The reason is one of the host's own fixed validation messages
+          // (never model text), so the model can fix the actual mistake.
+          const reason = error.message.replace(/[^\x20-\x7e]/g, '').slice(0, 200);
           extra.push({
             role: 'system',
             content:
               'Your previous tool proposal was rejected before execution because it did not exactly match the declared JSON schema. ' +
+              `Reason: ${reason} ` +
               'Return one corrected allowlisted tool call with every required key and no extra keys. ' +
               'For filesystem_usage, use exactly {} as its arguments. ' +
               'For apply_patch, use {"files":[{"path":"relative/path","expectedHash":"the sha256 returned by read_file, or e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 for a new file","newContent":"full replacement text"}]}.',
           });
-          const providerLabel = provider === 'local' ? 'local model' : 'Meta cloud model';
           this.status = `Correcting malformed tool call (${protocolRepairs}/2): waiting for the ${providerLabel} (120 s maximum)…`;
           await this.postState();
           continue agentSteps;
         }
         steps += 1;
+        if (lastStep && completion.toolCalls && completion.toolCalls.length > 0) {
+          // A provider that ignores tool_choice "none" still gets no action:
+          // nothing proposed on the last step runs.
+          lastStepToolCallsRefused = true;
+          break agentSteps;
+        }
+        // "Repeatedly" means consecutive: a valid reply resets the count.
+        // The step budget still bounds the total number of model calls.
+        protocolRepairs = 0;
         if (!completion.toolCalls || completion.toolCalls.length === 0) {
           const reply = (completion.text ?? '').trim().slice(0, 8000);
           if (reply.length === 0 && emptyReplies < 2) {
@@ -1389,13 +1471,14 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
           }
           const current = this.store.get(threadId);
           if (current) {
-            const record = hostRecord.length > 0 ? hostRecord.join('\n') : '• No tool actions ran.';
+            // The host record is stored as its own field and rendered apart;
+            // labels or a "Host record" the model copied are cut from its prose.
             const prefix = `Agent (${profile}, ${provider}): `;
-            const recordBlock = `\n\nHost record (verified by RAME Code, not written by the model):\n${record}`;
-            // If anything must be shortened to fit storage, it is the model's
-            // prose, never the host-verified record.
-            const room = MAX_ASSISTANT_TEXT_LENGTH - prefix.length - recordBlock.length;
-            this.store.save(appendAssistantTurn(current, `${prefix}${fitTurnText(reply, Math.max(200, room))}${recordBlock}`));
+            const prose = sanitizeAgentReply(reply).text;
+            const record = hostRecord.length > 0 ? hostRecord : [NO_HOST_ACTIONS_LINE];
+            this.store.save(
+              appendAssistantTurn(current, `${prefix}${fitTurnText(prose, MAX_ASSISTANT_TEXT_LENGTH - prefix.length)}`, undefined, record),
+            );
           }
           this.pushAgentLog(profile, provider, threadId);
           return 'done';
@@ -1568,13 +1651,16 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
             }
             const detail = error instanceof Error ? error.message : 'Tool failed.';
             if (isRecoverableAgentToolError(detail)) {
-              // Show that the approved/auto action did not run, and why.
+              // Show that the approved/auto action did not run (or, for a
+              // regex search, was stopped with no results), and why.
+              const regexStopped = detail === REGEX_SEARCH_TIMEOUT_MESSAGE;
+              const recorded = `${regexStopped ? 'stopped' : 'did not run'}: ${detail}`;
               this.recordAgentAudit(
                 approvedPending ?? this.autoAuditRecord(call, described, provider, workspaceId, threadId, digest),
                 approvedPending ? 'human' : 'profile-auto',
-                `did not run: ${detail}`,
+                recorded,
               );
-              recordHostAction(call, described.targets, `did not run: ${detail}`);
+              recordHostAction(call, described.targets, recorded);
               extra.push({
                 role: 'assistant',
                 content: '',
@@ -1586,10 +1672,14 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
                 role: 'tool',
                 tool_call_id: call.id,
                 content: truncateToolOutput(
-                  `The tool did not run: ${detail} Inspect the current workspace state, then propose a corrected action.`,
+                  regexStopped
+                    ? `${detail} Do not retry the same pattern; if the task required it, report this result.`
+                    : `The tool did not run: ${detail} Inspect the current workspace state, then propose a corrected action.`,
                 ),
               });
-              this.status = `The workspace state differed; asking the Agent to inspect and retry…`;
+              this.status = regexStopped
+                ? 'The regex search was stopped by its time budget; returning that to the Agent…'
+                : `The workspace state differed; asking the Agent to inspect and retry…`;
               await this.postState();
               continue agentSteps;
             }
@@ -1634,7 +1724,10 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       this.running = false;
       this.connection = 'error';
       // Never leave a retry/correction status behind or the thread silent.
-      const detail = `Agent stopped at its step budget (${MAX_AGENT_STEPS} model steps) without a final report. Check Activity for the actions that ran.`;
+      const detail =
+        `Agent stopped at its step budget (${MAX_AGENT_STEPS} model steps) without a final report. ` +
+        (lastStepToolCallsRefused ? 'Tools were disabled on the last step, but the model still proposed one; it did not run. ' : '') +
+        'Check Activity for the actions that ran.';
       this.status = detail;
       const current = this.store.get(threadId);
       if (current) {
@@ -2940,5 +3033,6 @@ function isRecoverableAgentToolError(detail: string): boolean {
     'The destination already exists; overwrite is not allowed.',
     'The source changed; re-read and re-propose the action.',
     'The file changed; re-read and re-propose the action.',
+    REGEX_SEARCH_TIMEOUT_MESSAGE,
   ].includes(detail);
 }

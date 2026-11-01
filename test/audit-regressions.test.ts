@@ -12,13 +12,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
 
+import { createBudgetedRegexSearch, executeSearchText, REGEX_SEARCH_BUDGET_MS, REGEX_SEARCH_TIMEOUT_MESSAGE, type AgentFs } from '../src/agentHost.js';
 import { runAgentLoop } from '../src/agentLoop.js';
 import { createLocalAgentCompletion, createMetaAgentCompletion } from '../src/agentModel.js';
 import { checkAgentRelPath } from '../src/agentPolicy.js';
 import { formatProcessResult, runBoundedProcess } from '../src/agentProcess.js';
 import {
   AgentToolProtocolError,
-  isBacktrackingRiskPattern,
   parseAssistantToolCalls,
   validateSearchTextArgs,
 } from '../src/agentTools.js';
@@ -248,17 +248,100 @@ test('a normal test command reports its real exit code and output', async () => 
   assert.match(formatProcessResult(fail, 10_000, 64), /^exit=3/);
 });
 
-test('search_text rejects regexes that can backtrack catastrophically', () => {
-  for (const risky of ['(a+)+$', '(a*)*b', '(a|aa)+', '(.*x){20}', '((ab)*c)+', '(\\w+\\s?)*$', '(x)\\1', '.*a.*b.*c']) {
-    assert.equal(isBacktrackingRiskPattern(risky), true, risky);
-    assert.throws(() => validateSearchTextArgs({ query: risky, dir: '', isRegex: true, maxResults: 5 }), AgentToolProtocolError, risky);
+test('search_text accepts the ordinary regexes a model writes (no guessing by shape)', () => {
+  // These were wrongly rejected as "catastrophic" by the old shape screen,
+  // which made Glimmer's calculator.js inspection stop with invalid arguments.
+  for (const pattern of [
+    '\\bfunction\\s+\\w+\\s*\\(',
+    'export\\s+function\\s+(\\w+)',
+    '(\\w+)\\s*=\\s*(\\w+)',
+    'import\\s+\\{\\s*(\\w+)\\s*\\}\\s+from',
+    'foo\\d+bar',
+    '^export (function|const) ',
+    '(add|subtract|multiply|divide)',
+  ]) {
+    validateSearchTextArgs({ query: pattern, dir: '', isRegex: true, maxResults: 5 });
   }
-  for (const safe of ['foo\\d+bar', '^export (function|const) ', 'TODO:?\\s*\\w+', '(ab)?c+', '[(]+x', 'a{2,4}b']) {
-    assert.equal(isBacktrackingRiskPattern(safe), false, safe);
-    validateSearchTextArgs({ query: safe, dir: '', isRegex: true, maxResults: 5 });
-  }
-  // Literal searches are never screened.
-  validateSearchTextArgs({ query: '(a+)+$', dir: '', isRegex: false, maxResults: 5 });
+  assert.throws(
+    () => validateSearchTextArgs({ query: '(unclosed', dir: '', isRegex: true, maxResults: 5 }),
+    (error: unknown) => error instanceof AgentToolProtocolError && /does not compile/.test(error.message),
+  );
+});
+
+function oneFileFs(content: string): AgentFs {
+  return {
+    async listEntries() {
+      return [{ name: 'data.txt', isFile: true, isDir: false, isSymlink: false }];
+    },
+    async readText() {
+      return content;
+    },
+    async stat(rel: string) {
+      return rel === 'data.txt' ? { kind: 'file' as const, size: content.length } : { kind: 'missing' as const };
+    },
+    async writeText() {
+      throw new Error('read-only');
+    },
+  };
+}
+
+test('a catastrophic regex is stopped by the host time budget instead of freezing the extension host', async () => {
+  const fs = oneFileFs(`${'a'.repeat(34)}!\nexport function add(a, b) {\n`);
+  const started = Date.now();
+  await assert.rejects(
+    executeSearchText(fs, { id: 's1', tool: 'search_text', args: { query: '(a+)+$', dir: '', isRegex: true, maxResults: 5 } }),
+    { message: REGEX_SEARCH_TIMEOUT_MESSAGE },
+  );
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < REGEX_SEARCH_BUDGET_MS + 1500, `stopped after ${elapsed} ms`);
+  // The same file still answers an ordinary regex immediately.
+  const hits = await executeSearchText(fs, {
+    id: 's2',
+    tool: 'search_text',
+    args: { query: '\\bfunction\\s+\\w+\\s*\\(', dir: '', isRegex: true, maxResults: 5 },
+  });
+  assert.equal(hits, 'data.txt:2:export function add(a, b) {');
+});
+
+test('slow file reads do not consume the regex budget; only matching time does', async () => {
+  // Three files, each read taking well over a third of the budget: the
+  // old wall-clock deadline stopped the third ordinary search.
+  const names = ['a.txt', 'b.txt', 'c.txt'];
+  const slowFs: AgentFs = {
+    async listEntries() {
+      return names.map((name) => ({ name, isFile: true, isDir: false, isSymlink: false }));
+    },
+    async readText(rel: string) {
+      await new Promise((resolve) => setTimeout(resolve, Math.ceil(REGEX_SEARCH_BUDGET_MS * 0.45)));
+      return `export function ${rel[0]}() {}\n`;
+    },
+    async stat(rel: string) {
+      return names.includes(rel) ? { kind: 'file' as const, size: 30 } : { kind: 'missing' as const };
+    },
+    async writeText() {
+      throw new Error('read-only');
+    },
+  };
+  const hits = await executeSearchText(slowFs, {
+    id: 's1',
+    tool: 'search_text',
+    args: { query: '\\bfunction\\s+\\w+\\s*\\(', dir: '', isRegex: true, maxResults: 5 },
+  });
+  assert.equal(hits, 'a.txt:1:export function a() {}\nb.txt:1:export function b() {}\nc.txt:1:export function c() {}');
+});
+
+test('the regex budget is cumulative across files and stays spent after a timeout', () => {
+  // A fake clock: each call appears to spend 40 ms matching.
+  let clock = 0;
+  const search = createBudgetedRegexSearch('x', 100, () => (clock += 40));
+  assert.deepEqual(search(['x', 'y']), [0]);
+  assert.deepEqual(search(['y', 'x']), [1]);
+  // 80 ms spent: the third call still runs (20 ms left), which uses it up.
+  assert.deepEqual(search(['x']), [0]);
+  assert.throws(() => search(['x']), { message: REGEX_SEARCH_TIMEOUT_MESSAGE });
+  const catastrophic = createBudgetedRegexSearch('(a+)+$', 50);
+  assert.throws(() => catastrophic([`${'a'.repeat(34)}!`]), { message: REGEX_SEARCH_TIMEOUT_MESSAGE });
+  assert.throws(() => catastrophic(['a']), { message: REGEX_SEARCH_TIMEOUT_MESSAGE });
 });
 
 test('package-manager tokens, SSH keys, and cloud credential folders are protected', () => {

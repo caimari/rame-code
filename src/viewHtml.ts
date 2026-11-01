@@ -205,6 +205,7 @@ button.is-pending::after { content: ""; display: inline-block; width: 10px; heig
       <section id="resultSection" class="result-card" aria-labelledby="result-heading" hidden>
         <h3 id="result-heading">Result</h3>
         <p id="resultBody" class="result-body"></p>
+        <div id="resultHostRecord"></div>
       </section>
       <section id="escalationBox" aria-labelledby="escalation-heading" hidden>
         <h3 id="escalation-heading">Cloud escalation</h3>

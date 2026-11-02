@@ -181,6 +181,13 @@ export class FakeModelServer {
   private server: http.Server | null = null;
   private readonly open = new Set<http.ServerResponse>();
   endpoint = '';
+  /**
+   * Body for `GET /props` (llama-server metadata). Null answers 404, like
+   * an OpenAI-compatible server that is not llama-server. Props reads never
+   * consume a scripted chat reply.
+   */
+  props: unknown = null;
+  propsRequests = 0;
 
   enqueue(...replies: ModelReply[]): void {
     this.replies.push(...replies);
@@ -188,6 +195,13 @@ export class FakeModelServer {
 
   async start(): Promise<void> {
     this.server = http.createServer((req, res) => {
+      if (req.method === 'GET' && req.url === '/props') {
+        this.propsRequests += 1;
+        req.resume();
+        res.writeHead(this.props === null ? 404 : 200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(this.props ?? { error: { code: 404, message: 'Not Found' } }));
+        return;
+      }
       let raw = '';
       req.on('data', (chunk: Buffer) => {
         raw += chunk.toString('utf8');
@@ -408,6 +422,13 @@ const port = Number(argv[argv.indexOf('--port') + 1]);
 const upstream = ${JSON.stringify(this.model.endpoint)};
 http.createServer((req, res) => {
   if (req.url === '/health') { res.writeHead(200); res.end('{"status":"ok"}'); return; }
+  if (req.method === 'GET') {
+    fetch(upstream + req.url).then(async (r) => {
+      res.writeHead(r.status, { 'Content-Type': 'application/json' });
+      res.end(await r.text());
+    }).catch(() => { res.writeHead(502); res.end('{}'); });
+    return;
+  }
   let raw = '';
   req.on('data', (c) => { raw += c; });
   req.on('end', async () => {

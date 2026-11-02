@@ -1,126 +1,133 @@
 # RAME Code
 
-**An experimental local-first coding agent for VS Code with verifiable, resumable missions.**
+**A local-first coding agent for VS Code powered by Meta Muse models, with explicit permissions and host-verified evidence.**
 
-RAME Code is a new independent open-source project started during the Meta Global AI Developer Hackathon 2026. Its goal is to let a developer delegate a software mission without losing the decisions, evidence, and unfinished work that make the result trustworthy.
+[Versión en español](README.es.md) · [Changelog](CHANGELOG.md) · [License](LICENSE)
 
-## Current status
+RAME Code is an independent open-source project created during the Meta Global AI Developer Hackathon 2026. It runs as a VS Code extension and supports both a local Muse Glimmer runtime and Meta Model API cloud models.
 
-Version `0.1.0` is an unverified local development base under active development — not released. It contributes exactly one Activity Bar view, `RAME Code`, with internal Chat ⇄ Settings navigation inside the same webview (gear opens Settings, Back returns to Chat; threads and running state are preserved; no second view or tab is created). The Chat screen header always shows `RAME Code` plus compact icon buttons (new thread, refresh, gear) that fit a 220px sidebar. With no thread selected it shows a home screen (scrollable full bounded thread list with honest update metadata, calm empty space); selecting a thread opens a dedicated conversation screen (back arrow to the list, compact thread title, existing Settings access; the full list is hidden there). A `backToList` exact-key message clears only the selection; thread data is never deleted. The conversation shows user/assistant cards, a structured Activity timeline inside the conversation, and an integrated prominent pending-approval card, with a unified rounded bottom composer card (textarea, disabled Add-context control, permission shield popover, compact Agent/Mission/Chat mode control defaulting to Agent, compact runtime button opening Settings, circular Send; Cancel appears only while running), connection/runtime state, and a usage summary. Local-unreachable failures show `Local model is not reachable at 127.0.0.1:8775. Start it in Settings.` with an Open Settings action instead of raw stacks, and never switch providers silently. New threads default to `Agent` mode (order `Agent`, `Mission`, `Chat`); persisted history is never rewritten. The single runtime selector lives in Settings only (`Muse Spark 1.3 — Meta cloud` or `Muse Glimmer — Local`); the host derives the provider+model pair from that one choice, so mismatched pairs cannot be sent or stored. The Settings screen groups Cloud, Local runtime, Escalation, Privacy/Security, and Diagnostics sections. The views reveal from the `RAME Code: Open RAME Code`, `RAME Code: New Thread`, `RAME Code: Set Meta API Key`, and `RAME Code: Start Mission` commands. Tests were not run for this change (shell-disabled authoring environment); no live Model API success is claimed and the UI is not verified until a human tests it. The key travels to the extension host only on explicit Save, is stored only in VS Code SecretStorage, and the view only ever learns whether a key exists.
+Version `0.1.0` is the first public preview. It is suitable for evaluation on disposable projects. It is not yet a production security boundary.
 
-Implemented in this slice: `Chat` mode (conversational prose; sends only the active thread's bounded recent history plus the new message — other threads are never sent), `Mission` mode (strict schema-constrained plan; sends only the new message, now with real plan-plus-usage accounting through a cancellation-safe runner), and `Agent` mode (bounded permission-gated tool-call loop with the explicitly selected provider only: local Glimmer via the configured `llama-server` or cloud `muse-spark-1.3`; never switched silently). Cloud provider is Meta Model API with `muse-spark-1.3`; a successful call marks the connection verified. Local provider is a direct OpenAI-compatible `llama-server` (Ollama is not required) bound to `127.0.0.1` only, spawned with an argument array and `shell: false`, with Start/Stop controls, startup health check, cancellation, idle shutdown, and ownership tracking that never kills processes RAME Code did not start. Cloud escalation defaults OFF with no silent fallback: a failed local request becomes a pending visible choice, and only an explicit approval sends that request to Meta. Token usage (input/output/cached/total) is shown per call and cumulatively per provider, including every Agent loop step; Meta Billing/Usage is authoritative and no balance is claimed.
+## What works in v0.1.0
 
-Agent implemented boundaries: three original profiles defaulting to `ask` (every action needs approval), `safe-auto` (policy-checked reads auto-run; patches and tests need approval), and `workspace-full` (reads, patches, and allowlisted tests can run without prompts only after explicit selection, instantly reversible to Ask). The permission profile shows only in Agent mode with a concise description plus a collapsed Security/boundaries section; the workspace-full warning stays prominent while selected. Agent runs bind one explicitly QuickPicked workspace folder (name plus full path; cancellation is a concise cancelled status with no transcript change; a single folder auto-uses; no folder shows a friendly empty state with an Open Folder action) and every tool call stays under canonical-root/symlink checks; model/webview-supplied paths are never accepted and the first folder is never chosen silently. The selected workspace shows as a compact chip in the conversation header/activity area and a new thread never silently inherits an ambiguous target. The Settings local section orders `Use detected settings`, `Save`, `Start Muse Glimmer`, `Stop` with obvious runtime state. Even `workspace-full` stays inside the active workspace, blocks absolute/`..`/NUL/canonical/symlink escapes and protected `.git`, `.env*`, credential/key, secret-store, auth, and control files, allows only named test commands spawned executable-plus-argv with `shell:false` and time/output limits, performs no arbitrary shell or external network, and never bypasses cloud-escalation consent. Approvals bind one opaque action id plus a host-side digest to the exact payload, workspace, thread, provider, and file preconditions; stale, mismatched, replayed, used, or superseded approvals are rejected and cancellation invalidates pending approvals. Patches use path-plus-expected-hash preconditions with validate-then-write atomicity and verified digests. A bounded local audit records timestamps, provider, thread, profile, digest, decision source, and short results without content or secrets; tamper-proofness is not claimed. The first Agent coding validation must target a disposable copy or test fixture, not the live RAME Code repository.
+- **Agent, Mission and Chat modes** in a single VS Code Activity Bar view.
+- **Muse Glimmer locally** through a loopback-only OpenAI-compatible `llama-server` endpoint.
+- **Muse Spark and Muse Wonder through Meta Model API**, using a user-supplied API key stored in VS Code SecretStorage.
+- Bounded Agent tool loop for workspace inspection, file operations, patches, executable permissions and allowlisted test commands.
+- Three permission profiles: Ask, Safe auto and Workspace full.
+- One-use, digest-bound approvals tied to the exact action, thread, provider, workspace and file preconditions.
+- Protection against absolute paths, traversal, symlink escapes and selected secret/control paths.
+- A host-authored action record kept separate from model text.
+- Persistent local threads, cancellation, usage accounting and explicit local-to-cloud escalation consent.
+- Configurable reasoning and output budgets, validated per provider and model.
+- Linux and Windows path/process handling covered by the automated test suite.
 
-Planned and NOT implemented: automatic escalation, persistent/resumable missions across restarts beyond the bounded audit/thread store, verified Glimmer-to-Spark cascade with return, live self-modification validation (deliberately not run here), broader machine portability beyond the detected local-runtime suggestions, and any claim of unrestricted computer control, arbitrary internet access, terminal emulation, or memory safety.
+## What is not implemented yet
 
-The first public implementation is being built during the hackathon in this repository. It is not copied from, and does not depend on, any earlier private implementation.
+- Persistent, versioned project decisions and stale-artifact detection.
+- Resumable missions across a full extension restart.
+- Automatic local-to-cloud escalation and verified return to the local model.
+- An operating-system sandbox or unrestricted terminal/computer control.
+- A claim that local execution, approvals or the audit log are tamper-proof.
 
-Fully local execution and data locality are design goals until validated, not established properties of this bootstrap.
+Repository content, tool output and model output are treated as untrusted inputs. A model cannot grant itself additional authority, but allowlisted project test scripts still run with the operating-system permissions of VS Code and may themselves access files, networks or shells.
 
-Tests were not run for this change (shell-disabled authoring environment); no live Model API success is claimed and the UI is not verified until a human tests it.
+## Install the VSIX manually
 
-## Planned hackathon MVP
+Download `rame-code-0.1.0.vsix` from the [v0.1.0 release](https://github.com/caimari/rame-code/releases/tag/v0.1.0).
 
-The first installable VS Code extension is intended to:
+### From the VS Code interface
 
-- connect to **Muse Glimmer** through a local OpenAI-compatible endpoint such as llama.cpp, Ollama, or LM Studio;
-- connect to **Muse Spark 1.3** through Meta Model API;
-- offer local-only, remote-only, and policy-controlled hybrid execution;
-- run a bounded coding loop that can inspect files, propose changes, and execute verification commands;
-- preserve an explicit mission goal, user-authorized versioned decisions, changed files, test evidence, and remaining work across restarts;
-- detect when verified work has become stale after a decision changes;
-- evaluate a reversible Glimmer-to-Spark cascade under an authorized data and cost budget.
+1. Open **Extensions** (`Ctrl+Shift+X`).
+2. Open the `...` menu in the Extensions panel.
+3. Choose **Install from VSIX...**.
+4. Select `rame-code-0.1.0.vsix`.
+5. Run **Developer: Reload Window** if VS Code asks you to reload.
+6. Select the **R** icon in the Activity Bar.
 
-These are development goals, not claims about the current bootstrap.
+When using Remote SSH, install the extension in the remote workspace when VS Code offers that target.
 
-## Technical hypothesis under evaluation
+### From a terminal
 
-The hypothesis to be tested is a reversible local-to-remote cascade:
-
-1. Muse Glimmer works locally on the assigned mission.
-2. An observable, verifier-backed blocker can trigger bounded Muse Spark 1.3 assistance.
-3. The relevant verifier is rerun after the assisted change.
-4. When recovery is verified and cooldown rules allow it, work returns to Glimmer without losing the mission state.
-
-No novelty or superiority is claimed before evaluation. The comparison to be reported is between candidate cascade policies, not against other systems.
-
-## Core idea
-
-RAME Code does not treat a chat transcript as project truth. A mission keeps a small, inspectable record of:
-
-```text
-goal -> authorized decisions -> changes -> verification evidence -> current state
+```bash
+code --install-extension rame-code-0.1.0.vsix
 ```
 
-Models may observe, reason, and propose. Durable decisions, permissions, and promotion of a candidate release remain under explicit user control.
+If the `code` command is unavailable on a remote host, use **Install from VSIX...** in the connected VS Code window instead.
 
-Previously authorized policies can permit routine actions without repeated prompts. Scope expansion, out-of-policy remote data, and candidate release promotion require control.
+## Configure a model
 
-## Model modes
+Open RAME Code and select the gear button.
 
-| Mode | Intended behavior |
+### Meta Model API
+
+1. Select **Meta Model API — Cloud**.
+2. Create a key in the [Meta Model API dashboard](https://dev.meta.ai/).
+3. Paste the separate API key into RAME Code and choose **Save key**.
+4. Refresh the available model catalog and select a supported model.
+
+The key is sent to the extension host only when **Save key** is pressed. It is stored in VS Code SecretStorage; the webview only receives whether a key exists. API usage may consume credits or incur charges on the user's Meta account.
+
+### Muse Glimmer locally
+
+RAME Code can start `llama-server` directly; Ollama is not required.
+
+1. Select **Muse Glimmer — Local**.
+2. Configure the `llama-server` executable and Muse Glimmer GGUF path.
+3. Optionally configure a multimodal projector or DFlash draft model.
+4. Choose **Save**, then **Start Muse Glimmer**.
+
+The managed server binds to `127.0.0.1`. RAME Code stops only the process it started. You may also select an existing loopback OpenAI-compatible endpoint.
+
+## Permission profiles
+
+| Profile | Behaviour |
 | --- | --- |
-| Local | Muse Glimmer runs on the user's hardware. Keeping project data local is a design goal until validated. |
-| Remote | Muse Spark runs through Meta Model API while tools remain local. |
-| Hybrid | Glimmer works locally and RAME Code may request bounded Spark assistance when observable, verifier-backed progress rules identify a blocker, then return to Glimmer when recovery is verified and cooldown rules allow it. |
+| **Ask** | Every tool action waits for approval. This is the default. |
+| **Safe auto** | Policy-checked reads run automatically; writes and tests still require approval. |
+| **Workspace full** | Allowed workspace actions may run without prompting. Policy checks remain, but this mode is high risk. |
 
-## Trust principles
+Agent work is restricted to one explicitly selected VS Code workspace folder. RAME Code has no arbitrary shell tool. Test execution is limited to commands derived from an allowlist and uses `shell: false`, but the selected package script may still execute arbitrary project code.
 
-- Repository content, tool output, and model output are untrusted inputs.
-- A model cannot grant itself durable authority.
-- Remote transmission must stay within the user's approved scope and budget.
-- Candidate changes must be shown and verified before promotion.
-- A future version cannot silently weaken the checks that authorize its installation.
+## Generation controls
 
-## Planned cascade comparison
+RAME Code keeps context size, reasoning effort, output budget and the Agent's 12-step budget separate.
 
-Using the same tasks and models, the planned evaluation compares ascending-only escalation against verified return, measuring task success, cost, latency, verification overhead, and oscillations between models.
+- Local Glimmer reasoning controls are offered only when the running server's `/props` template verifies support.
+- Meta reasoning options are limited per selected model.
+- Automatic cloud output budgets scale from 8,192 to 131,072 tokens according to reasoning effort.
+- A cut-off response is discarded; no partial tool call is executed or stored as success.
+- Input is never silently shortened to make a request fit the active context window.
 
-## Development provenance
-
-- Public implementation start: **2026-10-31**.
-- Competition: **Meta Global AI Developer Hackathon 2026**.
-- Track: **Indie Developer**.
-- Repository: <https://github.com/caimari/rame-code>
-- Author: **Antoni Caimari Caldés**.
-
-Design choices are informed by Antoni Caimari Caldés's prior private experiments. All public implementation code and Git history start independently in this repository on 2026-10-31; no private code, services, data, documents, results, or history are included or required. Only independently reproduced public results may be claimed.
-
-Development milestones and model/tool participation are recorded in [`HACKATHON_WORK.md`](HACKATHON_WORK.md).
-
-## Roadmap
-
-- `0.1.0`: installable extension, secret-backed Meta Model API connection, and structured mission planning.
-- `0.2.0`: bounded read-only workspace inspection and verifier execution.
-- `0.3.0`: persistent and resumable missions.
-- `0.4.0`: reversible policy-controlled Glimmer-to-Spark cascade with verified return to Glimmer.
-- Hackathon release: reproducible demo, packaged VSIX, independent verification, and frozen evidence.
-
-The roadmap may be reduced to protect reliability. Only implemented and reproducible behavior will be presented as complete.
-
-## Development
+## Build from source
 
 Requirements:
 
-- Node.js 22 or later for the complete development and packaging toolchain;
-- VS Code 1.95 or later;
-- a separate Meta Model API key with access to `muse-spark-1.3`.
+- Node.js 22 or later;
+- VS Code 1.95 or later.
 
 ```bash
+git clone https://github.com/caimari/rame-code.git
+cd rame-code
 npm ci
-npm run check
+npm test
 npm run package
 ```
 
-Press `F5` in VS Code to open an Extension Development Host. Then run:
+Press `F5` in VS Code to open an Extension Development Host.
 
-1. `RAME Code: Set Meta API Key`
-2. `RAME Code: Start Mission`
+## Development provenance
 
-The API key is stored in VS Code SecretStorage. The current mission command sends only the goal entered in the prompt to Meta Model API; it does not read or transmit workspace content.
+- Public implementation began on **2026-10-31**.
+- Competition: **Meta Global AI Developer Hackathon 2026**.
+- Track: **Indie Developer**.
+- Author: **Antoni Caimari Caldés**.
 
-Do not commit API keys or local model files. RAME Code will require users to supply their own model endpoints and credentials.
+The public implementation and Git history start independently in this repository. Earlier private code, services, datasets and evaluation results are not included or required. Development milestones are recorded in [HACKATHON_WORK.md](HACKATHON_WORK.md).
+
+## Roadmap
+
+The next milestone adds the feature that distinguishes RAME Code from a generic coding agent: user-authorized, versioned project decisions whose dependencies can become visibly stale after a decision changes, and whose state can be recovered after a restart.
 
 ## License
 

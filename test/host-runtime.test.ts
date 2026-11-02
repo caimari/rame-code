@@ -608,6 +608,24 @@ test('the final report carries a host-verified record that contradicts a false m
   });
 });
 
+test('the verified host record preserves workspace inventory counts', async () => {
+  await withHarness({ settings: { agentProfile: 'safe-auto' } }, async (h) => {
+    await h.writeFile('inventory.txt', '1234');
+    h.model.enqueue(
+      {
+        kind: 'json',
+        body: toolCallReply([
+          { id: 'inspect-1', name: 'inspect_workspace', args: { dir: '', maxDepth: 12, maxEntries: 2000 } },
+        ]),
+      },
+      { kind: 'json', body: assistantText('Workspace inspection completed.') },
+    );
+    await h.provider.sendMessage('Inspect the workspace.', 'agent', 'local');
+    const record = lastTurn(h.last())?.hostRecord?.join('\n') ?? '';
+    assert.match(record, /inspect_workspace → directory=\. files=\d+ directories=\d+ totalBytes=\d+ entriesVisited=\d+ truncated=false/);
+  });
+});
+
 test('a final report with no tool actions says so explicitly', async () => {
   await withHarness({}, async (h) => {
     h.model.enqueue({ kind: 'json', body: assistantText('I edited three files and all tests pass.') });

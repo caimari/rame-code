@@ -24,6 +24,11 @@ import {
   parseAgentProfile,
   type AgentProfileId,
 } from './agentProfiles.js';
+import {
+  defaultGenerationSettings,
+  validateGenerationSettings,
+  type GenerationSettings,
+} from './generationSettings.js';
 import { EMPTY_USAGE, type ProviderUsage } from './usage.js';
 
 export const RAME_SETTINGS_KEY = 'rameCode.settings.v1';
@@ -116,6 +121,8 @@ export interface RameSettings {
   allowCloudEscalation: boolean;
   /** Persisted Agent permission profile id only (never transient approvals). */
   agentProfile: AgentProfileId;
+  /** Reasoning level per provider/model and manual output maxima. */
+  generation: GenerationSettings;
 }
 
 function defaultLocal(): LocalRuntimeSettings {
@@ -144,6 +151,7 @@ export function defaultSettings(): RameSettings {
     externalLocalEndpoint: '',
     allowCloudEscalation: false,
     agentProfile: DEFAULT_AGENT_PROFILE,
+    generation: defaultGenerationSettings(),
   };
 }
 
@@ -261,6 +269,7 @@ export function validateSettings(value: unknown): RameSettings {
     externalLocalEndpoint,
     allowCloudEscalation: value.allowCloudEscalation === true,
     agentProfile: parseAgentProfile(value.agentProfile),
+    generation: validateGenerationSettings(value.generation),
   };
 }
 

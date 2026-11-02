@@ -15,6 +15,7 @@
  */
 
 import { isAgentProfileId } from './agentProfiles.js';
+import { isReasoningChoice, REASONING_LEVELS } from './generationSettings.js';
 import type { LocalRuntimeSettings, LocalRuntimeStatus } from './localRuntime.js';
 import type { ChatModeId } from './modes.js';
 import type { CloudCatalogSource, CloudModelInfo } from './metaCatalog.js';
@@ -173,6 +174,21 @@ export interface RejectAgentActionMessage {
   digest: string;
 }
 
+/** Reasoning level for the exact provider/model the view shows. */
+export interface SetReasoningMessage {
+  type: 'setReasoning';
+  provider: ProviderId;
+  model: string;
+  level: string;
+}
+
+/** Advanced manual output maximum per provider; null = automatic. */
+export interface SetMaxOutputTokensMessage {
+  type: 'setMaxOutputTokens';
+  local: number | null;
+  cloud: number | null;
+}
+
 export type ViewInboundMessage =
   | NavigateMessage
   | ReadyMessage
@@ -198,7 +214,9 @@ export type ViewInboundMessage =
   | EscalateDismissMessage
   | SetAgentProfileMessage
   | ApproveAgentActionMessage
-  | RejectAgentActionMessage;
+  | RejectAgentActionMessage
+  | SetReasoningMessage
+  | SetMaxOutputTokensMessage;
 
 export const MAX_THREAD_ID_LENGTH = 128;
 
@@ -480,6 +498,36 @@ export function parseViewInboundMessage(raw: unknown): ViewInboundMessage {
         actionId: record.actionId,
         digest: record.digest,
       };
+    case 'setReasoning':
+      if (
+        !hasExactKeys(record, ['type', 'provider', 'model', 'level']) ||
+        (record.provider !== 'cloud' && record.provider !== 'local') ||
+        typeof record.model !== 'string' ||
+        !/^[A-Za-z0-9._-]{1,128}$/.test(record.model) ||
+        typeof record.level !== 'string' ||
+        !isReasoningChoice(record.level)
+      ) {
+        fail('Invalid setReasoning message.');
+      }
+      return {
+        type: 'setReasoning',
+        provider: record.provider as ProviderId,
+        model: record.model as string,
+        level: record.level as string,
+      };
+    case 'setMaxOutputTokens':
+      if (
+        !hasExactKeys(record, ['type', 'local', 'cloud']) ||
+        (record.local !== null && (typeof record.local !== 'number' || !Number.isInteger(record.local))) ||
+        (record.cloud !== null && (typeof record.cloud !== 'number' || !Number.isInteger(record.cloud)))
+      ) {
+        fail('Invalid setMaxOutputTokens message.');
+      }
+      return {
+        type: 'setMaxOutputTokens',
+        local: record.local as number | null,
+        cloud: record.cloud as number | null,
+      };
     default:
       fail('Unknown view message.');
   }
@@ -595,6 +643,81 @@ export interface ViewStateMessage {
   agentLog: AgentLogEntryView[];
   /** Thread of the current or most recent run; run outcomes show only there. */
   runThreadId: string | null;
+  generation: GenerationView;
+}
+
+/**
+ * Generation controls for the selected provider/model. Reasoning effort,
+ * output budget, and context stay separate fields; none of them is the
+ * Agent step budget.
+ */
+export interface GenerationView {
+  provider: ProviderId;
+  model: string;
+  /** `default` plus only the levels this provider/model accepts. */
+  reasoningOptions: string[];
+  /** Stored choice when it applies here, else `default`. */
+  reasoning: string;
+  /** A stored level that does not apply to this provider/model, if any. */
+  reasoningUnavailable: string | null;
+  reasoningDefault: string;
+  /** Request field the level is sent in; null when none is sent. */
+  reasoningParam: string | null;
+  source: string;
+  contextWindow: number | null;
+  autoOutputTokens: number;
+  maxOutputTokensLocal: number | null;
+  maxOutputTokensCloud: number | null;
+}
+
+function emptyGenerationView(provider: ProviderId, model: string): GenerationView {
+  return {
+    provider,
+    model,
+    reasoningOptions: ['default'],
+    reasoning: 'default',
+    reasoningUnavailable: null,
+    reasoningDefault: 'model-set',
+    reasoningParam: null,
+    source: 'unknown',
+    contextWindow: null,
+    autoOutputTokens: 0,
+    maxOutputTokensLocal: null,
+    maxOutputTokensCloud: null,
+  };
+}
+
+function sanitizeGenerationView(value: unknown, provider: ProviderId, model: string): GenerationView {
+  const fallback = emptyGenerationView(provider, model);
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return fallback;
+  }
+  const record = value as Record<string, unknown>;
+  const count = (entry: unknown): number | null =>
+    typeof entry === 'number' && Number.isInteger(entry) && entry > 0 ? entry : null;
+  const options = Array.isArray(record.reasoningOptions)
+    ? ['default', ...REASONING_LEVELS.filter((level) => (record.reasoningOptions as unknown[]).includes(level))]
+    : ['default'];
+  const reasoning = typeof record.reasoning === 'string' && options.includes(record.reasoning) ? record.reasoning : 'default';
+  const text = (entry: unknown, max: number): string | null => (typeof entry === 'string' ? entry.slice(0, max) : null);
+  return {
+    provider,
+    // The id actually sent (for local, the configured model id).
+    model: typeof record.model === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(record.model) ? record.model : model,
+    reasoningOptions: options,
+    reasoning,
+    reasoningUnavailable:
+      typeof record.reasoningUnavailable === 'string' && isReasoningChoice(record.reasoningUnavailable)
+        ? record.reasoningUnavailable
+        : null,
+    reasoningDefault: text(record.reasoningDefault, 40) ?? 'model-set',
+    reasoningParam: text(record.reasoningParam, 80),
+    source: text(record.source, 120) ?? 'unknown',
+    contextWindow: count(record.contextWindow),
+    autoOutputTokens: count(record.autoOutputTokens) ?? 0,
+    maxOutputTokensLocal: count(record.maxOutputTokensLocal),
+    maxOutputTokensCloud: count(record.maxOutputTokensCloud),
+  };
 }
 
 export function runtimeLabel(runtime: RuntimeId): string {
@@ -646,6 +769,7 @@ export function buildViewStateMessage(options: {
   agentPending?: AgentPendingView | null;
   agentLog?: AgentLogEntryView[];
   runThreadId?: string | null;
+  generation?: GenerationView;
 }): ViewStateMessage {
   // The provider-level runtime is the source of truth; the cloud model is
   // a validated subordinate selection. Mismatched/arbitrary combinations
@@ -692,6 +816,7 @@ export function buildViewStateMessage(options: {
     agentPending: options.agentPending ?? null,
     agentLog: options.agentLog ?? [],
     runThreadId: typeof options.runThreadId === 'string' ? options.runThreadId : null,
+    generation: sanitizeGenerationView(options.generation, provider, model),
   };
 }
 

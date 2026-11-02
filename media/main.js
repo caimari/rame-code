@@ -103,6 +103,16 @@
   var localStatusEl = el('localStatus');
   var diagnosticsEl = el('diagnostics');
   var settingsStatusEl = el('settingsStatus');
+  var generationModelEl = el('generationModel');
+  var reasoningSelectEl = el('reasoningSelect');
+  var reasoningHintEl = el('reasoningHint');
+  var budgetHintEl = el('budgetHint');
+  var maxOutputLocalEl = el('maxOutputLocal');
+  var maxOutputCloudEl = el('maxOutputCloud');
+  var saveMaxOutputBtn = el('saveMaxOutput');
+  var REASONING_LABELS = { default: 'Model default', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' };
+  // Provider/model the reasoning selector currently describes.
+  var generationTarget = { provider: 'cloud', model: '' };
 
   var running = false;
   var activeThreadId = null;
@@ -989,6 +999,71 @@
     }
   }
 
+  function formatTokens(value) {
+    return typeof value === 'number' ? String(value) + ' tokens' : 'unknown';
+  }
+
+  function renderGeneration(data) {
+    var gen = data.generation;
+    if (!gen || typeof gen !== 'object') {
+      return;
+    }
+    generationTarget = { provider: gen.provider, model: gen.model };
+    var providerLabel = gen.provider === 'local' ? 'Local' : 'Meta';
+    setText(
+      generationModelEl,
+      providerLabel + ' · ' + gen.model + ' · context ' + formatTokens(gen.contextWindow) + ' per request.'
+    );
+    if (reasoningSelectEl && document.activeElement !== reasoningSelectEl) {
+      // Only the levels this exact provider/model accepts are offered.
+      while (reasoningSelectEl.firstChild) {
+        reasoningSelectEl.removeChild(reasoningSelectEl.firstChild);
+      }
+      var options = Array.isArray(gen.reasoningOptions) ? gen.reasoningOptions : ['default'];
+      options.forEach(function (level) {
+        if (!Object.prototype.hasOwnProperty.call(REASONING_LABELS, level)) {
+          return;
+        }
+        var option = document.createElement('option');
+        option.value = level;
+        option.textContent = REASONING_LABELS[level];
+        reasoningSelectEl.appendChild(option);
+      });
+      setSelectValue(reasoningSelectEl, gen.reasoning);
+      reasoningSelectEl.disabled = reasoningSelectEl.options.length <= 1;
+    }
+    var hint;
+    if (gen.reasoningParam) {
+      hint = 'Sent as ' + gen.reasoningParam + '. Model default sends no level (default: ' + gen.reasoningDefault + '). Reasoning cannot be turned off for this model.';
+    } else {
+      hint = 'No verified reasoning control for this model (' + gen.source + '), so only Model default is offered.';
+    }
+    if (gen.reasoningUnavailable) {
+      hint += ' Your saved level ' + (REASONING_LABELS[gen.reasoningUnavailable] || gen.reasoningUnavailable) + ' does not apply here; Model default is used.';
+    }
+    setText(reasoningHintEl, hint);
+    setText(
+      budgetHintEl,
+      'Automatic: ' + formatTokens(gen.autoOutputTokens) + ' for ' + providerLabel + ', lowered to fit the free context. A manual maximum replaces it for that provider only.'
+    );
+    if (maxOutputLocalEl && document.activeElement !== maxOutputLocalEl) {
+      maxOutputLocalEl.value = typeof gen.maxOutputTokensLocal === 'number' ? String(gen.maxOutputTokensLocal) : '';
+    }
+    if (maxOutputCloudEl && document.activeElement !== maxOutputCloudEl) {
+      maxOutputCloudEl.value = typeof gen.maxOutputTokensCloud === 'number' ? String(gen.maxOutputTokensCloud) : '';
+    }
+  }
+
+  function readMaxOutput(input) {
+    var raw = input ? String(input.value).trim() : '';
+    if (raw.length === 0) {
+      return null;
+    }
+    var value = Number(raw);
+    // Invalid numbers go to the host as-is so it can refuse them with a message.
+    return Number.isInteger(value) ? value : -1;
+  }
+
   function fillSettingsForm(data) {
     if (allowEscalationEl) {
       allowEscalationEl.checked = data.allowCloudEscalation === true;
@@ -1054,6 +1129,7 @@
     setText(escalationReasonEl, esc.reason || '');
     renderLocal(data);
     renderAgent(data);
+    renderGeneration(data);
     fillSettingsForm(data);
     refreshControls(data);
   });
@@ -1289,6 +1365,28 @@
       }
       setText(localStatusEl, 'Local runtime is starting…');
       vscode.postMessage(readLocalForm('startLocal'));
+    });
+  }
+
+  if (reasoningSelectEl) {
+    reasoningSelectEl.addEventListener('change', function () {
+      vscode.postMessage({
+        type: 'setReasoning',
+        provider: generationTarget.provider,
+        model: generationTarget.model,
+        level: reasoningSelectEl.value,
+      });
+    });
+  }
+
+  if (saveMaxOutputBtn) {
+    saveMaxOutputBtn.addEventListener('click', function () {
+      // One atomic message: either both maximums are saved or neither is.
+      vscode.postMessage({
+        type: 'setMaxOutputTokens',
+        local: readMaxOutput(maxOutputLocalEl),
+        cloud: readMaxOutput(maxOutputCloudEl),
+      });
     });
   }
 

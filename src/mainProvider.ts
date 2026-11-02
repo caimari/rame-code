@@ -102,8 +102,30 @@ import {
   parseAgentProfile,
   type AgentProfileId,
 } from './agentProfiles.js';
-import { truncateToolOutput, type ValidatedToolCall } from './agentTools.js';
+import { buildAgentToolDefinitions, truncateToolOutput, type ValidatedToolCall } from './agentTools.js';
+import { withBoundedRequest } from './boundedRequest.js';
 import { ChatRunner } from './chatRunner.js';
+import {
+  GenerationContextError,
+  REASONING_LABELS,
+  UNKNOWN_LOCAL_PROPS,
+  automaticOutputTokens,
+  cloudGenerationProfile,
+  describeBudgetLimit,
+  estimatePromptTokens,
+  isReasoningChoice,
+  localGenerationProfile,
+  parseLlamaServerProps,
+  parseManualMaxOutput,
+  resolveOutputBudget,
+  resolveReasoning,
+  withReasoningChoice,
+  type GenerationProviderId,
+  type GenerationRequest,
+  type LocalServerProps,
+  type ModelGenerationProfile,
+  type ReasoningLevel,
+} from './generationSettings.js';
 import { createLocalChatCompletion } from './localProvider.js';
 import {
   buildLlamaServerArgs,
@@ -169,6 +191,7 @@ import {
   buildViewStateMessage,
   localUnreachableMessage,
   type EscalationState,
+  type GenerationView,
   type ViewConnection,
   type ViewScreen,
 } from './viewMessages.js';
@@ -208,6 +231,39 @@ const MAX_DIAGNOSTIC_BYTES = 8192;
 const APPROVAL_PREVIEW_CHARS = 2000;
 /** The model is told to wrap up when this many steps of the budget remain. */
 const AGENT_STEPS_WARNING_REMAINING = 2;
+/** Bound for reading the local server's `/props` (loopback only). */
+const LOCAL_PROPS_TIMEOUT_MS = 3000;
+/** Earlier thread messages longer than this are shortened with a visible marker. */
+const AGENT_HISTORY_TEXT_LIMIT = 4000;
+
+/**
+ * Generation parameters fixed when a run starts, so changing a setting
+ * while a request is in flight never alters that run.
+ */
+interface RunGeneration {
+  provider: GenerationProviderId;
+  model: string;
+  profile: ModelGenerationProfile;
+  reasoning: ReasoningLevel | null;
+  manualMax: number | null;
+  /** Visible notes about choices that could not be applied as stored. */
+  notes: string[];
+}
+
+function withNote(status: string, note: string | null): string {
+  return note === null ? status : `${status} ${note}`;
+}
+
+/** Shorten earlier thread text with a marker instead of cutting it silently. */
+function historyText(text: string): string {
+  if (text.length <= AGENT_HISTORY_TEXT_LIMIT) {
+    return text;
+  }
+  return (
+    `${text.slice(0, AGENT_HISTORY_TEXT_LIMIT)}\n` +
+    `…[RAME Code shortened this earlier message: ${text.length - AGENT_HISTORY_TEXT_LIMIT} characters left out]`
+  );
+}
 
 export class RameCodeViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
@@ -250,6 +306,8 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
    * Activity/approval cards are shown only in it.
    */
   private runThreadId: string | null = null;
+  /** Last `/props` reading of the local server, tied to its endpoint. */
+  private localProps: { endpoint: string; props: LocalServerProps } | null = null;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -378,6 +436,12 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
         ? 'ready'
         : 'missing-key';
     this.ensureActiveThreadStillExists();
+    // Reading /props never starts a runtime: it only asks an endpoint that is
+    // already running or explicitly selected.
+    const endpoint = this.settings.provider === 'local' && !this.running ? this.localEndpoint() : null;
+    if (endpoint !== null) {
+      await this.probeLocalProps(endpoint);
+    }
     await this.postState();
   }
 
@@ -615,16 +679,28 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
         : 'Working with the local runtime…';
     await this.postState();
 
+    let generationNote: string | null = null;
     try {
+      // Fixed for the whole run: later setting changes apply to the next run.
+      const generation = await this.snapshotGeneration(provider);
+      if (generation.notes.length > 0) {
+        generationNote = generation.notes.join(' ');
+        this.status = `${this.status} ${generationNote}`;
+        await this.postState();
+      }
       if (mode === 'agent') {
-        await this.sendAgent(threadId, text, provider, agentTarget);
+        await this.sendAgent(threadId, text, provider, generation, agentTarget);
       } else if (provider === 'cloud') {
-        await this.sendCloud(threadId, text, mode);
+        await this.sendCloud(threadId, text, mode, generation);
       } else {
-        await this.sendLocal(threadId, text, mode);
+        await this.sendLocal(threadId, text, mode, generation);
       }
     } catch (error) {
       await this.handleSendError(threadId, provider, error);
+    }
+    if (generationNote !== null && !this.status.includes(generationNote)) {
+      // The final status must not hide that a stored choice was not applied.
+      this.status = `${this.status} ${generationNote}`;
     }
     if (!this.disposed) {
       void this.state.update(RAME_ACTIVE_RUN_KEY, undefined);
@@ -636,6 +712,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     threadId: string,
     text: string,
     mode: string,
+    generation: RunGeneration,
   ): Promise<void> {
     const apiKey = await this.secrets.get(API_KEY_SECRET);
     if (!apiKey) {
@@ -655,19 +732,20 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       activeThread: thread,
       currentText: text,
     });
-    const cloudModel = this.selectedCloudModel();
+    const cloudModel = generation.model;
+    const { request, note } = this.generationRequest(generation, { messages: built.messages });
     if (mode === 'mission') {
       const result = await this.missionRunner.startWithUsage({
         apiKey,
         goal: text,
         fetchImpl: undefined,
         model: cloudModel,
+        generation: request,
       });
-      void built;
       this.recordUsage('cloud', result.usage);
       this.running = false;
       this.connection = 'verified';
-      this.status = 'Plan ready.';
+      this.status = withNote('Plan ready.', note);
       const current = this.store.get(threadId);
       if (current) {
         this.store.save(appendPlanTurn(current, result.plan));
@@ -683,6 +761,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
           messages: built.messages,
           signal,
           model: cloudModel,
+          generation: request,
         }).then((completion) => {
           this.recordUsage('cloud', completion.usage);
           return completion.text;
@@ -690,7 +769,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       );
       this.running = false;
       this.connection = 'verified';
-      this.status = 'Reply ready.';
+      this.status = withNote('Reply ready.', note);
       const current = this.store.get(threadId);
       if (current) {
         this.store.save(appendAssistantTurn(current, result));
@@ -702,6 +781,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     threadId: string,
     text: string,
     mode: string,
+    generation: RunGeneration,
   ): Promise<void> {
     const endpoint = this.localEndpoint();
     if (!endpoint) {
@@ -715,15 +795,14 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       activeThread: thread,
       currentText: text,
     });
-    const modelId =
-      this.settings.local.modelId.trim().length > 0
-        ? this.settings.local.modelId.trim()
-        : 'local-glimmer';
+    const modelId = generation.model;
+    const { request, note } = this.generationRequest(generation, { messages: built.messages });
     const result = await this.chatRunner.start(async ({ signal }) =>
       createLocalChatCompletion({
         endpoint,
         model: modelId,
         messages: built.messages,
+        generation: request,
         signal,
       }).then((completion) => {
         this.recordUsage('local', completion.usage);
@@ -738,23 +817,169 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
         if (current) {
           this.store.save(appendPlanTurn(current, plan));
         }
-        this.status = 'Plan ready.';
+        this.status = withNote('Plan ready.', note);
       } else {
         if (current) {
           this.store.save(appendAssistantTurn(current, result));
         }
-        this.status =
-          'The local model did not return a strict plan; its reply is shown as prose.';
+        this.status = withNote(
+          'The local model did not return a strict plan; its reply is shown as prose.',
+          note,
+        );
       }
     } else {
       const current = this.store.get(threadId);
       if (current) {
         this.store.save(appendAssistantTurn(current, result));
       }
-      this.status = 'Reply ready.';
+      this.status = withNote('Reply ready.', note);
     }
     this.running = false;
     this.connection = 'verified';
+  }
+
+  // ----- Generation: reasoning, output budget, and context -----
+
+  /** Model the provider will be asked for (the cloud model or the local id). */
+  private generationModel(provider: ProviderId): string {
+    if (provider === 'cloud') {
+      return this.selectedCloudModel();
+    }
+    return this.settings.local.modelId.trim().length > 0 ? this.settings.local.modelId.trim() : 'local-glimmer';
+  }
+
+  /**
+   * Read the local server's `/props` (loopback, bounded). Anything other
+   * than a llama-server reply counts as unknown, which offers no reasoning
+   * levels; it never blocks or fails the run.
+   */
+  private async probeLocalProps(endpoint: string): Promise<LocalServerProps> {
+    let props: LocalServerProps = { ...UNKNOWN_LOCAL_PROPS };
+    if (isLoopbackUrl(endpoint)) {
+      try {
+        const payload = await withBoundedRequest(undefined, LOCAL_PROPS_TIMEOUT_MS, 'Local /props timed out.', async (signal) => {
+          const response = await fetch(`${endpoint.replace(/\/+$/, '')}/props`, { method: 'GET', signal });
+          return response.ok ? ((await response.json()) as unknown) : null;
+        });
+        props = parseLlamaServerProps(payload);
+      } catch {
+        props = { ...UNKNOWN_LOCAL_PROPS };
+      }
+    }
+    this.localProps = { endpoint, props };
+    return props;
+  }
+
+  /** Profile of the selected provider/model from what is known right now. */
+  private generationProfile(provider: ProviderId, model: string): ModelGenerationProfile {
+    if (provider === 'cloud') {
+      return cloudGenerationProfile(model);
+    }
+    const endpoint = this.localEndpoint();
+    const props = endpoint !== null && this.localProps?.endpoint === endpoint ? this.localProps.props : null;
+    // The context RAME passed with -c is a fallback only for its own server.
+    const ownContext = this.local.owned && this.local.endpoint === endpoint ? this.settings.local.contextSize : null;
+    return localGenerationProfile(props, ownContext);
+  }
+
+  private async snapshotGeneration(provider: ProviderId): Promise<RunGeneration> {
+    const model = this.generationModel(provider);
+    if (provider === 'local') {
+      const endpoint = this.localEndpoint();
+      if (endpoint !== null) {
+        await this.probeLocalProps(endpoint);
+      }
+    }
+    const profile = this.generationProfile(provider, model);
+    const reasoning = resolveReasoning(this.settings.generation, provider, model, profile);
+    const notes = reasoning.unavailable
+      ? [`Reasoning ${REASONING_LABELS[reasoning.stored]} is not available for ${model} (${profile.source}); this run uses Model default.`]
+      : [];
+    const runProfile = {
+      ...profile,
+      autoOutputTokens: automaticOutputTokens(provider, reasoning.unavailable ? 'default' : reasoning.stored),
+    };
+    return {
+      provider,
+      model,
+      profile: runProfile,
+      reasoning: reasoning.level,
+      manualMax: this.settings.generation.maxOutputTokens[provider],
+      notes,
+    };
+  }
+
+  /**
+   * Output budget for one request from the run's fixed settings and the
+   * estimated input. Throws {@link GenerationContextError} when the input
+   * leaves too little context; the input is never shortened to fit.
+   */
+  private generationRequest(
+    run: RunGeneration,
+    body: unknown,
+    calibration?: { chars: number; tokens: number } | null,
+  ): { request: GenerationRequest; note: string | null } {
+    const budget = resolveOutputBudget(run.provider, run.profile, run.manualMax, estimatePromptTokens(body, calibration));
+    return {
+      request: {
+        maxCompletionTokens: budget.maxCompletionTokens,
+        reasoning: run.reasoning,
+        reasoningParam: run.profile.reasoningParam,
+      },
+      note: describeBudgetLimit(budget),
+    };
+  }
+
+  /** Store a reasoning level for the selected provider/model (next run only). */
+  async setReasoning(provider: ProviderId, model: string, rawLevel: string): Promise<void> {
+    const current = this.generationModel(this.settings.provider);
+    if (provider !== this.settings.provider || model !== current || !isReasoningChoice(rawLevel)) {
+      this.status = 'Reasoning was not changed: the selection no longer matches the current runtime.';
+      await this.postState();
+      return;
+    }
+    const profile = this.generationProfile(provider, model);
+    if (rawLevel !== 'default' && !profile.reasoningLevels.includes(rawLevel)) {
+      this.status = `Reasoning ${REASONING_LABELS[rawLevel]} is not available for ${model}.`;
+      await this.postState();
+      return;
+    }
+    try {
+      this.settings = { ...this.settings, generation: withReasoningChoice(this.settings.generation, provider, model, rawLevel) };
+    } catch (error) {
+      this.status = error instanceof Error ? error.message : 'Reasoning was not changed.';
+      await this.postState();
+      return;
+    }
+    this.persistSettings();
+    this.status = this.running
+      ? `Reasoning set to ${REASONING_LABELS[rawLevel]} for ${model}; the current run keeps its settings.`
+      : `Reasoning set to ${REASONING_LABELS[rawLevel]} for ${model}.`;
+    await this.postState();
+  }
+
+  /**
+   * Store the advanced manual output maximums (next run only). Both are
+   * validated first: when either is invalid, neither changes.
+   */
+  async setMaxOutputTokens(rawLocal: number | null, rawCloud: number | null): Promise<void> {
+    const parsed: Record<GenerationProviderId, number | null> = { local: null, cloud: null };
+    for (const [provider, raw, label] of [['local', rawLocal, 'Local'], ['cloud', rawCloud, 'Meta']] as const) {
+      try {
+        parsed[provider] = parseManualMaxOutput(provider, raw);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : 'The value is invalid.';
+        this.status = `${label} maximum not saved, so nothing changed: ${detail}`;
+        await this.postState();
+        return;
+      }
+    }
+    this.settings = { ...this.settings, generation: { ...this.settings.generation, maxOutputTokens: parsed } };
+    this.persistSettings();
+    const what = (value: number | null): string => (value === null ? 'automatic' : `${value} tokens`);
+    const summary = `Maximum output: Local ${what(parsed.local)}, Meta ${what(parsed.cloud)}.`;
+    this.status = this.running ? `${summary} The current run keeps its settings.` : summary;
+    await this.postState();
   }
 
   // ----- Agent mode (permission-gated bounded tool loop) -----
@@ -1216,6 +1441,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     threadId: string,
     text: string,
     provider: ProviderId,
+    generation: RunGeneration,
     resolvedTarget?: { root: string; label: string },
   ): Promise<void> {
     const profile: AgentProfileId = this.settings.agentProfile ?? DEFAULT_AGENT_PROFILE;
@@ -1245,12 +1471,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     // A later thread clears this display; it is never reused silently.
     this.agentRunWorkspace = { root: target.root, label: target.label };
     await this.postState();
-    const model =
-      provider === 'cloud'
-        ? this.selectedCloudModel()
-        : this.settings.local.modelId.trim().length > 0
-          ? this.settings.local.modelId.trim()
-          : 'local-glimmer';
+    const model = generation.model;
     try {
       assertAgentModelForProvider(provider, model);
     } catch (error) {
@@ -1288,15 +1509,17 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     const thread = this.store.get(threadId);
     const history: AgentChatMessage[] = [];
     if (thread) {
-      for (const turn of thread.turns.slice(-20)) {
+      // buildAgentMessages keeps the most recent messages and tells the
+      // model how many older ones it left out.
+      for (const turn of thread.turns) {
         if (turn.kind === 'user') {
-          history.push({ role: 'user', content: turn.text.slice(0, 4000) });
+          history.push({ role: 'user', content: historyText(turn.text) });
         } else if (turn.kind === 'assistant') {
           // Prose only: host labels and records are never echoed back for
           // the model to imitate. What actually ran is given separately.
           const prose = assistantHistoryText(turn.text);
           if (prose.length > 0) {
-            history.push({ role: 'assistant', content: prose.slice(0, 4000) });
+            history.push({ role: 'assistant', content: historyText(prose) });
           }
           if (turn.hostRecord) {
             history.push({
@@ -1328,6 +1551,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     let lastStepToolCallsRefused = false;
     let protocolRepairs = 0;
     let emptyReplies = 0;
+    // Measured input tokens of the last step refine the next estimate.
+    let calibration: { chars: number; tokens: number } | null = null;
+    let lastBudgetNote: string | null = null;
     const outcome = await this.agentRunner.start(async (signal) => {
       agentSteps: for (let step = 0; step < MAX_AGENT_STEPS; step++) {
         const stale = await this.checkWorkspaceStillHeld(workspaceId);
@@ -1364,12 +1590,36 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
               'what you did, files changed (or none), tests/checks run and their result, and what remains unfinished.',
           });
         }
-        const toolChoice = lastStep ? 'none' : 'auto';
+        // Meta documents only tool_choice "auto"; the local server also
+        // honors "none". The host refuses last-step tool calls either way.
+        const toolChoice = lastStep && provider === 'local' ? 'none' : 'auto';
         const messages = buildAgentMessages(workspaceId, history, text, extra);
+        const estimateBody = { messages, tools: buildAgentToolDefinitions() };
+        let stepRequest: ReturnType<RameCodeViewProvider['generationRequest']>;
+        try {
+          stepRequest = this.generationRequest(generation, estimateBody, calibration);
+        } catch (error) {
+          if (!(error instanceof GenerationContextError)) {
+            throw error;
+          }
+          // The run's own exchanges are never dropped to make room.
+          const detail = `The Agent stopped before model step ${step + 1}: ${error.message}`;
+          const current = this.store.get(threadId);
+          if (current) {
+            this.store.save(appendErrorTurn(current, detail.slice(0, 500)));
+          }
+          this.status = detail;
+          return 'policy-stop';
+        }
+        if (stepRequest.note !== null && stepRequest.note !== lastBudgetNote) {
+          lastBudgetNote = stepRequest.note;
+          this.status = stepRequest.note;
+          await this.postState();
+        }
         let completion: AgentCompletion;
         try {
           completion = provider === 'cloud'
-            ? await createMetaAgentCompletion({ apiKey, model, messages, signal, toolChoice }).then((result) => {
+            ? await createMetaAgentCompletion({ apiKey, model, messages, generation: stepRequest.request, signal }).then((result) => {
                 this.recordUsage('cloud', result.usage);
                 return result;
               })
@@ -1377,6 +1627,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
                 endpoint: this.localEndpoint() as string,
                 model,
                 messages,
+                generation: stepRequest.request,
                 signal,
                 toolChoice,
               }).then((result) => {
@@ -1384,6 +1635,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
                 this.armIdleShutdown();
                 return result;
               });
+          if (completion.usage.inputTokens > 0) {
+            calibration = { chars: JSON.stringify(estimateBody).length, tokens: completion.usage.inputTokens };
+          }
         } catch (error) {
           if (!isAgentToolProtocolError(error)) {
             throw error;
@@ -2360,6 +2614,10 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     };
     this.persistSettings();
     this.status = 'Settings saved.';
+    const endpoint = provider === 'local' && !this.running ? this.localEndpoint() : null;
+    if (endpoint !== null) {
+      await this.probeLocalProps(endpoint);
+    }
     await this.postState();
   }
 
@@ -2496,6 +2754,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       endpoint,
     });
     this.status = `External endpoint selected: ${endpoint}. RAME does not own its lifecycle.`;
+    await this.probeLocalProps(endpoint);
     await this.postState();
   }
 
@@ -2657,6 +2916,8 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     });
     this.status = `Local runtime running on ${endpoint}.`;
     this.armIdleShutdown();
+    // Learn the served context and template so Settings shows real options.
+    await this.probeLocalProps(endpoint);
     await this.postState();
   }
 
@@ -2894,6 +3155,12 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       case 'setAgentProfile':
         await this.setAgentProfile(message.profile);
         return;
+      case 'setReasoning':
+        await this.setReasoning(message.provider, message.model, message.level);
+        return;
+      case 'setMaxOutputTokens':
+        await this.setMaxOutputTokens(message.local, message.cloud);
+        return;
       case 'approveAgentAction':
         await this.approveAgentAction(message.actionId, message.digest);
         return;
@@ -2967,8 +3234,30 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
           : null,
         agentLog: inRunThread ? this.agentLogView.map((entry) => ({ ...entry })) : [],
         runThreadId: this.runThreadId,
+        generation: this.generationView(),
       }),
     );
+  }
+
+  private generationView(): GenerationView {
+    const provider = this.settings.provider;
+    const model = this.generationModel(provider);
+    const profile = this.generationProfile(provider, model);
+    const reasoning = resolveReasoning(this.settings.generation, provider, model, profile);
+    return {
+      provider,
+      model,
+      reasoningOptions: ['default', ...profile.reasoningLevels],
+      reasoning: reasoning.level ?? 'default',
+      reasoningUnavailable: reasoning.unavailable ? reasoning.stored : null,
+      reasoningDefault: profile.reasoningDefault,
+      reasoningParam: profile.reasoningParam,
+      source: profile.source,
+      contextWindow: profile.contextWindow,
+      autoOutputTokens: automaticOutputTokens(provider, reasoning.unavailable ? 'default' : reasoning.stored),
+      maxOutputTokensLocal: this.settings.generation.maxOutputTokens.local,
+      maxOutputTokensCloud: this.settings.generation.maxOutputTokens.cloud,
+    };
   }
 }
 
@@ -3015,6 +3304,17 @@ function summarizeToolResult(tool: string, resultText: string): string {
     summary = resultText.trim() === '(no matches)' ? 'no matches' : `${lines.filter((line) => line.length > 0).length} matching line(s)`;
   } else if (tool === 'list_files') {
     summary = resultText.trim() === '(empty directory)' ? 'empty directory' : `${lines.filter((line) => line.length > 0).length} entr(ies) listed`;
+  } else if (tool === 'inspect_workspace') {
+    const fields = new Map(
+      lines.flatMap((line) => {
+        const match = /^(directory|files|directories|totalBytes|entriesVisited|truncated): ([A-Za-z0-9._/-]{1,120}|\d+|true|false)$/.exec(line);
+        return match ? [[match[1], match[2]] as const] : [];
+      }),
+    );
+    const required = ['directory', 'files', 'directories', 'totalBytes', 'entriesVisited', 'truncated'] as const;
+    summary = required.every((field) => fields.has(field))
+      ? required.map((field) => `${field}=${fields.get(field)}`).join(' ')
+      : 'workspace inspection completed';
   } else if (tool === 'read_file') {
     summary = `read ${(lines[0] ?? '').replace(/^path: /, '')}`;
   } else {

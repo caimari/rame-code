@@ -17,6 +17,7 @@ export interface StartMissionInput {
   fetchImpl?: CreateMissionPlanOptions['fetchImpl'];
   endpoint?: string;
   model?: string;
+  generation?: CreateMissionPlanOptions['generation'];
 }
 
 export class MissionRunner {
@@ -59,6 +60,7 @@ export class MissionRunner {
         fetchImpl: input.fetchImpl,
         endpoint: input.endpoint,
         model: input.model,
+        generation: input.generation,
       });
     } finally {
       if (this.controller === controller) {

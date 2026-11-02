@@ -15,6 +15,9 @@ import test from 'node:test';
 import { createBudgetedRegexSearch, executeSearchText, REGEX_SEARCH_BUDGET_MS, REGEX_SEARCH_TIMEOUT_MESSAGE, type AgentFs } from '../src/agentHost.js';
 import { runAgentLoop } from '../src/agentLoop.js';
 import { createLocalAgentCompletion, createMetaAgentCompletion } from '../src/agentModel.js';
+import type { GenerationRequest } from '../src/generationSettings.js';
+
+const GEN: GenerationRequest = { maxCompletionTokens: 4096, reasoning: null, reasoningParam: null };
 import { checkAgentRelPath } from '../src/agentPolicy.js';
 import { formatProcessResult, runBoundedProcess } from '../src/agentProcess.js';
 import {
@@ -63,13 +66,13 @@ test('agent model calls time out even when the body never finishes', async () =>
   const stall = await stallingServer();
   try {
     const local = await settleWithin(
-      createLocalAgentCompletion({ endpoint: stall.endpoint, model: 'local-glimmer', messages: [], timeoutMs: 150 }),
+      createLocalAgentCompletion({ endpoint: stall.endpoint, model: 'local-glimmer', messages: [], generation: GEN, timeoutMs: 150 }),
       3000,
     );
     assert.equal(local.state, 'rejected');
     assert.match(local.error?.message ?? '', /did not answer within/);
     const cloud = await settleWithin(
-      createMetaAgentCompletion({ apiKey: 'k', model: 'muse-spark-1.3', messages: [], endpoint: `${stall.endpoint}/v1/chat/completions`, timeoutMs: 150 }),
+      createMetaAgentCompletion({ apiKey: 'k', model: 'muse-spark-1.3', messages: [], generation: GEN, endpoint: `${stall.endpoint}/v1/chat/completions`, timeoutMs: 150 }),
       3000,
     );
     assert.equal(cloud.state, 'rejected');
@@ -83,7 +86,7 @@ test('cancelling an agent model call while its body streams surfaces as AbortErr
   const stall = await stallingServer();
   try {
     const controller = new AbortController();
-    const pending = createLocalAgentCompletion({ endpoint: stall.endpoint, model: 'local-glimmer', messages: [], signal: controller.signal });
+    const pending = createLocalAgentCompletion({ endpoint: stall.endpoint, model: 'local-glimmer', messages: [], generation: GEN, signal: controller.signal });
     setTimeout(() => controller.abort(), 100);
     const outcome = await settleWithin(pending, 3000);
     assert.equal(outcome.state, 'rejected');
@@ -103,7 +106,7 @@ test('chat and mission calls are bounded too (cloud and local)', async () => {
     const mission = await settleWithin(createMissionPlanWithUsage({ apiKey: 'k', goal: 'goal text', endpoint, timeoutMs: 150 }), 3000);
     assert.equal(mission.state, 'rejected');
     assert.match(mission.error?.message ?? '', /timed out/);
-    const local = await settleWithin(createLocalChatCompletion({ endpoint: stall.endpoint, model: 'm', messages: [], timeoutMs: 150 }), 3000);
+    const local = await settleWithin(createLocalChatCompletion({ endpoint: stall.endpoint, model: 'm', messages: [], generation: GEN, timeoutMs: 150 }), 3000);
     assert.equal(local.state, 'rejected');
     assert.match(local.error?.message ?? '', /did not answer within/);
   } finally {
@@ -128,7 +131,7 @@ test('a rejected malformed tool reply keeps its usage for accounting', async () 
   const { port } = server.address() as { port: number };
   try {
     const outcome = await settleWithin(
-      createLocalAgentCompletion({ endpoint: `http://127.0.0.1:${port}`, model: 'local-glimmer', messages: [] }),
+      createLocalAgentCompletion({ endpoint: `http://127.0.0.1:${port}`, model: 'local-glimmer', messages: [], generation: GEN }),
       3000,
     );
     assert.equal(outcome.state, 'rejected');

@@ -8,6 +8,11 @@
  */
 
 import { isAbortError, withBoundedRequest } from './boundedRequest.js';
+import {
+  generationRequestFields,
+  localContextRefusal,
+  type GenerationRequest,
+} from './generationSettings.js';
 import { isLoopbackUrl } from './localRuntime.js';
 import { META_API_ENDPOINT } from './meta-provider.js';
 import { parseUsage, type ProviderUsage } from './usage.js';
@@ -69,17 +74,6 @@ export function buildAgentSystemPrompt(_workspaceLabel: string): string {
   );
 }
 
-/** Meta Model API output budget per Agent step (unchanged; it affects cost). */
-export const AGENT_CLOUD_MAX_COMPLETION_TOKENS = 1200;
-/**
- * Local Glimmer output budget per Agent step. Glimmer reasons before it
- * answers and its reasoning counts against this limit: at 1200 it was cut
- * mid-thought (empty replies) or mid-apply_patch (truncated JSON). 4096
- * stays far inside the local context and, at the slowest measured
- * ~80 tokens/s, inside the 120 s request deadline.
- */
-export const AGENT_LOCAL_MAX_COMPLETION_TOKENS = 4096;
-
 /**
  * The provider stopped because the reply reached the output limit
  * (`finish_reason: "length"`). The reply is incomplete, so neither its tool
@@ -93,25 +87,31 @@ export class AgentOutputTruncatedError extends AgentToolProtocolError {
 }
 
 /**
- * `none` is sent only on the last step of the budget, so the model must
- * answer with its final report instead of proposing another tool.
+ * `none` is sent only to the local server on the last step of the budget,
+ * so the model must answer with its final report instead of proposing
+ * another tool. Meta documents only `auto`, so it always gets `auto`; the
+ * host refuses any tool call proposed on the last step either way.
  */
 export type AgentToolChoice = 'auto' | 'none';
 
-/** Request body shared by Meta and OpenAI-compatible endpoints. */
+/**
+ * Request body shared by Meta and OpenAI-compatible endpoints. The output
+ * budget and the reasoning level come from the run's fixed generation
+ * request; a default reasoning choice adds no field.
+ */
 export function buildAgentRequestBody(
   model: string,
   messages: AgentChatMessage[],
-  tools: AgentToolDefinition[] = buildAgentToolDefinitions(),
-  maxCompletionTokens: number = AGENT_CLOUD_MAX_COMPLETION_TOKENS,
+  generation: GenerationRequest,
   toolChoice: AgentToolChoice = 'auto',
+  tools: AgentToolDefinition[] = buildAgentToolDefinitions(),
 ): Record<string, unknown> {
   return {
     model,
     messages,
     tools,
     tool_choice: toolChoice,
-    max_completion_tokens: maxCompletionTokens,
+    ...generationRequestFields(generation),
     store: false,
     stream: false,
   };
@@ -214,11 +214,11 @@ export async function createMetaAgentCompletion(options: {
   apiKey: string;
   model: string;
   messages: AgentChatMessage[];
+  generation: GenerationRequest;
   signal?: AbortSignal;
   fetchImpl?: FetchLike;
   endpoint?: string;
   timeoutMs?: number;
-  toolChoice?: AgentToolChoice;
 }): Promise<AgentCompletion> {
   assertAgentModelForProvider('cloud', options.model);
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -235,9 +235,7 @@ export async function createMetaAgentCompletion(options: {
           'Content-Type': 'application/json',
         },
         signal,
-        body: JSON.stringify(
-          buildAgentRequestBody(options.model, options.messages, undefined, AGENT_CLOUD_MAX_COMPLETION_TOKENS, options.toolChoice),
-        ),
+        body: JSON.stringify(buildAgentRequestBody(options.model, options.messages, options.generation, 'auto')),
       });
       return { response, payload: await readPayload(response) };
     },
@@ -253,7 +251,7 @@ export async function createMetaAgentCompletion(options: {
         : `Meta Model API returned HTTP ${response.status}.`,
     );
   }
-  return parseAgentPayload(payload, AGENT_CLOUD_MAX_COMPLETION_TOKENS);
+  return parseAgentPayload(payload, options.generation.maxCompletionTokens);
 }
 
 /** Local Agent call against the configured loopback `llama-server`. */
@@ -261,6 +259,7 @@ export async function createLocalAgentCompletion(options: {
   endpoint: string;
   model: string;
   messages: AgentChatMessage[];
+  generation: GenerationRequest;
   signal?: AbortSignal;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
@@ -285,7 +284,7 @@ export async function createLocalAgentCompletion(options: {
           headers: { 'Content-Type': 'application/json' },
           signal,
           body: JSON.stringify(
-            buildAgentRequestBody(options.model, options.messages, undefined, AGENT_LOCAL_MAX_COMPLETION_TOKENS, options.toolChoice),
+            buildAgentRequestBody(options.model, options.messages, options.generation, options.toolChoice ?? 'auto'),
           ),
         });
       } catch (error) {
@@ -298,7 +297,7 @@ export async function createLocalAgentCompletion(options: {
     },
   );
   if (!response.ok) {
-    throw new Error(`The local runtime returned HTTP ${response.status}.`);
+    throw localContextRefusal(payload) ?? new Error(`The local runtime returned HTTP ${response.status}.`);
   }
-  return parseAgentPayload(payload, AGENT_LOCAL_MAX_COMPLETION_TOKENS);
+  return parseAgentPayload(payload, options.generation.maxCompletionTokens);
 }

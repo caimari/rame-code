@@ -1,4 +1,11 @@
 import { withBoundedRequest } from './boundedRequest.js';
+import {
+  CLOUD_AUTO_OUTPUT_TOKENS,
+  OutputCutOffError,
+  generationRequestFields,
+  stoppedAtLength,
+  type GenerationRequest,
+} from './generationSettings.js';
 import type { MissionPlan } from './types.js';
 import { parseUsage, type ProviderUsage } from './usage.js';
 
@@ -47,6 +54,29 @@ export interface CreateMissionPlanOptions {
   model?: string;
   /** Deadline covering headers and body; defaults to 120 seconds. */
   timeoutMs?: number;
+  /**
+   * Output budget and reasoning level fixed when the run started. Callers
+   * without generation settings get the automatic Meta budget and no
+   * reasoning parameter.
+   */
+  generation?: GenerationRequest;
+}
+
+const AUTOMATIC_CLOUD_GENERATION: GenerationRequest = {
+  maxCompletionTokens: CLOUD_AUTO_OUTPUT_TOKENS,
+  reasoning: null,
+  reasoningParam: null,
+};
+
+function generationFields(options: CreateMissionPlanOptions): Record<string, unknown> {
+  return generationRequestFields(options.generation ?? AUTOMATIC_CLOUD_GENERATION);
+}
+
+/** Reject a reply that stopped at its output budget instead of using it. */
+function assertNotCutOff(options: CreateMissionPlanOptions, payload: unknown): void {
+  if (stoppedAtLength(payload)) {
+    throw new OutputCutOffError((options.generation ?? AUTOMATIC_CLOUD_GENERATION).maxCompletionTokens);
+  }
 }
 
 const META_TIMEOUT_MESSAGE = 'Meta Model API request timed out after 120 seconds.';
@@ -141,7 +171,7 @@ export async function createMissionPlan(
         content: options.goal,
       },
     ],
-    max_completion_tokens: 1200,
+    ...generationFields(options),
     response_format: missionPlanSchema,
     store: false,
   });
@@ -154,6 +184,7 @@ export async function createMissionPlan(
         : `Meta Model API returned HTTP ${response.status}.`,
     );
   }
+  assertNotCutOff(options, payload);
 
   const content = payload.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || content.length === 0) {
@@ -181,7 +212,7 @@ export async function createChatCompletion(
   const { response, rawPayload } = await postMetaRequest(options, {
     model: selectedModel(options.model),
     messages: options.messages,
-    max_completion_tokens: 1200,
+    ...generationFields(options),
     store: false,
   });
   const payload = parseResponsePayload(rawPayload);
@@ -193,6 +224,7 @@ export async function createChatCompletion(
         : `Meta Model API returned HTTP ${response.status}.`,
     );
   }
+  assertNotCutOff(options, payload);
 
   const content = payload.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || content.length === 0) {
@@ -221,7 +253,7 @@ export async function createMissionPlanWithUsage(
         content: options.goal,
       },
     ],
-    max_completion_tokens: 1200,
+    ...generationFields(options),
     response_format: missionPlanSchema,
     store: false,
   });
@@ -234,6 +266,7 @@ export async function createMissionPlanWithUsage(
         : `Meta Model API returned HTTP ${response.status}.`,
     );
   }
+  assertNotCutOff(options, payload);
 
   const content = payload.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || content.length === 0) {

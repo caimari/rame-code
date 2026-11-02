@@ -300,6 +300,27 @@ button.is-pending::after { content: ""; display: inline-block; width: 10px; heig
       </select>
       <p class="hint">One provider only. Change it here; the Chat screen shows a read-only status.</p>
     </section>
+    <section class="settings-block" id="generationSection" aria-labelledby="generation-heading">
+      <h3 id="generation-heading">Generation</h3>
+      <p id="generationModel" class="hint" role="status"></p>
+      <label for="reasoningSelect">Reasoning effort</label>
+      <select id="reasoningSelect" aria-label="Reasoning effort">
+        <option value="default" selected>Model default</option>
+      </select>
+      <p id="reasoningHint" class="hint" role="status"></p>
+      <details id="generationAdvanced">
+        <summary>Advanced: maximum output tokens</summary>
+        <p id="budgetHint" class="hint" role="status"></p>
+        <label for="maxOutputLocal">Local maximum (empty = automatic)</label>
+        <input id="maxOutputLocal" type="number" min="256" max="262144" step="256" placeholder="Automatic">
+        <label for="maxOutputCloud">Meta maximum (empty = automatic)</label>
+        <input id="maxOutputCloud" type="number" min="256" max="1048576" step="256" placeholder="Automatic">
+        <div class="row">
+          <button id="saveMaxOutput" type="button">Save maximums</button>
+        </div>
+      </details>
+      <p class="hint">Reasoning effort, output budget, context window, and the Agent's 12-step budget are separate settings. The output budget covers reasoning plus the visible reply and is lowered to fit the free context; your input is never cut to make room. Changes apply from the next request; a request already in progress keeps its settings.</p>
+    </section>
     <section class="settings-block" id="cloudSection" aria-labelledby="cloud-heading">
       <h3 id="cloud-heading">Cloud</h3>
       <p id="settingsConnection" role="status">Checking…</p>

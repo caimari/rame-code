@@ -85,19 +85,34 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-/** Build bounded agent context: system + active-thread history + goal. */
+export const MAX_AGENT_HISTORY_MESSAGES = 20;
+export const MAX_AGENT_GOAL_LENGTH = 8000;
+
+/**
+ * Build agent context: system + active-thread history + goal + this run's
+ * tool exchanges and host notes. Nothing of the current run is dropped (the
+ * context check refuses a request that does not fit), and when older thread
+ * history is left out the model is told so instead of it vanishing silently.
+ */
 export function buildAgentMessages(
   workspaceLabel: string,
   history: AgentChatMessage[],
   goal: string,
   extra: AgentChatMessage[] = [],
 ): AgentChatMessage[] {
-  const boundedHistory = history.slice(-20);
+  if (goal.length > MAX_AGENT_GOAL_LENGTH) {
+    throw new Error(`The request is longer than ${MAX_AGENT_GOAL_LENGTH} characters; nothing was sent.`);
+  }
+  const omitted = Math.max(0, history.length - MAX_AGENT_HISTORY_MESSAGES);
+  const boundedHistory = history.slice(-MAX_AGENT_HISTORY_MESSAGES);
   return [
     { role: 'system', content: buildAgentSystemPrompt(workspaceLabel) },
+    ...(omitted > 0
+      ? [{ role: 'system' as const, content: `RAME Code left out the ${omitted} oldest message(s) of this thread; only the most recent ${MAX_AGENT_HISTORY_MESSAGES} are included.` }]
+      : []),
     ...boundedHistory,
-    { role: 'user', content: goal.slice(0, 8000) },
-    ...extra.slice(-40),
+    { role: 'user', content: goal },
+    ...extra,
   ];
 }
 

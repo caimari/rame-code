@@ -3,6 +3,9 @@ import test from 'node:test';
 
 import { createChatCompletion, createMissionPlanWithUsage } from '../src/meta-provider.js';
 import { createLocalChatCompletion } from '../src/localProvider.js';
+import type { GenerationRequest } from '../src/generationSettings.js';
+
+const LOCAL_GEN: GenerationRequest = { maxCompletionTokens: 4096, reasoning: null, reasoningParam: null };
 import { ChatRunner } from '../src/chatRunner.js';
 import {
   CHAT_MODES,
@@ -88,6 +91,7 @@ test('local chat uses the OpenAI-compatible loopback endpoint', async () => {
     endpoint: 'http://127.0.0.1:8775',
     model: 'local-glimmer',
     messages: [{ role: 'user', content: 'Hi there.' }],
+    generation: LOCAL_GEN,
     fetchImpl: async (input, init) => {
       capturedUrl = input.toString();
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -110,6 +114,7 @@ test('local chat refuses non-loopback endpoints and empty replies', async () => 
       endpoint: 'http://192.168.1.10:8775',
       model: 'local-glimmer',
       messages: [{ role: 'user', content: 'Hi there.' }],
+      generation: LOCAL_GEN,
     }),
     /loopback/,
   );
@@ -118,6 +123,7 @@ test('local chat refuses non-loopback endpoints and empty replies', async () => 
       endpoint: 'http://127.0.0.1:8775',
       model: 'local-glimmer',
       messages: [{ role: 'user', content: 'Hi there.' }],
+      generation: LOCAL_GEN,
       fetchImpl: async () =>
         Response.json({ choices: [{ message: { content: '' } }] }),
     }),

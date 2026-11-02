@@ -2,8 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  AGENT_CLOUD_MAX_COMPLETION_TOKENS,
-  AGENT_LOCAL_MAX_COMPLETION_TOKENS,
   AgentOutputTruncatedError,
   assertAgentModelForProvider,
   buildAgentRequestBody,
@@ -13,6 +11,10 @@ import {
   isAgentToolProtocolError,
 } from '../src/agentModel.js';
 import { buildAgentToolDefinitions } from '../src/agentTools.js';
+import type { GenerationRequest } from '../src/generationSettings.js';
+
+const LOCAL_GEN: GenerationRequest = { maxCompletionTokens: 4096, reasoning: null, reasoningParam: null };
+const CLOUD_GEN: GenerationRequest = { maxCompletionTokens: 8192, reasoning: null, reasoningParam: null };
 
 function assistantPayload(content: string, usage?: unknown): Response {
   const body: Record<string, unknown> = {
@@ -25,7 +27,7 @@ function assistantPayload(content: string, usage?: unknown): Response {
 }
 
 test('agent request body carries tools without touching chat/mission shape', () => {
-  const body = buildAgentRequestBody('muse-spark-1.3', [{ role: 'user', content: 'hi' }]);
+  const body = buildAgentRequestBody('muse-spark-1.3', [{ role: 'user', content: 'hi' }], CLOUD_GEN);
   assert.equal(body.model, 'muse-spark-1.3');
   assert.equal((body.tools as unknown[]).length, 11);
   assert.equal(body.tool_choice, 'auto');
@@ -68,6 +70,7 @@ test('cloud agent completion returns text plus usage', async () => {
     apiKey: 'dummy-test-key',
     model: 'muse-spark-1.3',
     messages: [{ role: 'user', content: 'List files.' }],
+    generation: CLOUD_GEN,
     fetchImpl: async () => assistantPayload('done', { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 }),
   });
   assert.equal(result.text, 'done');
@@ -81,6 +84,7 @@ test('local agent completion enforces loopback and parses tool calls', async () 
       endpoint: 'https://example.com',
       model: 'local-glimmer',
       messages: [{ role: 'user', content: 'hi' }],
+      generation: LOCAL_GEN,
     }),
     /loopback/,
   );
@@ -89,6 +93,7 @@ test('local agent completion enforces loopback and parses tool calls', async () 
     endpoint: 'http://127.0.0.1:8775',
     model: 'local-glimmer',
     messages: [{ role: 'user', content: 'hi' }],
+    generation: LOCAL_GEN,
     fetchImpl: async (input) => {
       capturedUrl = String(input);
       return Response.json({
@@ -122,6 +127,7 @@ test('malformed model tool arguments are classified for bounded repair', async (
       endpoint: 'http://127.0.0.1:8775',
       model: 'local-glimmer',
       messages: [{ role: 'user', content: 'edit' }],
+      generation: LOCAL_GEN,
       fetchImpl: async () => Response.json({
         choices: [{
           message: {
@@ -145,6 +151,7 @@ test('a stalled local model request stops at its bounded timeout', async () => {
       endpoint: 'http://127.0.0.1:8775',
       model: 'local-glimmer',
       messages: [{ role: 'user', content: 'continue' }],
+      generation: LOCAL_GEN,
       timeoutMs: 10,
       fetchImpl: async (_input, init) => await new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => {
@@ -156,22 +163,26 @@ test('a stalled local model request stops at its bounded timeout', async () => {
   );
 });
 
-test('local Glimmer gets a larger output budget; the Meta API limit is unchanged', async () => {
-  assert.equal(AGENT_CLOUD_MAX_COMPLETION_TOKENS, 1200);
-  assert.equal(AGENT_LOCAL_MAX_COMPLETION_TOKENS, 4096);
-  assert.equal(buildAgentRequestBody('muse-spark-1.3', []).max_completion_tokens, 1200);
+test('the output budget comes from the run, and Meta never gets the undocumented tool_choice none', async () => {
+  assert.equal(buildAgentRequestBody('muse-spark-1.3', [], CLOUD_GEN).max_completion_tokens, 8192);
   const sent: Record<string, unknown>[] = [];
   const capture = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
     return assistantPayload('done');
   };
-  await createMetaAgentCompletion({ apiKey: 'test-key', model: 'muse-spark-1.3', messages: [], fetchImpl: capture });
-  await createLocalAgentCompletion({ endpoint: 'http://127.0.0.1:9', model: 'local-glimmer', messages: [], fetchImpl: capture });
-  assert.deepEqual(sent.map((body) => body.max_completion_tokens), [1200, 4096]);
+  await createMetaAgentCompletion({ apiKey: 'test-key', model: 'muse-spark-1.3', messages: [], generation: CLOUD_GEN, fetchImpl: capture });
+  await createLocalAgentCompletion({ endpoint: 'http://127.0.0.1:9', model: 'local-glimmer', messages: [], generation: LOCAL_GEN, fetchImpl: capture });
+  assert.deepEqual(sent.map((body) => body.max_completion_tokens), [8192, 4096]);
   assert.deepEqual(sent.map((body) => body.tool_choice), ['auto', 'auto']);
-  await createLocalAgentCompletion({ endpoint: 'http://127.0.0.1:9', model: 'local-glimmer', messages: [], fetchImpl: capture, toolChoice: 'none' });
-  await createMetaAgentCompletion({ apiKey: 'test-key', model: 'muse-spark-1.3', messages: [], fetchImpl: capture, toolChoice: 'none' });
-  assert.deepEqual(sent.slice(2).map((body) => [body.tool_choice, body.max_completion_tokens, (body.tools as unknown[]).length]), [['none', 4096, 11], ['none', 1200, 11]]);
+  await createLocalAgentCompletion({ endpoint: 'http://127.0.0.1:9', model: 'local-glimmer', messages: [], generation: LOCAL_GEN, fetchImpl: capture, toolChoice: 'none' });
+  assert.deepEqual(
+    [sent[2]?.tool_choice, sent[2]?.max_completion_tokens, (sent[2]?.tools as unknown[]).length],
+    ['none', 4096, 11],
+  );
+  // The Meta call has no tool_choice option at all: it always sends "auto".
+  // @ts-expect-error toolChoice is not accepted for Meta
+  await createMetaAgentCompletion({ apiKey: 'test-key', model: 'muse-spark-1.3', messages: [], generation: CLOUD_GEN, fetchImpl: capture, toolChoice: 'none' });
+  assert.equal(sent[3]?.tool_choice, 'auto');
 });
 
 test('finish_reason length is reported as a cut-off reply, not as invalid arguments or an empty response', async () => {
@@ -196,7 +207,7 @@ test('finish_reason length is reported as a cut-off reply, not as invalid argume
   ];
   for (const body of cutOff) {
     await assert.rejects(
-      createLocalAgentCompletion({ endpoint: 'http://127.0.0.1:9', model: 'local-glimmer', messages: [], fetchImpl: async () => Response.json(body) }),
+      createLocalAgentCompletion({ endpoint: 'http://127.0.0.1:9', model: 'local-glimmer', messages: [], generation: LOCAL_GEN, fetchImpl: async () => Response.json(body) }),
       (error: unknown) =>
         error instanceof AgentOutputTruncatedError &&
         isAgentToolProtocolError(error) &&
@@ -206,14 +217,15 @@ test('finish_reason length is reported as a cut-off reply, not as invalid argume
     );
   }
   await assert.rejects(
-    createMetaAgentCompletion({ apiKey: 'test-key', model: 'muse-spark-1.3', messages: [], fetchImpl: async () => Response.json(cutOff[0]) }),
-    (error: unknown) => error instanceof AgentOutputTruncatedError && error.maxCompletionTokens === 1200,
+    createMetaAgentCompletion({ apiKey: 'test-key', model: 'muse-spark-1.3', messages: [], generation: CLOUD_GEN, fetchImpl: async () => Response.json(cutOff[0]) }),
+    (error: unknown) => error instanceof AgentOutputTruncatedError && error.maxCompletionTokens === 8192,
   );
   // A complete reply is untouched.
   const done = await createLocalAgentCompletion({
     endpoint: 'http://127.0.0.1:9',
     model: 'local-glimmer',
     messages: [],
+    generation: LOCAL_GEN,
     fetchImpl: async () => Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }] }),
   });
   assert.equal(done.text, 'Done.');

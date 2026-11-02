@@ -155,3 +155,12 @@ This log separates work created during the Meta Global AI Developer Hackathon 20
 - This repository must not depend on any earlier private implementation, service, or prototype.
 - Standard open-source dependencies may be used under their respective licenses.
 - Every released capability must be reproducible from this repository and documented with the model, tools, tests, and human intervention involved.
+
+## 2026-11-02 — Public preview v0.1.0
+
+- Consolidated the independently implemented Agent, Mission and Chat slices into the first installable public preview.
+- Added local Muse Glimmer execution through a managed loopback `llama-server` and cloud execution through user-selected Meta Model API models.
+- Added bounded tools, explicit permission profiles, one-use hash-bound approvals, stale-precondition checks, verified host records and Windows-aware path/process handling.
+- Added per-model reasoning, context and output-budget controls. Incomplete generations are discarded before any partial action can run.
+- Added English and Spanish installation documentation plus a public changelog.
+- The release intentionally does not claim persistent versioned project decisions, restart-resumable missions, automatic escalation or tamper-proof execution; those remain future work.

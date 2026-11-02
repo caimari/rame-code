@@ -9,6 +9,13 @@
  */
 
 import { isAbortError, withBoundedRequest } from './boundedRequest.js';
+import {
+  OutputCutOffError,
+  generationRequestFields,
+  localContextRefusal,
+  stoppedAtLength,
+  type GenerationRequest,
+} from './generationSettings.js';
 import { isLoopbackUrl } from './localRuntime.js';
 import { parseUsage, type ProviderUsage } from './usage.js';
 
@@ -21,6 +28,8 @@ export interface LocalChatOptions {
   endpoint: string;
   model: string;
   messages: Array<{ role: string; content: string }>;
+  /** Output budget and reasoning level fixed when the run started. */
+  generation: GenerationRequest;
   signal?: AbortSignal;
   fetchImpl?: FetchLike;
   /** Deadline covering headers and body; defaults to 120 seconds. */
@@ -64,6 +73,7 @@ export async function createLocalChatCompletion(
           body: JSON.stringify({
             model,
             messages: options.messages,
+            ...generationRequestFields(options.generation),
             stream: false,
           }),
         });
@@ -86,9 +96,13 @@ export async function createLocalChatCompletion(
     },
   );
   if (!response.ok) {
-    throw new Error(
+    throw localContextRefusal(payload) ?? new Error(
       `The local runtime returned HTTP ${response.status}.`,
     );
+  }
+  if (stoppedAtLength(payload)) {
+    // An incomplete reply (possibly only reasoning) is never shown as an answer.
+    throw new OutputCutOffError(options.generation.maxCompletionTokens);
   }
   const choices = payload.choices;
   const content =

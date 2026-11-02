@@ -4,7 +4,9 @@
  * This module is free of the `vscode` API so it can be unit tested with
  * plain `node:test`.
  *
- * - `chat` is a normal conversational coding-assistant mode.
+ * - `agent` (the default) talks naturally and uses its bounded tools only
+ *   when a message needs them.
+ * - `chat` is conversation only: no tools and no file access.
  * - `mission` keeps the strict structured mission-plan result.
  * - `agent` runs a bounded permission-gated tool-call loop inside the
  *   active workspace only. It does not claim unrestricted computer control,
@@ -29,8 +31,8 @@ export const DEFAULT_CHAT_MODE: ChatModeId = AGENT_MODE_ID;
 
 export const CHAT_MODES: readonly ChatModeOption[] = [
   { id: AGENT_MODE_ID, label: 'Agent' },
+  { id: CHAT_MODE_ID, label: 'Chat only' },
   { id: MISSION_MODE_ID, label: 'Mission' },
-  { id: CHAT_MODE_ID, label: 'Chat' },
 ];
 
 export const SPARK_MODEL_ID = 'muse-spark-1.3' as const;

@@ -18,13 +18,16 @@ import { isAgentProfileId } from './agentProfiles.js';
 import { isReasoningChoice, REASONING_LEVELS } from './generationSettings.js';
 import type { LocalRuntimeSettings, LocalRuntimeStatus } from './localRuntime.js';
 import type { ChatModeId } from './modes.js';
+import { MISSION_PHASES, type AcceptanceState, type MissionFinalReport, type MissionPhase } from './missionPhase.js';
 import type { CloudCatalogSource, CloudModelInfo } from './metaCatalog.js';
 import {
   isRuntimeId,
+  isViewLanguage,
   RUNTIME_CLOUD_ID,
   RUNTIME_LOCAL_ID,
   type ProviderId,
   type RuntimeId,
+  type ViewLanguage,
 } from './settingsStore.js';
 import type { ChatThread, ThreadTurn } from './threadStore.js';
 import type { ProviderUsage } from './usage.js';
@@ -182,6 +185,84 @@ export interface SetReasoningMessage {
   level: string;
 }
 
+/** Settings: the user proposes one decision value (nothing is written yet). */
+export interface ProposeDecisionMessage {
+  type: 'proposeDecision';
+  key: string;
+  valueType: 'number' | 'boolean' | 'string';
+  value: string;
+}
+
+/** Start or resume the current task of a Mission the view showed at `revision`. */
+export interface RunMissionTaskMessage {
+  type: 'runMissionTask';
+  missionId: string;
+  revision: number;
+}
+
+/** Approve or reject the exact pending memory card. */
+export interface MemoryDecisionMessage {
+  type: 'approveMemoryChange' | 'rejectMemoryChange';
+  actionId: string;
+  digest: string;
+}
+
+/** Settings: show the memory of one of the open workspace folders. */
+export interface SelectMemoryProjectMessage {
+  type: 'selectMemoryProject';
+  path: string;
+}
+
+/** Interface language of the view. */
+export interface SetLanguageMessage {
+  type: 'setLanguage';
+  language: ViewLanguage;
+}
+
+/** Mission controls: authorize and start, resume, pause, cancel. */
+export interface MissionStartMessage {
+  type: 'missionStart';
+  missionId: string;
+  revision: number;
+  mode: 'supervised' | 'autonomous-workspace';
+  /** 0 = no Meta consultation; 1 to 5 = at most that many. */
+  maxConsultations: number;
+  /** The user marked this project as trusted (required for autonomous workspace). */
+  trustedProject: boolean;
+  /** The user's acceptance check to freeze ('' = none) and its files. */
+  acceptanceCommand: string;
+  acceptanceFiles: string[];
+  /** One click of "Authorize and start"; the host confirms it by this id. */
+  requestId?: string;
+}
+
+/** Pattern of a view-generated start request id. */
+const REQUEST_ID_PATTERN = /^req_[0-9a-z]{6,40}$/;
+
+export interface MissionControlMessage {
+  type: 'missionResume' | 'missionPause' | 'missionCancel';
+  missionId: string;
+  revision: number;
+}
+
+/** Retry a blocked Mission with guidance the user typed for the next runs. */
+export interface MissionRetryMessage {
+  type: 'missionRetry';
+  missionId: string;
+  revision: number;
+  guidance: string;
+}
+
+/** Cascade: approve the exact consultation payload shown (by its digest), or dismiss it. */
+export interface ConsultApproveMessage {
+  type: 'consultApprove';
+  digest: string;
+}
+
+export interface ConsultDismissMessage {
+  type: 'consultDismiss';
+}
+
 /** Advanced manual output maximum per provider; null = automatic. */
 export interface SetMaxOutputTokensMessage {
   type: 'setMaxOutputTokens';
@@ -216,7 +297,17 @@ export type ViewInboundMessage =
   | ApproveAgentActionMessage
   | RejectAgentActionMessage
   | SetReasoningMessage
-  | SetMaxOutputTokensMessage;
+  | SetMaxOutputTokensMessage
+  | ProposeDecisionMessage
+  | MemoryDecisionMessage
+  | RunMissionTaskMessage
+  | SelectMemoryProjectMessage
+  | SetLanguageMessage
+  | ConsultApproveMessage
+  | ConsultDismissMessage
+  | MissionStartMessage
+  | MissionControlMessage
+  | MissionRetryMessage;
 
 export const MAX_THREAD_ID_LENGTH = 128;
 
@@ -515,6 +606,145 @@ export function parseViewInboundMessage(raw: unknown): ViewInboundMessage {
         model: record.model as string,
         level: record.level as string,
       };
+    case 'proposeDecision':
+      if (
+        !hasExactKeys(record, ['type', 'key', 'valueType', 'value']) ||
+        typeof record.key !== 'string' ||
+        record.key.length === 0 ||
+        record.key.length > 128 ||
+        (record.valueType !== 'number' && record.valueType !== 'boolean' && record.valueType !== 'string') ||
+        typeof record.value !== 'string' ||
+        record.value.length === 0 ||
+        record.value.length > 2000
+      ) {
+        fail('Invalid proposeDecision message.');
+      }
+      return {
+        type: 'proposeDecision',
+        key: record.key as string,
+        valueType: record.valueType as 'number' | 'boolean' | 'string',
+        value: record.value as string,
+      };
+    case 'runMissionTask':
+      if (
+        !hasExactKeys(record, ['type', 'missionId', 'revision']) ||
+        typeof record.missionId !== 'string' ||
+        !/^mis_[0-9a-f]{24}$/.test(record.missionId) ||
+        typeof record.revision !== 'number' ||
+        !Number.isInteger(record.revision) ||
+        record.revision < 1
+      ) {
+        fail('Invalid runMissionTask message.');
+      }
+      return { type: 'runMissionTask', missionId: record.missionId as string, revision: record.revision as number };
+    case 'approveMemoryChange':
+    case 'rejectMemoryChange':
+      if (
+        !hasExactKeys(record, ['type', 'actionId', 'digest']) ||
+        typeof record.actionId !== 'string' ||
+        record.actionId.length === 0 ||
+        record.actionId.length > 128 ||
+        typeof record.digest !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(record.digest)
+      ) {
+        fail(`Invalid ${record.type} message.`);
+      }
+      return { type: record.type, actionId: record.actionId as string, digest: record.digest as string };
+    case 'selectMemoryProject':
+      // Only shape-checked here; the host accepts it only when it is
+      // exactly one of the open workspace folders.
+      if (
+        !hasExactKeys(record, ['type', 'path']) ||
+        typeof record.path !== 'string' ||
+        record.path.length === 0 ||
+        record.path.length > 4096
+      ) {
+        fail('Invalid selectMemoryProject message.');
+      }
+      return { type: 'selectMemoryProject', path: record.path as string };
+    case 'missionStart':
+      if (
+        !(
+          hasExactKeys(record, ['type', 'missionId', 'revision', 'mode', 'maxConsultations', 'trustedProject', 'acceptanceCommand', 'acceptanceFiles']) ||
+          (hasExactKeys(record, ['type', 'missionId', 'revision', 'mode', 'maxConsultations', 'trustedProject', 'acceptanceCommand', 'acceptanceFiles', 'requestId']) &&
+            typeof record.requestId === 'string' &&
+            REQUEST_ID_PATTERN.test(record.requestId))
+        ) ||
+        typeof record.trustedProject !== 'boolean' ||
+        typeof record.acceptanceCommand !== 'string' ||
+        record.acceptanceCommand.length > 128 ||
+        !Array.isArray(record.acceptanceFiles) ||
+        record.acceptanceFiles.length > 20 ||
+        (record.acceptanceFiles as unknown[]).some((file) => typeof file !== 'string' || file.length === 0 || file.length > 512) ||
+        (record.acceptanceCommand.length > 0) !== ((record.acceptanceFiles as unknown[]).length > 0) ||
+        typeof record.missionId !== 'string' ||
+        !/^mis_[0-9a-f]{24}$/.test(record.missionId) ||
+        typeof record.revision !== 'number' ||
+        !Number.isInteger(record.revision) ||
+        record.revision < 1 ||
+        (record.mode !== 'supervised' && record.mode !== 'autonomous-workspace') ||
+        typeof record.maxConsultations !== 'number' ||
+        !Number.isInteger(record.maxConsultations) ||
+        record.maxConsultations < 0 ||
+        record.maxConsultations > 5
+      ) {
+        fail('Invalid missionStart message.');
+      }
+      return {
+        type: 'missionStart',
+        missionId: record.missionId as string,
+        revision: record.revision as number,
+        mode: record.mode as 'supervised' | 'autonomous-workspace',
+        maxConsultations: record.maxConsultations as number,
+        trustedProject: record.trustedProject as boolean,
+        acceptanceCommand: record.acceptanceCommand as string,
+        acceptanceFiles: [...(record.acceptanceFiles as string[])],
+        ...(typeof record.requestId === 'string' ? { requestId: record.requestId } : {}),
+      };
+    case 'missionResume':
+    case 'missionPause':
+    case 'missionCancel':
+      if (
+        !hasExactKeys(record, ['type', 'missionId', 'revision']) ||
+        typeof record.missionId !== 'string' ||
+        !/^mis_[0-9a-f]{24}$/.test(record.missionId) ||
+        typeof record.revision !== 'number' ||
+        !Number.isInteger(record.revision) ||
+        record.revision < 1
+      ) {
+        fail(`Invalid ${record.type} message.`);
+      }
+      return { type: record.type, missionId: record.missionId as string, revision: record.revision as number };
+    case 'missionRetry':
+      if (
+        !hasExactKeys(record, ['type', 'missionId', 'revision', 'guidance']) ||
+        typeof record.missionId !== 'string' ||
+        !/^mis_[0-9a-f]{24}$/.test(record.missionId) ||
+        typeof record.revision !== 'number' ||
+        !Number.isInteger(record.revision) ||
+        record.revision < 1 ||
+        typeof record.guidance !== 'string' ||
+        record.guidance.trim().length === 0 ||
+        record.guidance.length > 1000
+      ) {
+        fail('Invalid missionRetry message.');
+      }
+      return { type: 'missionRetry', missionId: record.missionId as string, revision: record.revision as number, guidance: (record.guidance as string).trim() };
+    case 'consultApprove':
+      if (!hasExactKeys(record, ['type', 'digest']) || typeof record.digest !== 'string' || !/^[0-9a-f]{64}$/.test(record.digest)) {
+        fail('Invalid consultApprove message.');
+      }
+      return { type: 'consultApprove', digest: record.digest as string };
+    case 'consultDismiss':
+      if (!hasExactKeys(record, ['type'])) {
+        fail('Invalid consultDismiss message.');
+      }
+      return { type: 'consultDismiss' };
+    case 'setLanguage':
+      if (!hasExactKeys(record, ['type', 'language']) || !isViewLanguage(record.language)) {
+        fail('Invalid setLanguage message.');
+      }
+      return { type: 'setLanguage', language: record.language as ViewLanguage };
     case 'setMaxOutputTokens':
       if (
         !hasExactKeys(record, ['type', 'local', 'cloud']) ||
@@ -644,6 +874,306 @@ export interface ViewStateMessage {
   /** Thread of the current or most recent run; run outcomes show only there. */
   runThreadId: string | null;
   generation: GenerationView;
+  memory: MemoryView;
+  /** Interface language the view renders in. */
+  language: ViewLanguage;
+  /** Cascade: the exact text that would be sent to Meta, waiting for the user. */
+  consult: ConsultView | null;
+  /** The Mission of the open thread, live (phase, progress, controls), if any. */
+  missionLive: MissionLiveView | null;
+  /** What the current or most recent run was: a Mission plan is never "completed". */
+  runKind: RunKind;
+  /** Public version and build of this extension. */
+  about: AboutView;
+}
+
+export type RunKind = 'mission-plan' | 'mission-run' | 'other' | null;
+
+export interface AboutView {
+  version: string;
+  revision: string;
+  channel: 'candidate' | 'release';
+}
+
+/** The live Mission card of a thread. Every field comes from the host. */
+export interface MissionLiveView {
+  missionId: string | null;
+  revision: number;
+  threadId: string;
+  goal: string;
+  phase: MissionPhase;
+  currentTask: string | null;
+  tasksDone: number;
+  tasksTotal: number;
+  internalRun: number;
+  step: number | null;
+  maxSteps: number;
+  /** When the user authorized the Mission, for the elapsed time. */
+  startedAt: number | null;
+  /** The phase's own end, when it ended (the clock stops there). */
+  endedAt: number | null;
+  lastProgress: string;
+  lastTest: string;
+  grant: 'supervised' | 'autonomous-workspace' | null;
+  model: string | null;
+  acceptance: { commandId: string; files: Array<{ path: string; hash: string }>; state: AcceptanceState; summary: string } | null;
+  canStart: boolean;
+  canPause: boolean;
+  canResume: boolean;
+  canCancel: boolean;
+  /** Choices for the start card, only while the Mission can be authorized. */
+  setup: { testCommands: string[]; candidates: string[]; environmentFiles: string[]; packageJsonHash: string } | null;
+  /** The last start request of this window and what the host made of it. */
+  startRequest: { requestId: string; state: 'authorizing' | 'started' | 'failed'; error: string } | null;
+  report: MissionFinalReport | null;
+  /** Only for a blocked Mission: why, how far it got, and which tests never ran. */
+  blocked: { reason: string; runs: number; lastProgress: string; testsNotRun: string[] } | null;
+  /** The host's record of the Mission, newest last, for "Review". */
+  review: string[];
+  note: string;
+}
+
+export interface ConsultView {
+  reason: string;
+  payload: string;
+  model: string;
+  digest: string;
+}
+
+function sanitizeConsultView(value: unknown): ConsultView | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.digest !== 'string' || !/^[0-9a-f]{64}$/.test(record.digest) || typeof record.payload !== 'string') {
+    return null;
+  }
+  return {
+    reason: typeof record.reason === 'string' ? record.reason.slice(0, 400) : '',
+    // Shown whole: it is exactly what would be sent (bounded by the host).
+    payload: record.payload.slice(0, 6000),
+    model: typeof record.model === 'string' ? record.model.slice(0, 128) : '',
+    digest: record.digest,
+  };
+}
+
+/**
+ * Project memory as Settings shows it: decisions in force with version and
+ * provenance, their history, bound files with status, and the one exact
+ * change waiting for approval. Values are display strings (JSON-encoded).
+ */
+export interface MemoryView {
+  project: string | null;
+  readable: boolean;
+  decisions: Array<{ key: string; value: string; version: number; source: string; provider: string; createdAt: number }>;
+  history: Array<{
+    key: string;
+    versions: Array<{ version: number; value: string; createdAt: number; source: string; provider: string; reason: string }>;
+  }>;
+  artifacts: Array<{ path: string; decisionKey: string; decisionVersion: number; status: string; detail: string }>;
+  corruptKeys: string[];
+  pending: { actionId: string; digest: string; text: string } | null;
+  note: string;
+  mission: MissionView | null;
+  /** Open workspace folders the user can choose from. */
+  folders: Array<{ name: string; path: string }>;
+  /** The open folder whose memory is shown, if any. */
+  selectedPath: string | null;
+}
+
+/** The project's latest Mission: goal, tasks, decisions used, evidence. */
+export interface MissionView {
+  id: string;
+  revision: number;
+  /** The thread the Mission was planned in (its live card is there). */
+  threadId: string;
+  goal: string;
+  status: string;
+  tasks: Array<{ title: string; status: string; runs: number }>;
+  current: string | null;
+  pendingCount: number;
+  decisionsUsed: Array<{ key: string; version: number; currentVersion: number | null }>;
+  evidence: string[];
+  runsUsed: number;
+  maxRuns: number;
+  note: string;
+  /** Whether "Run task" / "Resume task" is offered now. */
+  canRun: boolean;
+  resume: boolean;
+  /** The Mission grant and the autonomous loop, for the controls. */
+  autonomy: {
+    grant: 'supervised' | 'autonomous-workspace' | null;
+    model: string | null;
+    running: boolean;
+    internalRuns: number;
+    step: number | null;
+    maxSteps: number;
+    startedAt: number | null;
+    lastProgress: string;
+    lastTest: string;
+    escalation: { used: number; max: number; model: string } | null;
+    canStart: boolean;
+    canResume: boolean;
+    canPause: boolean;
+    canCancel: boolean;
+    cloudEscalationAllowed: boolean;
+    /** Allowlisted test commands of the project, for the acceptance choice. */
+    testCommands: string[];
+    /** The frozen acceptance check of the grant, if any. */
+    acceptance: { commandId: string; files: string[] } | null;
+  };
+}
+
+function sanitizeAutonomy(value: unknown): MissionView['autonomy'] {
+  const record = typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const escalation = typeof record.escalation === 'object' && record.escalation !== null ? (record.escalation as Record<string, unknown>) : null;
+  const num = (entry: unknown): number => (typeof entry === 'number' && Number.isFinite(entry) && entry >= 0 ? entry : 0);
+  return {
+    grant: record.grant === 'supervised' || record.grant === 'autonomous-workspace' ? record.grant : null,
+    model: typeof record.model === 'string' ? record.model.slice(0, 128) : null,
+    running: record.running === true,
+    internalRuns: num(record.internalRuns),
+    step: typeof record.step === 'number' ? record.step : null,
+    maxSteps: num(record.maxSteps),
+    startedAt: typeof record.startedAt === 'number' ? record.startedAt : null,
+    lastProgress: typeof record.lastProgress === 'string' ? record.lastProgress.slice(0, 300) : '',
+    lastTest: typeof record.lastTest === 'string' ? record.lastTest.slice(0, 300) : '',
+    escalation: escalation === null ? null : { used: num(escalation.used), max: num(escalation.max), model: typeof escalation.model === 'string' ? escalation.model.slice(0, 128) : '' },
+    canStart: record.canStart === true,
+    canResume: record.canResume === true,
+    canPause: record.canPause === true,
+    canCancel: record.canCancel === true,
+    cloudEscalationAllowed: record.cloudEscalationAllowed === true,
+    testCommands: Array.isArray(record.testCommands) ? record.testCommands.filter((id): id is string => typeof id === 'string').slice(0, 16).map((id) => id.slice(0, 128)) : [],
+    acceptance:
+      typeof record.acceptance === 'object' && record.acceptance !== null
+        ? {
+            commandId: String((record.acceptance as Record<string, unknown>).commandId ?? '').slice(0, 128),
+            files: Array.isArray((record.acceptance as Record<string, unknown>).files)
+              ? ((record.acceptance as Record<string, unknown>).files as unknown[]).filter((f): f is string => typeof f === 'string').slice(0, 20)
+              : [],
+          }
+        : null,
+  };
+}
+
+function sanitizeMissionView(value: unknown): MissionView | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== 'string' || !/^mis_[0-9a-f]{24}$/.test(record.id)) {
+    return null;
+  }
+  const rows = (entry: unknown): Array<Record<string, unknown>> =>
+    Array.isArray(entry)
+      ? entry.slice(0, 64).filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))
+      : [];
+  return {
+    id: record.id,
+    revision: count(record.revision),
+    threadId: text(record.threadId, 128),
+    goal: text(record.goal, 2000),
+    status: text(record.status, 24),
+    tasks: rows(record.tasks).map((task) => ({ title: text(task.title, 300), status: text(task.status, 16), runs: count(task.runs) })),
+    current: typeof record.current === 'string' ? record.current.slice(0, 300) : null,
+    pendingCount: count(record.pendingCount),
+    decisionsUsed: rows(record.decisionsUsed).map((entry) => ({
+      key: text(entry.key, 128),
+      version: count(entry.version),
+      currentVersion: typeof entry.currentVersion === 'number' ? entry.currentVersion : null,
+    })),
+    evidence: Array.isArray(record.evidence) ? record.evidence.slice(-20).map((entry) => text(entry, 300)) : [],
+    runsUsed: count(record.runsUsed),
+    maxRuns: count(record.maxRuns),
+    note: text(record.note, 500),
+    canRun: record.canRun === true,
+    resume: record.resume === true,
+    autonomy: sanitizeAutonomy(record.autonomy),
+  };
+}
+
+export const EMPTY_MEMORY_VIEW: MemoryView = {
+  project: null,
+  readable: true,
+  decisions: [],
+  history: [],
+  artifacts: [],
+  corruptKeys: [],
+  pending: null,
+  note: '',
+  mission: null,
+  folders: [],
+  selectedPath: null,
+};
+
+const MEMORY_VIEW_LIMIT = 256;
+
+function text(value: unknown, max: number): string {
+  return typeof value === 'string' ? value.slice(0, max) : '';
+}
+
+function count(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+/** Bound and type-check the memory view before it reaches the webview. */
+function sanitizeMemoryView(value: unknown): MemoryView {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { ...EMPTY_MEMORY_VIEW };
+  }
+  const record = value as Record<string, unknown>;
+  const list = (entry: unknown): Array<Record<string, unknown>> =>
+    Array.isArray(entry)
+      ? entry.slice(0, MEMORY_VIEW_LIMIT).filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))
+      : [];
+  const pending = record.pending;
+  const pendingRecord = typeof pending === 'object' && pending !== null && !Array.isArray(pending) ? (pending as Record<string, unknown>) : null;
+  return {
+    project: typeof record.project === 'string' ? record.project.slice(0, 128) : null,
+    readable: record.readable !== false,
+    decisions: list(record.decisions).map((entry) => ({
+      key: text(entry.key, 128),
+      value: text(entry.value, 2100),
+      version: count(entry.version),
+      source: text(entry.source, 16),
+      provider: text(entry.provider, 16),
+      createdAt: count(entry.createdAt),
+    })),
+    history: list(record.history).map((entry) => ({
+      key: text(entry.key, 128),
+      versions: list(entry.versions).map((version) => ({
+        version: count(version.version),
+        value: text(version.value, 2100),
+        createdAt: count(version.createdAt),
+        source: text(version.source, 16),
+        provider: text(version.provider, 16),
+        reason: text(version.reason, 300),
+      })),
+    })),
+    artifacts: list(record.artifacts).map((entry) => ({
+      path: text(entry.path, 512),
+      decisionKey: text(entry.decisionKey, 128),
+      decisionVersion: count(entry.decisionVersion),
+      status: text(entry.status, 24),
+      detail: text(entry.detail, 300),
+    })),
+    corruptKeys: Array.isArray(record.corruptKeys) ? record.corruptKeys.slice(0, 64).map((key) => text(key, 128)) : [],
+    pending:
+      pendingRecord !== null &&
+      typeof pendingRecord.actionId === 'string' &&
+      typeof pendingRecord.digest === 'string' &&
+      /^[0-9a-f]{64}$/.test(pendingRecord.digest)
+        ? { actionId: pendingRecord.actionId.slice(0, 128), digest: pendingRecord.digest, text: text(pendingRecord.text, 2000) }
+        : null,
+    note: text(record.note, 300),
+    mission: sanitizeMissionView(record.mission),
+    folders: list(record.folders)
+      .slice(0, 64)
+      .filter((entry) => typeof entry.path === 'string' && entry.path.length > 0 && entry.path.length <= 4096)
+      .map((entry) => ({ name: text(entry.name, 128), path: entry.path as string })),
+    selectedPath: typeof record.selectedPath === 'string' && record.selectedPath.length <= 4096 ? record.selectedPath : null,
+  };
 }
 
 /**
@@ -770,6 +1300,12 @@ export function buildViewStateMessage(options: {
   agentLog?: AgentLogEntryView[];
   runThreadId?: string | null;
   generation?: GenerationView;
+  memory?: MemoryView | null;
+  language?: ViewLanguage;
+  consult?: ConsultView | null;
+  missionLive?: MissionLiveView | null;
+  runKind?: RunKind;
+  about?: AboutView;
 }): ViewStateMessage {
   // The provider-level runtime is the source of truth; the cloud model is
   // a validated subordinate selection. Mismatched/arbitrary combinations
@@ -817,6 +1353,122 @@ export function buildViewStateMessage(options: {
     agentLog: options.agentLog ?? [],
     runThreadId: typeof options.runThreadId === 'string' ? options.runThreadId : null,
     generation: sanitizeGenerationView(options.generation, provider, model),
+    memory: sanitizeMemoryView(options.memory ?? EMPTY_MEMORY_VIEW),
+    language: isViewLanguage(options.language) ? options.language : 'en',
+    consult: sanitizeConsultView(options.consult ?? null),
+    missionLive: sanitizeMissionLive(options.missionLive ?? null),
+    runKind: options.runKind === 'mission-plan' || options.runKind === 'mission-run' || options.runKind === 'other' ? options.runKind : null,
+    about: sanitizeAbout(options.about),
+  };
+}
+
+const UNKNOWN_ABOUT: AboutView = { version: 'unknown', revision: 'unknown', channel: 'candidate' };
+
+function sanitizeAbout(value: unknown): AboutView {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { ...UNKNOWN_ABOUT };
+  }
+  const record = value as Record<string, unknown>;
+  const field = (entry: unknown): string => (typeof entry === 'string' && /^[0-9A-Za-z.+_-]{1,64}$/.test(entry) ? entry : 'unknown');
+  return {
+    version: field(record.version),
+    revision: field(record.revision),
+    // Only an explicit release build says "release".
+    channel: record.channel === 'release' ? 'release' : 'candidate',
+  };
+}
+
+const ACCEPTANCE_STATES: readonly AcceptanceState[] = ['none', 'not_run', 'passed', 'failed', 'tampered'];
+
+function sanitizeMissionLive(value: unknown): MissionLiveView | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.threadId !== 'string' || !MISSION_PHASES.includes(record.phase as MissionPhase)) {
+    return null;
+  }
+  const strings = (entry: unknown, max: number, each: number): string[] =>
+    Array.isArray(entry) ? entry.filter((item): item is string => typeof item === 'string').slice(0, max).map((item) => item.slice(0, each)) : [];
+  const object = (entry: unknown): Record<string, unknown> | null =>
+    typeof entry === 'object' && entry !== null && !Array.isArray(entry) ? (entry as Record<string, unknown>) : null;
+  const acceptance = object(record.acceptance);
+  const setup = object(record.setup);
+  const request = object(record.startRequest);
+  const report = object(record.report);
+  const time = (entry: unknown): number | null => (typeof entry === 'number' && Number.isFinite(entry) && entry > 0 ? entry : null);
+  return {
+    missionId: typeof record.missionId === 'string' && /^mis_[0-9a-f]{24}$/.test(record.missionId) ? record.missionId : null,
+    revision: count(record.revision),
+    threadId: record.threadId.slice(0, 128),
+    goal: text(record.goal, 2000),
+    phase: record.phase as MissionPhase,
+    currentTask: typeof record.currentTask === 'string' ? record.currentTask.slice(0, 300) : null,
+    tasksDone: count(record.tasksDone),
+    tasksTotal: count(record.tasksTotal),
+    internalRun: count(record.internalRun),
+    step: typeof record.step === 'number' && Number.isInteger(record.step) && record.step > 0 ? record.step : null,
+    maxSteps: count(record.maxSteps),
+    startedAt: time(record.startedAt),
+    endedAt: time(record.endedAt),
+    lastProgress: text(record.lastProgress, 300),
+    lastTest: text(record.lastTest, 300),
+    grant: record.grant === 'supervised' || record.grant === 'autonomous-workspace' ? record.grant : null,
+    model: typeof record.model === 'string' ? record.model.slice(0, 128) : null,
+    acceptance:
+      acceptance === null
+        ? null
+        : {
+            commandId: text(acceptance.commandId, 128),
+            files: (Array.isArray(acceptance.files) ? acceptance.files : [])
+              .map(object)
+              .filter((file): file is Record<string, unknown> => file !== null)
+              .slice(0, 24)
+              .map((file) => ({ path: text(file.path, 512), hash: text(file.hash, 64) })),
+            state: ACCEPTANCE_STATES.includes(acceptance.state as AcceptanceState) ? (acceptance.state as AcceptanceState) : 'not_run',
+            summary: text(acceptance.summary, 300),
+          },
+    canStart: record.canStart === true,
+    canPause: record.canPause === true,
+    canResume: record.canResume === true,
+    canCancel: record.canCancel === true,
+    setup:
+      setup === null
+        ? null
+        : {
+            testCommands: strings(setup.testCommands, 16, 128),
+            candidates: strings(setup.candidates, 80, 512),
+            environmentFiles: strings(setup.environmentFiles, 8, 64),
+            packageJsonHash: text(setup.packageJsonHash, 64),
+          },
+    startRequest:
+      request === null || typeof request.requestId !== 'string' || !['authorizing', 'started', 'failed'].includes(request.state as string)
+        ? null
+        : { requestId: request.requestId.slice(0, 48), state: request.state as 'authorizing' | 'started' | 'failed', error: text(request.error, 300) },
+    report:
+      report === null
+        ? null
+        : {
+            tasks: strings(report.tasks, 20, 300),
+            files: strings(report.files, 12, 300),
+            tests: strings(report.tests, 12, 300),
+            acceptance: text(report.acceptance, 600),
+            internalRuns: count(report.internalRuns),
+            minutes: count(report.minutes),
+            models: strings(report.models, 4, 200),
+            metaConsultations: text(report.metaConsultations, 200),
+          },
+    blocked:
+      object(record.blocked) === null
+        ? null
+        : {
+            reason: text((record.blocked as Record<string, unknown>).reason, 500),
+            runs: count((record.blocked as Record<string, unknown>).runs),
+            lastProgress: text((record.blocked as Record<string, unknown>).lastProgress, 300),
+            testsNotRun: strings((record.blocked as Record<string, unknown>).testsNotRun, 16, 128),
+          },
+    review: strings(record.review, 40, 300),
+    note: text(record.note, 500),
   };
 }
 

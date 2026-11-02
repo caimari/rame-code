@@ -113,15 +113,15 @@ test('Agent default with Agent, Mission, Chat order is preserved', () => {
   assert.equal(DEFAULT_CHAT_MODE, 'agent');
   assert.deepEqual(
     CHAT_MODES.map((mode) => mode.id),
-    ['agent', 'mission', 'chat'],
+    ['agent', 'chat', 'mission'],
   );
   const html = document();
   const modeSelect = html.match(/<select id="modeSelect"[^>]*>([\s\S]*?)<\/select>/)?.[1] ?? '';
   const agentAt = modeSelect.indexOf('value="agent"');
   const missionAt = modeSelect.indexOf('value="mission"');
   const chatAt = modeSelect.indexOf('value="chat"');
-  assert.ok(agentAt >= 0 && missionAt > agentAt && chatAt > missionAt);
-  assert.match(html, /<option value="agent" selected>Agent<\/option>/);
+  assert.ok(agentAt >= 0 && chatAt > agentAt && missionAt > chatAt);
+  assert.match(html, /<option value="agent" selected title="[^"]+">Agent<\/option>/);
   const script = readFileSync('media/main.js', 'utf8');
   assert.match(script, /modeSelectEl\.value = 'agent'/);
 });
@@ -252,13 +252,13 @@ test('consecutive Agent approvals re-enable both one-use action controls', () =>
   )?.[1] ?? '';
   assert.match(restore, /btn\.disabled = false/);
   assert.match(restore, /btn\.dataset\.origLabel = ''/);
-  assert.match(script, /markPending\(pendingApproveBtn, 'Approving…'\)/);
-  assert.match(script, /markPending\(pendingRejectBtn, 'Rejecting…'\)/);
+  assert.match(script, /markPending\(pendingApproveBtn, t\('Approving…'\)\)/);
+  assert.match(script, /markPending\(pendingRejectBtn, t\('Rejecting…'\)\)/);
 });
 
 test('Stop control cannot remain visually stuck after the host reports stopped', () => {
   const script = readFileSync('media/main.js', 'utf8');
-  assert.match(script, /stopLocalBtn\.textContent = 'Stop'/);
+  assert.match(script, /stopLocalBtn\.textContent = t\('Stop'\)/);
   assert.match(script, /stopLocalBtn\.disabled = !localOwned/);
   assert.match(script, /localLifecycle !== 'running'/);
   const html = document();
@@ -335,7 +335,7 @@ test('stopped local runtime is blocked before creating an error thread', () => {
   assert.match(script, /currentRuntimeId\(\) === 'local' && !localReady/);
   assert.match(script, /external OpenAI-compatible loopback server/);
   const preflight = host.indexOf('// Provider preflight happens before settings or thread persistence.');
-  const create = host.indexOf('thread = this.store.create(text)', preflight);
+  const create = host.indexOf('thread = this.store.create(text', preflight);
   assert.ok(preflight >= 0 && create > preflight, 'local preflight must precede thread creation');
   assert.match(host, /Muse Glimmer is still starting\. Wait for Running before sending\./);
 });

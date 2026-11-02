@@ -118,7 +118,8 @@ function selectedModel(value: unknown): string {
   return META_MODEL;
 }
 
-const missionPlanSchema = {
+/** Strict structured-output format of a Mission plan (also sent to the local server). */
+export const missionPlanSchema = {
   type: 'json_schema',
   json_schema: {
     name: 'rame_mission_plan',
@@ -231,6 +232,45 @@ export async function createChatCompletion(
     throw new Error('Meta Model API returned no assistant reply.');
   }
   return { text: content, usage: parseUsage(payload) };
+}
+
+/**
+ * Cascade consultation: send the exact payload the user approved, with no
+ * tools, and get strict structured advice back. The advice is validated and
+ * bounded by the caller; it is never treated as an instruction.
+ */
+export async function createCascadeAdvice(
+  options: Omit<CreateMissionPlanOptions, 'goal'> & { payload: string; schema: unknown },
+): Promise<{ content: string; usage: ProviderUsage }> {
+  const { response, rawPayload } = await postMetaRequest({ ...options, goal: '' }, {
+    model: selectedModel(options.model),
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You advise a local coding agent that has its own file and test tools. You cannot see the project and you cannot run tools. Do not claim to have inspected anything. Return only the requested structured output.',
+      },
+      { role: 'user', content: options.payload },
+    ],
+    ...generationFields({ ...options, goal: '' }),
+    response_format: options.schema,
+    store: false,
+  });
+  const payload = parseResponsePayload(rawPayload);
+  if (!response.ok) {
+    const detail = payload.error?.message?.trim();
+    throw new Error(
+      detail
+        ? `Meta Model API returned HTTP ${response.status}: ${detail}`
+        : `Meta Model API returned HTTP ${response.status}.`,
+    );
+  }
+  assertNotCutOff({ ...options, goal: '' }, payload);
+  const content = payload.choices?.[0]?.message?.content;
+  if (typeof content !== 'string' || content.length === 0) {
+    throw new Error('Meta Model API returned no advice.');
+  }
+  return { content, usage: parseUsage(payload) };
 }
 
 /**

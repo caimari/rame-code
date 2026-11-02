@@ -290,7 +290,11 @@ export class HostHarness {
   provider!: InstanceType<typeof mainProviderModule.RameCodeViewProvider>;
   private handler: ((raw: unknown) => void) | null = null;
 
-  constructor(options: { folders?: number } = {}) {
+  /** When set, memory and Missions use shared files here (like two real windows). */
+  sharedStateDir: string | undefined;
+
+  constructor(options: { folders?: number; sharedStateDir?: string } = {}) {
+    this.sharedStateDir = options.sharedStateDir;
     this.root = mkdtempSync(path.join(os.tmpdir(), 'rame-host-harness-'));
     this.workspace = path.join(this.root, 'ws');
     const count = options.folders ?? 1;
@@ -321,15 +325,20 @@ export class HostHarness {
   }
 
   /** Construct a provider over the same persisted state (simulates reload). */
-  createProvider(): void {
+  createProvider(options: { isolatedState?: boolean } = {}): void {
+    // isolatedState: another window whose globalState cache has none of this
+    // window's writes (it starts from a copy of the settings only).
+    const backing = options.isolatedState
+      ? new Map<string, unknown>([['rameCode.settings.v1', this.memento.get('rameCode.settings.v1')]])
+      : this.memento;
     const state = {
-      get: (key: string) => this.memento.get(key),
+      get: (key: string) => backing.get(key),
       update: (key: string, value: unknown) => {
         // Like VS Code's Memento: `undefined` removes the key.
         if (value === undefined) {
-          this.memento.delete(key);
+          backing.delete(key);
         } else {
-          this.memento.set(key, JSON.parse(JSON.stringify(value)) as unknown);
+          backing.set(key, JSON.parse(JSON.stringify(value)) as unknown);
         }
         return Promise.resolve();
       },
@@ -354,8 +363,21 @@ export class HostHarness {
       store,
       state,
       output as never,
+      this.sharedStateDir,
     );
-    const view = {
+    this.provider.resolveWebviewView(this.fakeView() as never, {} as never, {} as never);
+  }
+
+  /**
+   * Rebuild the webview over the same provider, as VS Code does when the
+   * view is hidden and shown again: the page starts over with no memory.
+   */
+  rebuildView(): void {
+    this.provider.resolveWebviewView(this.fakeView() as never, {} as never, {} as never);
+  }
+
+  private fakeView(): unknown {
+    return {
       webview: {
         options: {},
         html: '',
@@ -372,7 +394,6 @@ export class HostHarness {
       },
       onDidDispose: () => ({ dispose() {} }),
     };
-    this.provider.resolveWebviewView(view as never, {} as never, {} as never);
   }
 
   send(raw: unknown): void {

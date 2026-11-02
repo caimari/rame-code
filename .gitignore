@@ -7,6 +7,7 @@ coverage/
 
 # Local state
 .rame/
+.private/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

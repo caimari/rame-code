@@ -131,6 +131,7 @@ test('tool definitions cover the bounded allowlisted tools and bound output', ()
     'list_files',
     'move_file',
     'read_file',
+    'replace_in_file',
     'run_tests',
     'search_text',
     'set_executable',

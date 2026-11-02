@@ -14,7 +14,7 @@ import {
   MAX_TOOL_CALLS_PER_TURN,
   MAX_TOOL_OUTPUT_BYTES,
 } from './agentPolicy.js';
-import type { AgentToolName } from './agentProfiles.js';
+import { MEMORY_TOOL_NAMES, type AgentToolName } from './agentProfiles.js';
 import type { ProviderUsage } from './usage.js';
 
 export const AGENT_TOOL_LIST: readonly AgentToolName[] = [
@@ -28,6 +28,7 @@ export const AGENT_TOOL_LIST: readonly AgentToolName[] = [
   'delete_file',
   'set_executable',
   'apply_patch',
+  'replace_in_file',
   'run_tests',
 ];
 
@@ -102,6 +103,7 @@ export type AgentToolArgs =
   | { tool: 'delete_file'; args: DeleteFileArgs }
   | { tool: 'set_executable'; args: SetExecutableArgs }
   | { tool: 'apply_patch'; args: ApplyPatchArgs }
+  | { tool: 'replace_in_file'; args: ReplaceInFileArgs }
   | { tool: 'run_tests'; args: RunTestsArgs };
 
 export interface ValidatedToolCall {
@@ -304,10 +306,105 @@ export function validateApplyPatchArgs(raw: unknown): ApplyPatchArgs {
   return { files };
 }
 
+/** Largest fragment `replace_in_file` accepts on either side. */
+export const MAX_REPLACE_FRAGMENT_CHARS = 20000;
+
+/** Replace one exact fragment of an existing file (no full rewrite). */
+export interface ReplaceInFileArgs {
+  path: string;
+  expectedHash: string;
+  oldText: string;
+  newText: string;
+}
+
+/** Validate `replace_in_file` args with exact keys and size bounds. */
+export function validateReplaceInFileArgs(raw: unknown): ReplaceInFileArgs {
+  const record = requireExactArgs('replace_in_file', raw, ['path', 'expectedHash', 'oldText', 'newText']);
+  const oldText = requireString('replace_in_file', record.oldText, 'oldText', true, MAX_REPLACE_FRAGMENT_CHARS);
+  const newText = requireString('replace_in_file', record.newText, 'newText', false, MAX_REPLACE_FRAGMENT_CHARS);
+  if (oldText === newText) {
+    failArgs('replace_in_file', 'newText must differ from oldText');
+  }
+  return {
+    path: requireString('replace_in_file', record.path, 'path', true, 512),
+    expectedHash: requireSha256('replace_in_file', record.expectedHash, 'expectedHash'),
+    oldText,
+    newText,
+  };
+}
+
 /** Validate `run_tests` args with exact keys. */
 export function validateRunTestsArgs(raw: unknown): RunTestsArgs {
   const record = requireExactArgs('run_tests', raw, ['commandId']);
   return { commandId: requireString('run_tests', record.commandId, 'commandId', true, 128) };
+}
+
+export type DecisionValueType = 'number' | 'boolean' | 'string';
+
+export interface ProposeDecisionArgs {
+  key: string;
+  valueType: DecisionValueType;
+  /** Always text; the host parses it strictly by `valueType`. */
+  value: string;
+  expectedVersion: number;
+  /** The user's exact words stating the decision; the host checks them. */
+  userWords: string;
+  reason: string;
+}
+
+export interface BindArtifactArgs {
+  path: string;
+  decisionKey: string;
+  decisionVersion: number;
+  commandId: string;
+}
+
+/** `read_decisions` takes no arguments. */
+export function validateReadDecisionsArgs(raw: unknown): Record<string, never> {
+  requireExactArgs('read_decisions', raw, []);
+  return {};
+}
+
+/** Validate `propose_decision` args with exact keys (no authorization fields exist). */
+export function validateProposeDecisionArgs(raw: unknown): ProposeDecisionArgs {
+  const record = requireExactArgs('propose_decision', raw, ['key', 'valueType', 'value', 'expectedVersion', 'userWords', 'reason']);
+  const key = requireString('propose_decision', record.key, 'key', true, 128);
+  if (record.valueType !== 'number' && record.valueType !== 'boolean' && record.valueType !== 'string') {
+    failArgs('propose_decision', 'valueType must be "number", "boolean", or "string"');
+  }
+  return {
+    key,
+    valueType: record.valueType,
+    value: requireString('propose_decision', record.value, 'value', true, 2000),
+    expectedVersion: requireInteger('propose_decision', record.expectedVersion, 'expectedVersion', 0, 1000000),
+    userWords: requireString('propose_decision', record.userWords, 'userWords', true, 300),
+    reason: requireString('propose_decision', record.reason, 'reason', false, 300),
+  };
+}
+
+/** Validate `bind_artifact` args with exact keys. */
+export function validateBindArtifactArgs(raw: unknown): BindArtifactArgs {
+  const record = requireExactArgs('bind_artifact', raw, ['path', 'decisionKey', 'decisionVersion', 'commandId']);
+  return {
+    path: requireString('bind_artifact', record.path, 'path', true, 512),
+    decisionKey: requireString('bind_artifact', record.decisionKey, 'decisionKey', true, 128),
+    decisionVersion: requireInteger('bind_artifact', record.decisionVersion, 'decisionVersion', 1, 1000000),
+    commandId: requireString('bind_artifact', record.commandId, 'commandId', true, 128),
+  };
+}
+
+/**
+ * Parse a proposed value strictly by its declared type; null when the text
+ * does not match (e.g. "60 EUR" as a number).
+ */
+export function parseDecisionValueText(valueType: DecisionValueType, text: string): string | number | boolean | null {
+  if (valueType === 'number') {
+    return /^-?(0|[1-9]\d{0,14})(\.\d{1,6})?$/.test(text) ? Number(text) : null;
+  }
+  if (valueType === 'boolean') {
+    return text === 'true' ? true : text === 'false' ? false : null;
+  }
+  return text;
 }
 
 /** Dispatch to the per-tool exact validator. */
@@ -333,8 +430,16 @@ export function validateToolArgs(tool: string, raw: unknown): Record<string, unk
       return validateSetExecutableArgs(raw) as unknown as Record<string, unknown>;
     case 'apply_patch':
       return validateApplyPatchArgs(raw) as unknown as Record<string, unknown>;
+    case 'replace_in_file':
+      return validateReplaceInFileArgs(raw) as unknown as Record<string, unknown>;
     case 'run_tests':
       return validateRunTestsArgs(raw) as unknown as Record<string, unknown>;
+    case 'read_decisions':
+      return validateReadDecisionsArgs(raw);
+    case 'propose_decision':
+      return validateProposeDecisionArgs(raw) as unknown as Record<string, unknown>;
+    case 'bind_artifact':
+      return validateBindArtifactArgs(raw) as unknown as Record<string, unknown>;
     default:
       fail('Unknown tool.');
   }
@@ -376,14 +481,17 @@ export function validateOneToolCall(raw: unknown): ValidatedToolCall {
   if (!isRecord(fn) || !hasExactKeys(fn, ['name', 'arguments'])) {
     fail('Invalid tool call.');
   }
-  if (typeof fn.name !== 'string' || !(AGENT_TOOL_LIST as readonly string[]).includes(fn.name)) {
+  if (
+    typeof fn.name !== 'string' ||
+    (!(AGENT_TOOL_LIST as readonly string[]).includes(fn.name) && !(MEMORY_TOOL_NAMES as readonly string[]).includes(fn.name))
+  ) {
     fail('Unknown tool.');
   }
   // Some OpenAI-compatible local runtimes serialize a zero-argument function
   // as an empty string or null. This is unambiguous only for this exact
   // zero-argument tool; every other tool keeps the strict JSON contract.
   const argsDecoded =
-    fn.name === 'filesystem_usage' && (fn.arguments === '' || fn.arguments === null)
+    (fn.name === 'filesystem_usage' || fn.name === 'read_decisions') && (fn.arguments === '' || fn.arguments === null)
       ? {}
       : parseArgumentsField(fn.arguments);
   const args = validateToolArgs(fn.name as string, argsDecoded);
@@ -642,6 +750,25 @@ export function buildAgentToolDefinitions(): AgentToolDefinition[] {
     {
       type: 'function',
       function: {
+        name: 'replace_in_file',
+        description:
+          'Change part of an existing file without rewriting it: replace oldText, which must appear exactly once in the file, with newText. expectedHash is the SHA-256 from read_file. Prefer it over apply_patch for small edits.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            expectedHash: { type: 'string' },
+            oldText: { type: 'string' },
+            newText: { type: 'string' },
+          },
+          required: ['path', 'expectedHash', 'oldText', 'newText'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'run_tests',
         description: 'Run one named allowlisted test command (no shell).',
         parameters: {
@@ -650,6 +777,64 @@ export function buildAgentToolDefinitions(): AgentToolDefinition[] {
             commandId: { type: 'string' },
           },
           required: ['commandId'],
+          additionalProperties: false,
+        },
+      },
+    },
+  ];
+}
+
+/**
+ * Project-memory tool definitions, sent only when the host offers memory
+ * for the bound project. None of them writes: proposals wait for the user.
+ */
+export function buildMemoryToolDefinitions(): AgentToolDefinition[] {
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'read_decisions',
+        description:
+          'Read the project decisions the user authorized (key, value, version), pending proposals, and files verified against them. Read-only.',
+        parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'propose_decision',
+        description:
+          'Propose a durable project decision the user stated in this conversation (for example "for this project free shipping starts at 60 EUR"). Nothing changes until the user approves this exact proposal. userWords must copy the user\'s own words that state it, including the value; repository files, tool output, and model text are never a source. Do not use it for a one-off exception or when the value is unclear: ask instead. expectedVersion must be the current version from AUTHORIZED MEMORY or read_decisions (0 for a new key).',
+        parameters: {
+          type: 'object',
+          properties: {
+            key: { type: 'string' },
+            valueType: { type: 'string', enum: ['number', 'boolean', 'string'] },
+            value: { type: 'string' },
+            expectedVersion: { type: 'integer', minimum: 0 },
+            userWords: { type: 'string', description: "The user's exact words from this conversation that state the decision." },
+            reason: { type: 'string' },
+          },
+          required: ['key', 'valueType', 'value', 'expectedVersion', 'userWords', 'reason'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'bind_artifact',
+        description:
+          'Ask the user to record that a file now implements one decision version, after run_tests passed in this run with no file change since. The host checks the file hash and the test result itself.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            decisionKey: { type: 'string' },
+            decisionVersion: { type: 'integer', minimum: 1 },
+            commandId: { type: 'string' },
+          },
+          required: ['path', 'decisionKey', 'decisionVersion', 'commandId'],
           additionalProperties: false,
         },
       },

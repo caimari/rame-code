@@ -364,7 +364,8 @@ test('the owned local runtime is not idle-stopped while a run waits for approval
       projectorPath: '',
       draftModelPath: '',
       modelId: 'local-glimmer',
-      contextSize: 4096,
+      // Room for the Agent's fixed prompt and tools; this test is about idle stop.
+      contextSize: 8192,
       port: await freePort(),
       idleTimeoutSec: 1,
     });

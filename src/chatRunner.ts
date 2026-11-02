@@ -19,9 +19,10 @@ export class ChatRunner {
 
   /**
    * Run one conversational call. `work` receives the abort signal and
-   * returns the assistant text. Rejects when another call is running.
+   * returns its result (the assistant text, or a structured reply). Rejects
+   * when another call is running.
    */
-  async start(work: (input: ChatCallInput) => Promise<string>): Promise<string> {
+  async start<T = string>(work: (input: ChatCallInput) => Promise<T>): Promise<T> {
     if (this.controller !== null) {
       throw new Error('A RAME Code request is already running.');
     }

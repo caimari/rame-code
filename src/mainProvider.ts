@@ -23,6 +23,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { chmod as nodeChmod, realpath as nodeRealpath, stat as nodeStat, statfs as nodeStatfs } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -65,10 +66,12 @@ import {
   WINDOWS_SET_EXECUTABLE_ERROR,
   resolveCanonicalRoot,
   type AgentFs,
+  type AgentFsEntry,
 } from './agentHost.js';
 import { AgentRunner, buildAgentMessages } from './agentLoop.js';
 import {
   AgentOutputTruncatedError,
+  LocalMalformedToolCallError,
   assertAgentModelForProvider,
   buildAgentSystemPrompt,
   createLocalAgentCompletion,
@@ -102,7 +105,74 @@ import {
   parseAgentProfile,
   type AgentProfileId,
 } from './agentProfiles.js';
-import { buildAgentToolDefinitions, truncateToolOutput, type ValidatedToolCall } from './agentTools.js';
+import {
+  buildAgentToolDefinitions,
+  buildMemoryToolDefinitions,
+  parseDecisionValueText,
+  truncateToolOutput,
+  type DecisionValueType,
+  type ReplaceInFileArgs,
+  type ValidatedToolCall,
+} from './agentTools.js';
+import {
+  DecisionStore,
+  describeProposal,
+  scopeIdForRoot,
+  type MemoryAuthorization,
+  type MemoryProposal,
+} from './decisionStore.js';
+import { SharedJsonFileBackend } from './sharedStateFile.js';
+import { checkUserStatement } from './decisionSource.js';
+import {
+  buildConsultPayload,
+  buildVerificationPrompt,
+  formatAdvisory,
+  cascadeAdviceSchema,
+  consultDigest,
+  CONSULT_OFFER_TTL_MS,
+  validateCascadeAdvice,
+  type CascadeAdvice,
+  type LocalStopKind,
+} from './cascade.js';
+import {
+  MissionStore,
+  MAX_NO_PROGRESS_RUNS,
+  assessRun,
+  blockMission,
+  filesReadInMission,
+  frozenPaths,
+  MAX_USER_GUIDANCE,
+  recordAcceptance,
+  buildAutoTaskPrompt,
+  buildTaskPrompt,
+  canRunTask,
+  cancelMission,
+  completeTask,
+  currentTask,
+  grantAllows,
+  grantMission,
+  interrupt,
+  journalAction,
+  leaseHeldByOther,
+  pauseMission,
+  recordRun,
+  setWaiting,
+  startTaskRun,
+  uncertainActions,
+  type MissionGrant,
+  type MissionLease,
+  type MissionRecord,
+  type MissionResult,
+  type RunAssessment,
+  type RunObservation,
+} from './missionStore.js';
+import {
+  MEMORY_RULES_TEXT,
+  buildMemorySnapshot,
+  memoryPreconditionKey,
+  memoryPreconditionValue,
+  parseMemoryPreconditionKey,
+} from './projectMemory.js';
 import { withBoundedRequest } from './boundedRequest.js';
 import { ChatRunner } from './chatRunner.js';
 import {
@@ -126,7 +196,7 @@ import {
   type ModelGenerationProfile,
   type ReasoningLevel,
 } from './generationSettings.js';
-import { createLocalChatCompletion } from './localProvider.js';
+import { createLocalChatCompletion, createLocalMissionPlan } from './localProvider.js';
 import {
   buildLlamaServerArgs,
   initialLocalRuntimeStatus,
@@ -145,7 +215,7 @@ import {
   validateCloudModelSelection,
   type CloudModelInfo,
 } from './metaCatalog.js';
-import { createChatCompletion, validateMissionPlan } from './meta-provider.js';
+import { createCascadeAdvice, createChatCompletion, missionPlanSchema, validateMissionPlan } from './meta-provider.js';
 import { MissionRunner } from './missionRunner.js';
 import { DEFAULT_CHAT_MODE, isSupportedMode } from './modes.js';
 import {
@@ -175,12 +245,14 @@ import {
   type RameSettings,
   type RuntimeId,
   type UsageTotals,
+  type ViewLanguage,
 } from './settingsStore.js';
 import {
   appendErrorTurn,
   appendPlanTurn,
   appendAssistantTurn,
   appendUserTurn,
+  userWrittenTexts,
   fitTurnText,
   MAX_ASSISTANT_TEXT_LENGTH,
   ThreadStore,
@@ -190,11 +262,18 @@ import { addUsage, EMPTY_USAGE, type ProviderUsage } from './usage.js';
 import {
   buildViewStateMessage,
   localUnreachableMessage,
+  type AboutView,
   type EscalationState,
   type GenerationView,
+  type MemoryView,
+  type MissionLiveView,
+  type MissionView,
+  type RunKind,
   type ViewConnection,
   type ViewScreen,
 } from './viewMessages.js';
+import { acceptanceState, missionChangedFiles, missionFinalReport, missionPhase, missionTestRuns, missionTestsNotRun } from './missionPhase.js';
+import { readBuildInfo } from './buildInfo.js';
 import { parseViewInboundMessage } from './viewMessages.js';
 import { buildViewHtml, createViewNonce } from './viewHtml.js';
 import {
@@ -231,8 +310,16 @@ const MAX_DIAGNOSTIC_BYTES = 8192;
 const APPROVAL_PREVIEW_CHARS = 2000;
 /** The model is told to wrap up when this many steps of the budget remain. */
 const AGENT_STEPS_WARNING_REMAINING = 2;
+/** Mission runs: with this many steps left and nothing changed, the host says to act now. */
+const MISSION_LOW_BUDGET_STEPS = 4;
+/** Read-only tools whose identical repeats in one Mission run are flagged. */
+const MISSION_REPEAT_CHECK_TOOLS = new Set(['list_files', 'inspect_workspace', 'filesystem_usage', 'search_text', 'read_file']);
 /** Bound for reading the local server's `/props` (loopback only). */
 const LOCAL_PROPS_TIMEOUT_MS = 3000;
+/** Thread id recorded for changes the user makes in Settings. */
+const SETTINGS_MEMORY_THREAD = 'settings';
+/** Tools whose success changes workspace files (voids earlier test evidence). */
+const WORKSPACE_WRITE_TOOLS: ReadonlySet<string> = new Set(['apply_patch', 'replace_in_file', 'create_directory', 'move_file', 'delete_file', 'set_executable']);
 /** Earlier thread messages longer than this are shortened with a visible marker. */
 const AGENT_HISTORY_TEXT_LIMIT = 4000;
 
@@ -248,6 +335,26 @@ interface RunGeneration {
   manualMax: number | null;
   /** Visible notes about choices that could not be applied as stored. */
   notes: string[];
+}
+
+/** Plain reason when a decision moved on since its approval card was shown. */
+function memoryDrift(pending: PendingAgentAction, currentHashes: Record<string, string>): string | null {
+  for (const [key, expected] of Object.entries(pending.preconditions)) {
+    const parsed = parseMemoryPreconditionKey(key);
+    if (parsed !== null && currentHashes[key] !== expected) {
+      return `${parsed.key} changed since this proposal was shown, so nothing was written; propose it again from the current version.`;
+    }
+  }
+  return null;
+}
+
+/** The more restrictive of the chosen profile and a temporary cap. */
+function capProfile(profile: AgentProfileId, cap: AgentProfileId | null): AgentProfileId {
+  if (cap === null) {
+    return profile;
+  }
+  const order: AgentProfileId[] = ['ask', 'safe-auto', 'workspace-full'];
+  return order.indexOf(cap) < order.indexOf(profile) ? cap : profile;
 }
 
 function withNote(status: string, note: string | null): string {
@@ -308,6 +415,86 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
   private runThreadId: string | null = null;
   /** Last `/props` reading of the local server, tied to its endpoint. */
   private localProps: { endpoint: string; props: LocalServerProps } | null = null;
+  /** Host-controlled project memory; the model can only read and propose. */
+  private readonly memory: DecisionStore;
+  /** A change the user proposed in Settings, waiting for its approval card. */
+  private memoryPending: { action: PendingAgentAction; proposal: MemoryProposal } | null = null;
+  /** Bumped by cancellation so an old Settings approval card can never commit. */
+  private memoryGeneration = 0;
+  /** Last computed memory view (refreshed at explicit points, not per status). */
+  private memoryView: MemoryView | null = null;
+  /**
+   * The project Settings memory acts on: the open folder the user chose in
+   * Settings, or the folder of the latest Agent run. Always one of the open
+   * workspace folders when used.
+   */
+  private memoryRoot: string | null = null;
+  /**
+   * While a Mission task or a cascade verification runs, its Agent run
+   * targets that project, never another open folder and without a prompt.
+   */
+  private pinnedRunRoot: string | null = null;
+  /** A consultation the user may approve: the exact payload and its digest. */
+  private consultOffer: {
+    threadId: string;
+    root: string;
+    task: string;
+    reason: string;
+    payload: string;
+    model: string;
+    digest: string;
+    createdAt: number;
+    generation: number;
+  } | null = null;
+  /** Set while the local verification run of a cascade runs (no nested offers). */
+  private cascadeVerification: { threadId: string } | null = null;
+  /** The Mission task prompt being sent: stored as host-written, not as the user's words. */
+  private hostPromptText: string | null = null;
+  /** Persistent Missions; each task run is started by the user. */
+  private readonly missions: MissionStore;
+  private missionRecovery: Promise<number> = Promise.resolve(0);
+  /** The Mission whose task the current Agent run works on, if any. */
+  private activeMission: { id: string; revision: number } | null = null;
+  /** A resumed Mission task never runs writes without approval. */
+  private missionProfileCap: AgentProfileId | null = null;
+  private missionUpdates: Promise<void> = Promise.resolve();
+  /** Outcome of the latest Agent run, read by the Mission runner. */
+  private lastAgentOutcome: {
+    threadId: string;
+    outcome: string;
+    hostRecord: string[];
+    report: string;
+    lastTest?: { commandId: string; exitCode: number | null } | null;
+    /** Files the run wrote, with their hash after the run (null = missing). */
+    writes?: Array<{ path: string; hash: string | null }>;
+    wroteAfterLastTest?: boolean;
+    capabilityReason?: string | null;
+    /** Read-only calls of the run that returned exactly what an earlier call had. */
+    repeatedReads?: number;
+  } | null = null;
+  /** Model step of the current Agent run, for the Mission view. */
+  private agentStepNow: number | null = null;
+  /** The autonomous Mission loop this window drives, and a pending pause/cancel. */
+  private missionAuto: { missionId: string; stop: 'pause' | 'cancel' | null; holdAutonomy: boolean } | null = null;
+  /** Allowlisted test commands of the Settings project, refreshed with the memory view. */
+  private missionTestCommands: string[] = [];
+  /** Choices for the Mission start card of the Settings project, refreshed with the memory view. */
+  private missionSetup: { scopeId: string; testCommands: string[]; candidates: string[]; environmentFiles: string[]; packageJsonHash: string } | null = null;
+  /**
+   * The last "Authorize and start" of this window, so a click is confirmed,
+   * a second click is not a second start, and a rebuilt view sees it.
+   */
+  private missionStartRequest: { requestId: string; missionId: string; state: 'authorizing' | 'started' | 'failed'; error: string } | null = null;
+  /** A Mission this window is starting or resuming, before its loop holds the lease. */
+  private missionStarting: string | null = null;
+  /** What the current or most recent run was, for the view's wording. */
+  private runKind: RunKind = null;
+  /** Public version and build of this extension (from out/build-info.json). */
+  private readonly about: AboutView;
+  /** The host's own acceptance run, stoppable by pause or cancel. */
+  private acceptanceController: AbortController | null = null;
+  /** This window's identity for Mission leases. */
+  private readonly leaseToken = randomBytes(12).toString('hex');
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -320,14 +507,35 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       update(key: string, value: unknown): unknown;
     },
     private readonly output: vscode.OutputChannel,
+    /**
+     * Folder for memory and Missions shared by every window of this machine.
+     * Without it (tests) they use this provider's state, one window only.
+     */
+    sharedStateDir?: string,
   ) {
+    const backend = sharedStateDir
+      ? new SharedJsonFileBackend(sharedStateDir)
+      : {
+          get: (key: string) => this.state.get(key),
+          update: async (key: string, value: unknown) => {
+            await this.state.update(key, value);
+          },
+        };
+    this.memory = new DecisionStore(backend);
+    this.missions = new MissionStore(backend);
+    this.about = readBuildInfo(this.extensionUri.fsPath);
     this.settings = validateSettings(this.state.get(RAME_SETTINGS_KEY));
     this.settings = this.reconcileCloudModel(this.settings, this.cloudCatalog);
     this.usage = validateUsageTotals(this.state.get(RAME_USAGE_KEY));
     // The durable audit is loaded for appending only: entries from earlier
     // sessions are never shown as the current run's Activity.
     this.audit.load(this.state.get(RAME_AUDIT_KEY));
-    this.recoverInterruptedRun();
+    const runningElsewhere = this.recoverInterruptedRun();
+    if (!runningElsewhere) {
+      // A Mission task run that was in flight is gone: mark it interrupted.
+      // Nothing is re-run; the user decides when to resume.
+      this.missionRecovery = this.missions.recoverInterrupted((lease) => this.isLeaseAlive(lease));
+    }
   }
 
   /**
@@ -335,16 +543,17 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
    * window close) means its thread never received an outcome: record that
    * explicitly. A marker owned by another live window is left alone.
    */
-  private recoverInterruptedRun(): void {
+  /** Returns true when another live window owns the current run marker. */
+  private recoverInterruptedRun(): boolean {
     const raw = this.state.get(RAME_ACTIVE_RUN_KEY);
     if (raw === undefined || raw === null) {
-      return;
+      return false;
     }
     const record = typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
     const threadId = typeof record.threadId === 'string' ? record.threadId : null;
     const pid = typeof record.pid === 'number' && Number.isInteger(record.pid) ? record.pid : null;
     if (pid !== null && pid !== process.pid && isProcessAlive(pid)) {
-      return;
+      return true;
     }
     void this.state.update(RAME_ACTIVE_RUN_KEY, undefined);
     const thread = threadId !== null ? this.store.get(threadId) : undefined;
@@ -352,6 +561,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     if (thread && lastTurn?.kind === 'user') {
       this.store.save(appendErrorTurn(thread, INTERRUPTED_RUN_NOTE));
     }
+    return false;
   }
 
   resolveWebviewView(
@@ -376,6 +586,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       styleUri: view.webview
         .asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'main.css'))
         .toString(),
+      i18nUri: view.webview
+        .asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'i18n.js'))
+        .toString(),
       nonce,
     });
 
@@ -397,6 +610,8 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     // Abort any run (model call, approval wait, test process tree) so a
     // reload never leaves owned work behind.
     this.cancelRequest();
+    // This window no longer drives a Mission: its lease is no longer alive.
+    LIVE_LEASE_TOKENS.delete(this.leaseToken);
     this.clearIdleTimer();
     this.stopOwnedChild();
     vscode.Disposable.from(...this.disposables).dispose();
@@ -442,6 +657,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     if (endpoint !== null) {
       await this.probeLocalProps(endpoint);
     }
+    await this.refreshMemoryView();
     await this.postState();
   }
 
@@ -518,6 +734,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
   /** Internal navigation: flip the screen flag only; state is preserved. */
   async navigate(screen: ViewScreen): Promise<void> {
     this.screen = screen;
+    if (screen === 'settings') {
+      await this.refreshMemoryView();
+    }
     await this.postState();
   }
 
@@ -639,10 +858,10 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       ? this.store.get(this.activeThreadId)
       : undefined;
     if (!thread) {
-      thread = this.store.create(text);
+      thread = this.store.create(text, rawMode);
       this.activeThreadId = thread.id;
     } else {
-      thread = appendUserTurn(thread, text);
+      thread = appendUserTurn(thread, text, undefined, { host: this.hostPromptText === text, mode: rawMode });
       this.store.save(thread);
     }
     const threadId = thread.id;
@@ -667,6 +886,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     // runs must not be presented as if they belonged to the current request.
     this.agentLogView = [];
     this.runThreadId = threadId;
+    this.runKind = this.missionAuto !== null || this.activeMission !== null ? 'mission-run' : mode === 'mission' ? 'mission-plan' : 'other';
     // Durable marker: if the extension host goes away mid-run, the next
     // activation records the interruption instead of leaving the thread
     // looking unanswered.
@@ -705,6 +925,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     if (!this.disposed) {
       void this.state.update(RAME_ACTIVE_RUN_KEY, undefined);
     }
+    await this.refreshMemoryView();
     await this.postState();
   }
 
@@ -750,6 +971,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       if (current) {
         this.store.save(appendPlanTurn(current, result.plan));
       }
+      await this.createMissionFromPlan(threadId, result.plan);
       this.output.clear();
       this.output.appendLine(formatPlanAsText(result.plan, cloudModel));
       this.output.show(true);
@@ -797,6 +1019,27 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     });
     const modelId = generation.model;
     const { request, note } = this.generationRequest(generation, { messages: built.messages });
+    if (mode === 'mission') {
+      // One strict tool call carries the plan; prose never becomes a Mission.
+      const planned = await this.chatRunner.start(async ({ signal }) =>
+        createLocalMissionPlan({
+          endpoint,
+          model: modelId,
+          messages: built.messages,
+          generation: request,
+          signal,
+          planSchema: missionPlanSchema.json_schema.schema,
+        }).then((completion) => {
+          this.recordUsage('local', completion.usage);
+          return completion;
+        }),
+      );
+      this.armIdleShutdown();
+      await this.finishLocalMissionPlan(threadId, planned.plan ?? tryParseMissionPlan(planned.text), planned.text, note);
+      this.running = false;
+      this.connection = 'verified';
+      return;
+    }
     const result = await this.chatRunner.start(async ({ signal }) =>
       createLocalChatCompletion({
         endpoint,
@@ -818,6 +1061,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
           this.store.save(appendPlanTurn(current, plan));
         }
         this.status = withNote('Plan ready.', note);
+        await this.createMissionFromPlan(threadId, plan);
       } else {
         if (current) {
           this.store.save(appendAssistantTurn(current, result));
@@ -836,6 +1080,22 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     }
     this.running = false;
     this.connection = 'verified';
+  }
+
+  private async finishLocalMissionPlan(threadId: string, plan: MissionPlan | null, prose: string, note: string | null): Promise<void> {
+    const current = this.store.get(threadId);
+    if (plan) {
+      if (current) {
+        this.store.save(appendPlanTurn(current, plan));
+      }
+      this.status = withNote('Plan ready.', note);
+      await this.createMissionFromPlan(threadId, plan);
+      return;
+    }
+    if (current) {
+      this.store.save(appendAssistantTurn(current, prose.trim().length > 0 ? prose : 'The local model did not submit a valid Mission plan.'));
+    }
+    this.status = withNote('The local model did not return a strict plan; its reply is shown as prose.', note);
   }
 
   // ----- Generation: reasoning, output budget, and context -----
@@ -1016,7 +1276,8 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     const live = await this.liveApprovalContext(pending);
-    const checked = verifyApproval(
+    const drift = memoryDrift(pending, live.currentHashes);
+    const checked = drift !== null ? { ok: false as const, error: drift } : verifyApproval(
       pending,
       { actionId, digest },
       live,
@@ -1107,6 +1368,13 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     if (heldRoot !== null) {
       const fs = this.agentFsFor(heldRoot);
       for (const rawPath of Object.keys(pending.preconditions)) {
+        const memoryKey = parseMemoryPreconditionKey(rawPath);
+        if (memoryKey !== null) {
+          // A decision that moved on since the proposal voids the approval.
+          const latest = this.memory.latestVersion(memoryKey.scopeId, memoryKey.key);
+          currentHashes[rawPath] = latest === null ? '' : memoryPreconditionValue(latest);
+          continue;
+        }
         try {
           const gate = checkAgentRelPath(rawPath);
           if (!gate.ok) {
@@ -1170,6 +1438,14 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     const open = this.listOpenWorkspaceFolders();
     if (open.length === 0) {
       return { ok: false, cancelled: false, error: NO_WORKSPACE_MESSAGE };
+    }
+    if (this.pinnedRunRoot !== null) {
+      // A Mission task or cascade verification runs in its own project,
+      // never in another open folder and without a second prompt.
+      const pinned = open.find((folder) => folder.path === validateChosenWorkspace(this.pinnedRunRoot, open));
+      return pinned
+        ? { ok: true, root: pinned.path, label: workspaceDisplayLabel(pinned) ?? pinned.path }
+        : { ok: false, cancelled: false, error: 'The project folder of this run is no longer open.' };
     }
     if (open.length === 1) {
       const only = open[0] as OpenWorkspaceFolder;
@@ -1411,12 +1687,18 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
 
   private waitForAgentDecision(pending: PendingAgentAction, signal: AbortSignal): Promise<AgentDecision> {
     this.agentPending = pending;
+    if (this.activeMission !== null) {
+      void this.updateActiveMission((mission) => setWaiting(mission, true));
+    }
     this.status = `Waiting for your approval: ${pending.tool}.`;
     void this.postState();
     return new Promise<AgentDecision>((resolve) => {
       const waiter = {
         resolve: (choice: AgentDecision): void => {
           signal.removeEventListener('abort', onAbort);
+          if (this.activeMission !== null) {
+            void this.updateActiveMission((mission) => setWaiting(mission, false));
+          }
           resolve(choice);
         },
       };
@@ -1444,7 +1726,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     generation: RunGeneration,
     resolvedTarget?: { root: string; label: string },
   ): Promise<void> {
-    const profile: AgentProfileId = this.settings.agentProfile ?? DEFAULT_AGENT_PROFILE;
+    const profile: AgentProfileId = capProfile(this.settings.agentProfile ?? DEFAULT_AGENT_PROFILE, this.missionProfileCap);
     const target: Awaited<ReturnType<RameCodeViewProvider['resolveAgentRunRoot']>> = resolvedTarget
       ? { ok: true, root: resolvedTarget.root, label: resolvedTarget.label }
       : await this.resolveAgentRunRoot();
@@ -1470,6 +1752,10 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     // Bind the verified target to this run and surface it for verification.
     // A later thread clears this display; it is never reused silently.
     this.agentRunWorkspace = { root: target.root, label: target.label };
+    // Settings memory follows the project the user just chose for the run.
+    if (this.memoryPending === null) {
+      this.memoryRoot = target.root;
+    }
     await this.postState();
     const model = generation.model;
     try {
@@ -1509,9 +1795,25 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     const thread = this.store.get(threadId);
     const history: AgentChatMessage[] = [];
     if (thread) {
+      // A Mission internal run gets its earlier internal runs (host prompts,
+      // their replies and records, host status notes) from the host's
+      // checkpoint in its prompt, not as replayed history; that includes its
+      // own prompt, which is sent once as the goal. What the user wrote in
+      // the thread, and the replies to it, are still sent. The stored thread
+      // and the Mission record are unchanged.
+      const missionRun = this.missionAuto !== null;
+      let hostSegment = false;
       // buildAgentMessages keeps the most recent messages and tells the
       // model how many older ones it left out.
       for (const turn of thread.turns) {
+        if (missionRun) {
+          if (turn.kind === 'user') {
+            hostSegment = turn.host === true;
+          }
+          if (hostSegment) {
+            continue;
+          }
+        }
         if (turn.kind === 'user') {
           history.push({ role: 'user', content: historyText(turn.text) });
         } else if (turn.kind === 'assistant') {
@@ -1536,6 +1838,24 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     const fs = this.agentFsFor(workspaceId);
     const heldCanonicalRoot = await this.heldCanonicalRoot(workspaceId, fs);
     const extra: AgentChatMessage[] = [];
+    // Project memory of the canonical root this run is bound to. The model
+    // reads it as a labeled snapshot and can only propose changes.
+    // The label is the folder name only: the model never receives the root path.
+    const memoryScope = { scopeId: scopeIdForRoot(heldCanonicalRoot), label: path.basename(target.root) };
+    const runTools = [...buildAgentToolDefinitions(), ...buildMemoryToolDefinitions()];
+    extra.push({ role: 'system', content: `${MEMORY_RULES_TEXT}\n${await this.memorySnapshotText(memoryScope, fs)}` });
+    // Evidence for bind_artifact: file writes and host-run tests of this run.
+    let workspaceWrites = 0;
+    // Mission runs: identical read-only results already returned in this run,
+    // the repeats seen, and the one push to act before a run ends without a change.
+    const seenReadResults = new Map<string, { digest: string; step: number }>();
+    let repeatedReads = 0;
+    let actNudged = false;
+    let lowBudgetNoted = false;
+    // Files this run wrote, for the bind_artifact hint after a passing test.
+    const changedFiles = new Set<string>();
+    const testRuns: Array<{ commandId: string; exitCode: number | null; writes: number; at: number; outputDigest: string }> = [];
+    const memoryProposals = new Map<string, MemoryProposal>();
     // Host-verified record of every action this run executed (or that did
     // not run), appended to the final report so the persisted thread never
     // rests on the model's own claims alone.
@@ -1551,11 +1871,18 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     let lastStepToolCallsRefused = false;
     let protocolRepairs = 0;
     let emptyReplies = 0;
+    // Why the run stopped, for the cascade: only a capability stop can be helped by advice.
+    let stopKind = 'policy' as LocalStopKind;
     // Measured input tokens of the last step refine the next estimate.
     let calibration: { chars: number; tokens: number } | null = null;
     let lastBudgetNote: string | null = null;
     const outcome = await this.agentRunner.start(async (signal) => {
       agentSteps: for (let step = 0; step < MAX_AGENT_STEPS; step++) {
+        this.agentStepNow = step + 1;
+        if (this.missionAuto !== null) {
+          // The Mission card shows "step X/12": publish each new step.
+          await this.postState();
+        }
         const stale = await this.checkWorkspaceStillHeld(workspaceId);
         if (!stale.ok) {
           return 'stale';
@@ -1566,6 +1893,15 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
         }
         if (signal.aborted) {
           throw new DOMException('Aborted', 'AbortError');
+        }
+        if (this.missionAuto !== null && !lowBudgetNoted && MAX_AGENT_STEPS - step <= MISSION_LOW_BUDGET_STEPS && workspaceWrites === 0 && testRuns.length === 0) {
+          lowBudgetNoted = true;
+          extra.push({
+            role: 'system',
+            content:
+              `Only ${MAX_AGENT_STEPS - step} model steps remain in this internal run and nothing has changed yet. Stop exploring: ` +
+              'make the smallest change that meets the task now, run the allowlisted test, then report.',
+          });
         }
         if (MAX_AGENT_STEPS - step === AGENT_STEPS_WARNING_REMAINING) {
           // Without a warning the run could end at the budget with work done
@@ -1594,7 +1930,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
         // honors "none". The host refuses last-step tool calls either way.
         const toolChoice = lastStep && provider === 'local' ? 'none' : 'auto';
         const messages = buildAgentMessages(workspaceId, history, text, extra);
-        const estimateBody = { messages, tools: buildAgentToolDefinitions() };
+        const estimateBody = { messages, tools: runTools };
         let stepRequest: ReturnType<RameCodeViewProvider['generationRequest']>;
         try {
           stepRequest = this.generationRequest(generation, estimateBody, calibration);
@@ -1609,6 +1945,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
             this.store.save(appendErrorTurn(current, detail.slice(0, 500)));
           }
           this.status = detail;
+          stopKind = 'context';
           return 'policy-stop';
         }
         if (stepRequest.note !== null && stepRequest.note !== lastBudgetNote) {
@@ -1619,7 +1956,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
         let completion: AgentCompletion;
         try {
           completion = provider === 'cloud'
-            ? await createMetaAgentCompletion({ apiKey, model, messages, generation: stepRequest.request, signal }).then((result) => {
+            ? await createMetaAgentCompletion({ apiKey, model, messages, generation: stepRequest.request, tools: runTools, signal }).then((result) => {
                 this.recordUsage('cloud', result.usage);
                 return result;
               })
@@ -1628,6 +1965,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
                 model,
                 messages,
                 generation: stepRequest.request,
+                tools: runTools,
                 signal,
                 toolChoice,
               }).then((result) => {
@@ -1649,15 +1987,19 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
           steps += 1;
           protocolRepairs += 1;
           const truncated = error instanceof AgentOutputTruncatedError ? error : null;
+          const unparsed = error instanceof LocalMalformedToolCallError;
           if (protocolRepairs > 2) {
             const detail = truncated
               ? `The model's replies were repeatedly cut off at the ${truncated.maxCompletionTokens}-token output limit. No incomplete action ran and no success was claimed.`
-              : 'The model repeatedly produced invalid tool arguments. No invalid action ran.';
+              : unparsed
+                ? 'The local server repeatedly could not parse the model\'s tool calls. None of them ran and no success was claimed.'
+                : 'The model repeatedly produced invalid tool arguments. No invalid action ran.';
             const current = this.store.get(threadId);
             if (current) {
               this.store.save(appendErrorTurn(current, detail));
             }
             this.status = detail;
+            stopKind = truncated ? 'truncation' : 'capability';
             return 'policy-stop';
           }
           const providerLabel = provider === 'local' ? 'local model' : 'Meta cloud model';
@@ -1672,6 +2014,19 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
                 'Split a large edit into several smaller apply_patch calls, and keep the final report brief.',
             });
             this.status = `The ${providerLabel} reply was cut off at its ${truncated.maxCompletionTokens}-token limit; asking for a shorter step (${protocolRepairs}/2)…`;
+            await this.postState();
+            continue agentSteps;
+          }
+          if (unparsed) {
+            // The server rejected the reply before any call reached the host:
+            // nothing ran, so there is nothing uncertain to check.
+            extra.push({
+              role: 'system',
+              content:
+                'The local server could not parse your previous reply as a tool call, so it was not executed and nothing changed. ' +
+                'Reply with one smaller, well-formed tool call. To change part of an existing file, use replace_in_file with a short exact fragment instead of rewriting the whole file.',
+            });
+            this.status = `The local server could not parse the ${providerLabel}'s tool call; nothing ran. Asking for a smaller step (${protocolRepairs}/2)…`;
             await this.postState();
             continue agentSteps;
           }
@@ -1708,7 +2063,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
             extra.push({
               role: 'system',
               content:
-                'Your previous response was empty. Continue the task with one valid tool call, or return the required concise final report. Do not return an empty response.',
+                this.missionAuto !== null && workspaceWrites === 0 && testRuns.length === 0
+                  ? 'Your previous response was empty. Continue the task with one valid tool call that moves it forward: the change, or the allowlisted test. Do not return an empty response.'
+                  : 'Your previous response was empty. Continue the task with one valid tool call, or return the required concise final report. Do not return an empty response.',
             });
             this.status = `Retrying an empty Agent response (${emptyReplies}/2)…`;
             await this.postState();
@@ -1721,7 +2078,41 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
               this.store.save(appendErrorTurn(current, detail));
             }
             this.status = detail;
+            stopKind = 'capability';
             return 'policy-stop';
+          }
+          if (this.missionAuto !== null && !actNudged && workspaceWrites === 0 && testRuns.length === 0 && step < MAX_AGENT_STEPS - AGENT_STEPS_WARNING_REMAINING) {
+            // Ending now would be a run with no change and no test: ask once
+            // to act with the steps left. The step budget is unchanged.
+            actNudged = true;
+            extra.push({ role: 'assistant', content: reply.slice(0, 2000) });
+            extra.push({
+              role: 'system',
+              content:
+                `Your reply would end this internal run, but no file changed and no test ran, so the host would record no progress. ${MAX_AGENT_STEPS - step - 1} model steps remain. ` +
+                'Do not explore again: make the smallest change that meets the task now (read only the file you change if you need its exact text and sha256), run the allowlisted test, then report. ' +
+                'If something really blocks the change, say what it is in one sentence.',
+            });
+            this.status = 'The Agent stopped without a change or a test; asking it to act with the steps left…';
+            await this.postState();
+            continue agentSteps;
+          }
+          const lastTestNow = testRuns.length > 0 ? testRuns[testRuns.length - 1] : undefined;
+          const untestedChange = workspaceWrites > 0 && (lastTestNow === undefined || workspaceWrites > lastTestNow.writes);
+          if (this.missionAuto !== null && !actNudged && untestedChange && step < MAX_AGENT_STEPS - AGENT_STEPS_WARNING_REMAINING) {
+            // A change with no test after it cannot be accepted: ask once to
+            // run the test now instead of spending another internal run on it.
+            actNudged = true;
+            extra.push({ role: 'assistant', content: reply.slice(0, 2000) });
+            extra.push({
+              role: 'system',
+              content:
+                `Your reply would end this internal run, but no allowlisted test ran after your last change, so the host cannot accept the task. ${MAX_AGENT_STEPS - step - 1} model steps remain. ` +
+                'Run the allowlisted test now; if it fails, fix the change and run it again; then report.',
+            });
+            this.status = 'The Agent changed files without running the test; asking it to run the test now…';
+            await this.postState();
+            continue agentSteps;
           }
           const current = this.store.get(threadId);
           if (current) {
@@ -1729,6 +2120,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
             // labels or a "Host record" the model copied are cut from its prose.
             const prefix = `Agent (${profile}, ${provider}): `;
             const prose = sanitizeAgentReply(reply).text;
+            this.lastAgentOutcome = { threadId, outcome: 'done', hostRecord: [...hostRecord], report: prose.slice(0, 1200) };
             const record = hostRecord.length > 0 ? hostRecord : [NO_HOST_ACTIONS_LINE];
             this.store.save(
               appendAssistantTurn(current, `${prefix}${fitTurnText(prose, MAX_ASSISTANT_TEXT_LENGTH - prefix.length)}`, undefined, record),
@@ -1786,6 +2178,63 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
               ...described,
               preconditions: await this.bindPatchApprovalPreconditions(call, fs, heldCanonicalRoot),
             };
+          }
+          const frozenHit = WORKSPACE_WRITE_TOOLS.has(call.tool) ? this.frozenTarget(described.targets) : null;
+          if (frozenHit !== null) {
+            // The user's acceptance check is frozen for this Mission: no write,
+            // move, or delete of it is even proposed. node_modules is only
+            // blocked for RAME's own tools; it is not hashed.
+            const dependencies = frozenHit === 'node_modules' || frozenHit.startsWith('node_modules/');
+            recordHostAction(
+              call,
+              described.targets,
+              dependencies ? `not proposed: RAME's tools do not change ${frozenHit} during this Mission` : `not proposed: ${frozenHit} is frozen for this Mission`,
+            );
+            extra.push({
+              role: 'assistant',
+              content: '',
+              tool_calls: [{ id: call.id, type: 'function', function: { name: call.tool, arguments: JSON.stringify(call.args) } }],
+            });
+            extra.push({
+              role: 'tool',
+              tool_call_id: call.id,
+              content: dependencies
+                ? `Not proposed: RAME Code's tools do not change installed dependencies (${frozenHit}) during a Mission with an acceptance check. Change the code instead.`
+                : `Not proposed: ${frozenHit} is part of the user's frozen acceptance check for this Mission and cannot be changed, moved, or deleted. Change the code instead.`,
+            });
+            this.status = dependencies
+              ? 'A change inside node_modules was refused; returning the reason to the Agent…'
+              : 'A change to a frozen acceptance file was refused; returning the reason to the Agent…';
+            await this.postState();
+            continue agentSteps;
+          }
+          if (call.tool === 'replace_in_file') {
+            // Never ask the user to approve a change that cannot apply: the
+            // file must have the expected hash and hold oldText exactly once.
+            let check: Awaited<ReturnType<RameCodeViewProvider['checkReplacement']>>;
+            try {
+              check = await this.checkReplacement(call, fs, heldCanonicalRoot);
+            } catch (error) {
+              const detail = error instanceof Error ? error.message : 'The path is not allowed.';
+              this.failAgentWithAudit(call, provider, threadId, workspaceId, 'policy', detail, `Agent tool failed (${detail}).`);
+              return 'policy-stop';
+            }
+            if (!check.ok) {
+              recordHostAction(call, described.targets, `not proposed: ${check.error}`);
+              extra.push({
+                role: 'assistant',
+                content: '',
+                tool_calls: [{ id: call.id, type: 'function', function: { name: call.tool, arguments: JSON.stringify(call.args) } }],
+              });
+              extra.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: truncateToolOutput(`Not proposed: ${check.error} Nothing was changed. Read the file again and propose a fragment that appears exactly once.`),
+              });
+              this.status = 'The replace_in_file proposal was not prepared; returning the reason to the Agent…';
+              await this.postState();
+              continue agentSteps;
+            }
           } else if (call.tool === 'create_directory') {
             const target = String((call.args as Record<string, unknown>).path ?? '');
             described = {
@@ -1802,6 +2251,38 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
               },
             };
           }
+          // Memory writes: the store prepares the exact proposal; the user's
+          // approval of this card is the only thing that can commit it.
+          let memoryProposal: MemoryProposal | null = null;
+          if (call.tool === 'propose_decision' || call.tool === 'bind_artifact') {
+            const prepared =
+              call.tool === 'propose_decision'
+                ? this.prepareModelDecision(call, memoryScope, threadId, provider)
+                : await this.prepareModelArtifact(call, memoryScope, threadId, provider, fs, heldCanonicalRoot, testRuns, workspaceWrites);
+            if (!prepared.ok) {
+              recordHostAction(call, described.targets, `not proposed: ${prepared.error}`);
+              extra.push({
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  { id: call.id, type: 'function', function: { name: call.tool, arguments: JSON.stringify(call.args) } },
+                ],
+              });
+              extra.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: truncateToolOutput(
+                  `Not proposed: ${prepared.error} Nothing was written. If the version was outdated, call read_decisions before proposing again; otherwise follow the reason above.`,
+                ),
+              });
+              this.status = `The ${call.tool} proposal was not prepared; returning the reason to the Agent…`;
+              await this.postState();
+              continue agentSteps;
+            }
+            memoryProposal = prepared.value;
+            memoryProposals.set(call.id, memoryProposal);
+            described = this.describeMemoryProposal(memoryProposal);
+          }
           const digest = computeActionDigest({
             tool: call.tool,
             targets: described.targets,
@@ -1811,7 +2292,14 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
             threadId,
             preconditions: described.preconditions,
           });
-          const auto = isAutoAllowed(profile, call.tool);
+          // A Mission grant can run more tools without a card, but only for
+          // the Mission, project, provider, and model it was given for.
+          const auto =
+            isAutoAllowed(profile, call.tool) ||
+            this.missionGrantAllows(call.tool, memoryScope.scopeId, provider, model, {
+              commandId: String((call.args as Record<string, unknown>).commandId ?? ''),
+              packageJsonHash: hashContent(testContext.packageJsonRaw),
+            });
           let approvedPending: PendingAgentAction | null = null;
           if (!auto) {
             const pending = createPendingAction(
@@ -1834,10 +2322,14 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
             const choice = await this.waitForAgentDecision(pending, signal);
             if (choice.kind === 'cancelled') {
               // Cancellation is not a user rejection: report it as such.
+              this.memory.discardProposals({ threadId });
               this.recordAgentAudit(pending, 'rejected', 'cancelled before approval');
               throw new DOMException('Aborted', 'AbortError');
             }
             if (choice.kind === 'stale') {
+              if (memoryProposal !== null) {
+                this.memory.discardProposals({ proposalId: memoryProposal.proposalId });
+              }
               recordHostAction(call, described.targets, `did not run: approval invalidated (${choice.reason})`);
               extra.push({
                 role: 'assistant',
@@ -1859,6 +2351,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
             }
             if (choice.kind !== 'approve') {
               approvedPending = null;
+              this.memory.discardProposals({ threadId });
               const current = this.store.get(threadId);
               if (current) {
                 this.store.save(appendErrorTurn(current, 'Action rejected by user. No changes were made.'));
@@ -1893,17 +2386,43 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
               return 'policy-stop';
             }
           }
+          // Mission journal: written before the action runs, so an
+          // interruption before its result is saved stays visible as uncertain.
+          const journalId = `act-${digest.slice(0, 12)}`;
+          if (this.activeMission !== null) {
+            const journaled = await this.updateActiveMission((mission) =>
+              journalAction(mission, 'started', journalId, `${call.tool} ${described.targets.join(', ')}`.slice(0, 200), Date.now()),
+            );
+            if (!journaled) {
+              const detail = 'The Mission could not record this action before running it, so it did not run.';
+              recordHostAction(call, described.targets, `did not run: ${detail}`);
+              const current = this.store.get(threadId);
+              if (current) {
+                this.store.save(appendErrorTurn(current, detail));
+              }
+              this.status = detail;
+              return 'policy-stop';
+            }
+          }
           let resultText: string;
           try {
-            resultText = await this.executeAgentTool(call, fs, testContext.allowlist, signal, workspaceId, heldCanonicalRoot);
+            resultText =
+              memoryProposal !== null
+                ? await this.commitModelProposal(memoryProposal, approvedPending, threadId, provider)
+                : await this.executeAgentTool(call, fs, testContext.allowlist, signal, workspaceId, heldCanonicalRoot);
           } catch (error) {
             if (
               (error instanceof Error && error.name === 'AbortError') ||
               (error instanceof DOMException && error.name === 'AbortError')
             ) {
+              // Cancelled while running: its effect is unknown, so the journal
+              // entry stays open (uncertain) on purpose.
               throw error;
             }
             const detail = error instanceof Error ? error.message : 'Tool failed.';
+            if (this.activeMission !== null) {
+              await this.updateActiveMission((mission) => journalAction(mission, 'finished', journalId, `did not complete: ${detail}`.slice(0, 200), Date.now()));
+            }
             if (isRecoverableAgentToolError(detail)) {
               // Show that the approved/auto action did not run (or, for a
               // regex search, was stopped with no results), and why.
@@ -1948,6 +2467,22 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
             summarizeToolResult(call.tool, resultText),
           );
           recordHostAction(call, described.targets, summarizeToolResult(call.tool, resultText));
+          if (this.activeMission !== null) {
+            await this.updateActiveMission((mission) => journalAction(mission, 'finished', journalId, summarizeToolResult(call.tool, resultText), Date.now()));
+          }
+          if (call.tool === 'run_tests') {
+            const exit = /^exit=(\d+)/.exec(resultText);
+            testRuns.push({
+              commandId: String((call.args as Record<string, unknown>).commandId ?? ''),
+              exitCode: exit ? Number(exit[1]) : null,
+              writes: workspaceWrites,
+              at: Date.now(),
+              outputDigest: hashContent(resultText),
+            });
+          } else if (WORKSPACE_WRITE_TOOLS.has(call.tool)) {
+            workspaceWrites += 1;
+            described.targets.forEach((target) => changedFiles.add(target));
+          }
           extra.push({
             role: 'assistant',
             content: '',
@@ -1955,7 +2490,25 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
               { id: call.id, type: 'function', function: { name: call.tool, arguments: JSON.stringify(call.args) } },
             ],
           });
-          extra.push({ role: 'tool', tool_call_id: call.id, content: truncateToolOutput(resultText) });
+          const bindHint = call.tool === 'run_tests' ? this.bindArtifactHint(resultText, memoryScope.scopeId, changedFiles, String((call.args as Record<string, unknown>).commandId ?? '')) : '';
+          let toolContent = truncateToolOutput(resultText) + bindHint;
+          if (this.missionAuto !== null && MISSION_REPEAT_CHECK_TOOLS.has(call.tool)) {
+            // The same read with the same result earlier in this run brings no new information.
+            const key = `${call.tool} ${JSON.stringify(call.args)}`;
+            const digest = hashContent(resultText);
+            const earlier = seenReadResults.get(key);
+            if (earlier !== undefined && earlier.digest === digest) {
+              repeatedReads += 1;
+              toolContent =
+                call.tool === 'read_file'
+                  ? `No new information: this is exactly what you read at step ${earlier.step} of this run (same sha256). Do not read it again; act on it now.\n\n${toolContent}`
+                  : `No new information: identical to your ${call.tool} at step ${earlier.step} of this run, shown above. Do not repeat it; make the change, then run the test.`;
+              this.status = `A repeated ${call.tool} returned nothing new; telling the Agent…`;
+            } else {
+              seenReadResults.set(key, { digest, step: step + 1 });
+            }
+          }
+          extra.push({ role: 'tool', tool_call_id: call.id, content: toolContent });
           // Show executed actions even when no prompt was required.
           await this.postState();
         }
@@ -1990,6 +2543,44 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     } else if (outcome === 'policy-stop') {
       this.running = false;
       this.connection = 'error';
+    }
+    // A proposal never outlives its run: an unapproved one is discarded.
+    this.memory.discardProposals({ threadId });
+    if (outcome !== 'done') {
+      this.lastAgentOutcome = { threadId, outcome, hostRecord: [...hostRecord], report: '' };
+    }
+    const lastTestRun = testRuns.length > 0 ? testRuns[testRuns.length - 1] : undefined;
+    const lastTest = lastTestRun ? { commandId: lastTestRun.commandId, exitCode: lastTestRun.exitCode } : null;
+    this.agentStepNow = null;
+    if (this.lastAgentOutcome !== null && this.lastAgentOutcome.threadId === threadId) {
+      // Host observation for the Mission loop: what changed, as the files are now.
+      const writes: Array<{ path: string; hash: string | null }> = [];
+      for (const file of [...changedFiles].slice(0, 50)) {
+        writes.push({ path: file, hash: await this.currentFileHash(fs, file) });
+      }
+      this.lastAgentOutcome = {
+        ...this.lastAgentOutcome,
+        lastTest,
+        writes,
+        wroteAfterLastTest: lastTestRun ? workspaceWrites > lastTestRun.writes : workspaceWrites > 0,
+        repeatedReads,
+      };
+    }
+    let capabilityReason: string | null = null;
+    if (outcome === 'budget-stop') {
+      capabilityReason = `the run reached its ${MAX_AGENT_STEPS}-step budget without finishing`;
+    } else if (outcome === 'policy-stop' && stopKind === 'capability') {
+      capabilityReason = this.status.slice(0, 300);
+    } else if (outcome === 'done' && lastTest !== null && lastTest.exitCode !== 0) {
+      capabilityReason = `the run ended with ${lastTest.commandId} still failing (exit ${lastTest.exitCode ?? 'unknown'})`;
+    }
+    // Not inside a Mission task (its own resume flow applies) nor inside a
+    // cascade's verification run (no nested consultations).
+    if (this.lastAgentOutcome !== null && this.lastAgentOutcome.threadId === threadId) {
+      this.lastAgentOutcome = { ...this.lastAgentOutcome, capabilityReason };
+    }
+    if (provider === 'local' && capabilityReason !== null && this.cascadeVerification === null && this.activeMission === null) {
+      this.offerConsult({ threadId, root: target.root, task: text, reason: capabilityReason, hostRecord: [...hostRecord], scopeId: memoryScope.scopeId });
     }
     void steps;
     void buildAgentSystemPrompt;
@@ -2209,6 +2800,1534 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     return bound;
   }
 
+  // ----- Mission: persistent goal, tasks run one bounded Agent run at a time -----
+
+  /** A strict Mission plan becomes a persistent Mission of the project. */
+  private async createMissionFromPlan(threadId: string, plan: MissionPlan): Promise<void> {
+    const scope = await this.memoryScopeForUi();
+    if (!scope.ok) {
+      this.status = `${this.status} The plan was not saved as a Mission: ${scope.error}`;
+      return;
+    }
+    const created = await this.missions.create({
+      scopeId: scope.scopeId,
+      scopeLabel: scope.label,
+      threadId,
+      goal: plan.goal,
+      steps: plan.steps.map((step) => ({ id: step.id, title: step.title, successCriterion: step.successCriterion })),
+      decisions: this.memory.listCurrentDecisions(scope.scopeId).map((entry) => ({ key: entry.key, version: entry.version })),
+    });
+    this.status = created.ok
+      ? `${this.status} Saved as a Mission with ${created.value.tasks.length} task(s); review it and authorize it in the Mission card of this thread.`
+      : `${this.status} The plan was not saved as a Mission: ${created.error}`;
+  }
+
+  /**
+   * Updates of the running Mission are queued so each one reads the
+   * revision the previous one wrote; none can be lost to a race.
+   */
+  private updateActiveMission(change: (mission: MissionRecord) => MissionResult<MissionRecord>): Promise<boolean> {
+    const next = this.missionUpdates.then(async () => {
+      const active = this.activeMission;
+      if (active === null) {
+        return false;
+      }
+      const result = await this.missions.update(active.id, active.revision, change);
+      if (result.ok) {
+        this.activeMission = { id: result.value.id, revision: result.value.revision };
+      }
+      return result.ok;
+    });
+    this.missionUpdates = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  /**
+   * Start (or resume) the current task of a Mission: one ordinary bounded
+   * Agent run in the Mission's thread. The user starts every run; a resumed
+   * task is told what already ran and never writes without approval.
+   */
+  async runMissionTask(missionId: string, expectedRevision: number): Promise<void> {
+    if (this.running || this.agentRunner.isRunning) {
+      this.status = 'A request is already running. Cancel it before starting a Mission task.';
+      await this.postState();
+      return;
+    }
+    await this.missionRecovery;
+    const mission = this.missions.get(missionId);
+    const scope = await this.memoryScopeForUi();
+    if (mission === null || !scope.ok || mission.scopeId !== scope.scopeId) {
+      this.status = 'That Mission does not belong to the open project.';
+      await this.postState();
+      return;
+    }
+    if (mission.revision !== expectedRevision) {
+      this.status = 'The Mission changed; review it again before continuing.';
+      await this.refreshMemoryView();
+      await this.postState();
+      return;
+    }
+    const allowed = canRunTask(mission);
+    if (!allowed.ok) {
+      this.status = allowed.error;
+      await this.postState();
+      return;
+    }
+    if (!this.store.get(mission.threadId)) {
+      this.status = 'The Mission thread no longer exists.';
+      await this.postState();
+      return;
+    }
+    // The prompt is built before the run counter moves, so a task that ran
+    // before is presented as resumed with what already happened.
+    const resumed = allowed.value.runs > 0;
+    const prompt = buildTaskPrompt(mission);
+    const decisions = this.memory.listCurrentDecisions(scope.scopeId).map((entry) => ({ key: entry.key, version: entry.version }));
+    const started = await this.missions.update(mission.id, mission.revision, (draft) => startTaskRun(draft, decisions, Date.now()));
+    if (!started.ok) {
+      this.status = started.error;
+      await this.postState();
+      return;
+    }
+    this.activeMission = { id: started.value.id, revision: started.value.revision };
+    this.missionProfileCap = resumed ? 'safe-auto' : null;
+    this.lastAgentOutcome = null;
+    this.activeThreadId = mission.threadId;
+    this.pinnedRunRoot = scope.root;
+    this.hostPromptText = prompt.trim();
+    try {
+      await this.sendMessage(prompt, 'agent', providerToRuntime(this.settings.provider));
+    } finally {
+      this.pinnedRunRoot = null;
+      this.hostPromptText = null;
+      const outcome = this.lastAgentOutcome as { threadId: string; outcome: string; hostRecord: string[]; report: string } | null;
+      const reason = this.status;
+      if (outcome !== null && outcome.threadId === mission.threadId && outcome.outcome === 'done') {
+        await this.updateActiveMission((draft) => completeTask(draft, outcome.hostRecord, outcome.report, Date.now()));
+      } else {
+        await this.updateActiveMission((draft) =>
+          interrupt(draft, `The task run ended without completing: ${reason}`, Date.now(), outcome?.hostRecord ?? []),
+        );
+      }
+      this.activeMission = null;
+      this.missionProfileCap = null;
+      await this.refreshMemoryView();
+      await this.postState();
+    }
+  }
+
+  // ----- Cascade: local stop → approved Meta advice → local verification -----
+
+  /**
+   * After a local capability stop: prepare the exact consultation payload
+   * (no file contents) for the user to approve or dismiss. Nothing is sent.
+   */
+  private offerConsult(input: { threadId: string; root: string; task: string; reason: string; hostRecord: string[]; scopeId: string }): void {
+    if (!this.settings.allowCloudEscalation) {
+      this.status = `${this.status} Asking Meta for advice needs cloud escalation ON in Settings; nothing was sent.`;
+      return;
+    }
+    const model = this.selectedCloudModel();
+    const payload = buildConsultPayload({
+      task: input.task,
+      reason: input.reason,
+      hostRecord: input.hostRecord,
+      decisions: this.memory.listCurrentDecisions(input.scopeId).map((entry) => ({ key: entry.key, value: entry.value, version: entry.version })),
+    });
+    this.consultOffer = {
+      threadId: input.threadId,
+      root: input.root,
+      task: input.task,
+      reason: input.reason,
+      payload,
+      model,
+      digest: consultDigest(payload, model, input.threadId),
+      createdAt: Date.now(),
+      generation: this.agentGeneration,
+    };
+    this.status = `${this.status} You can ask Meta ${model} for advice with the exact text shown, or dismiss.`;
+  }
+
+  /** Host-written record of the cascade, kept in the thread apart from model text. */
+  private appendCascadeRecord(threadId: string, text: string, lines: string[]): void {
+    const current = this.store.get(threadId);
+    if (current) {
+      this.store.save(appendAssistantTurn(current, text, undefined, lines.map((line) => `• ${line}`.slice(0, MAX_HOST_RECORD_LINE_LENGTH))));
+    }
+  }
+
+  /** The user approved this exact payload: ask Meta once, then verify locally. */
+  async approveConsult(digest: string): Promise<void> {
+    const offer = this.consultOffer;
+    const expired = offer !== null && Date.now() - offer.createdAt > CONSULT_OFFER_TTL_MS;
+    if (offer === null || offer.digest !== digest || offer.generation !== this.agentGeneration || expired) {
+      if (expired) {
+        this.consultOffer = null;
+      }
+      this.status = 'That consultation approval is no longer valid. Nothing was sent.';
+      await this.postState();
+      return;
+    }
+    if (this.running || this.missionRunner.isRunning || this.chatRunner.isRunning || this.agentRunner.isRunning) {
+      this.status = 'A request is already running. Cancel it or wait before sending to Meta. Nothing was sent.';
+      await this.postState();
+      return;
+    }
+    if (!this.settings.allowCloudEscalation) {
+      this.status = 'Cloud escalation is OFF. Nothing was sent.';
+      await this.postState();
+      return;
+    }
+    const apiKey = await this.secrets.get(API_KEY_SECRET);
+    if (!apiKey) {
+      this.status = 'No Meta Model API key is stored. Save one in Settings or choose a local runtime.';
+      await this.postState();
+      return;
+    }
+    // One use: from here on this offer can never be approved again.
+    this.consultOffer = null;
+    const lines = [
+      `cascade: the local run stopped for a capability reason: ${offer.reason}`,
+      `cascade: you approved sending ${offer.payload.length} characters to Meta ${offer.model} (digest ${offer.digest.slice(0, 12)}…); no file contents were included`,
+    ];
+    this.activeThreadId = offer.threadId;
+    this.running = true;
+    this.connection = 'working';
+    this.status = `Asking Meta ${offer.model} for advice with the approved text only…`;
+    await this.postState();
+    let advice: CascadeAdvice;
+    try {
+      const generation = await this.snapshotGeneration('cloud');
+      const { request } = this.generationRequest(generation, { messages: [{ role: 'user', content: offer.payload }] });
+      const result = await this.chatRunner.start(async ({ signal }) =>
+        createCascadeAdvice({ apiKey, model: offer.model, payload: offer.payload, schema: cascadeAdviceSchema, generation: request, signal }),
+      );
+      this.recordUsage('cloud', result.usage);
+      lines.push(`cascade: Meta ${offer.model} answered (in ${result.usage.inputTokens} / out ${result.usage.outputTokens} tokens)`);
+      advice = validateCascadeAdvice(JSON.parse(result.content) as unknown);
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : 'Unknown error.';
+      const detail = redactKeyFromText(raw, apiKey).replace(/\s+/g, ' ').trim().slice(0, 200) || 'Unknown error.';
+      const cancelled = error instanceof Error && error.name === 'AbortError';
+      lines.push(
+        cancelled
+          ? 'cascade: you cancelled the consultation; the local verification run was not started'
+          : `cascade: the advice was not used (${detail}); the local verification run was not started`,
+      );
+      this.running = false;
+      this.connection = cancelled ? 'cancelled' : 'error';
+      this.status = cancelled ? 'Request cancelled.' : `The Meta advice could not be used (${detail}). Nothing else was sent and nothing changed.`;
+      this.appendCascadeRecord(offer.threadId, 'Cascade stopped before the local verification run.', lines);
+      await this.postState();
+      return;
+    }
+    lines.push(`cascade: advice kept only as untrusted data (${advice.steps.length} step(s), ${advice.checks.length} check(s)); it wrote nothing`);
+    this.running = false;
+    // The local verification run: a normal Agent run in the same project,
+    // with the advice quoted as data in a host-written prompt.
+    const prompt = buildVerificationPrompt({ task: offer.task, reason: offer.reason, model: offer.model, advice }).slice(0, 7900);
+    this.cascadeVerification = { threadId: offer.threadId };
+    this.pinnedRunRoot = offer.root;
+    this.hostPromptText = prompt.trim();
+    this.lastAgentOutcome = null;
+    try {
+      await this.sendMessage(prompt, 'agent', providerToRuntime('local'));
+    } finally {
+      this.pinnedRunRoot = null;
+      this.hostPromptText = null;
+      this.cascadeVerification = null;
+    }
+    const outcome = this.lastAgentOutcome as RameCodeViewProvider['lastAgentOutcome'];
+    if (outcome !== null && outcome.threadId === offer.threadId) {
+      const test = outcome.lastTest ? `${outcome.lastTest.commandId} exit=${outcome.lastTest.exitCode ?? 'unknown'}` : 'no test ran';
+      lines.push(`cascade: local verification run ${outcome.outcome === 'done' ? 'finished' : `stopped (${outcome.outcome})`}; last test: ${test}`);
+    } else {
+      lines.push(`cascade: the local verification run did not start (${this.status.slice(0, 160)})`);
+    }
+    lines.push('cascade: no calibrated policy chose these steps; you approved each one');
+    const verified = outcome !== null && outcome.outcome === 'done' && outcome.lastTest?.exitCode === 0;
+    this.appendCascadeRecord(
+      offer.threadId,
+      verified ? 'Cascade finished: the local verification run passed its test.' : 'Cascade finished without a passing local test.',
+      lines,
+    );
+    await this.postState();
+  }
+
+  /** The user declined: nothing is sent, and the decision is recorded. */
+  async dismissConsult(): Promise<void> {
+    const offer = this.consultOffer;
+    this.consultOffer = null;
+    if (offer !== null) {
+      this.appendCascadeRecord(offer.threadId, 'Cascade not used.', [
+        `cascade: the local run stopped for a capability reason: ${offer.reason}`,
+        'cascade: you dismissed the consultation; nothing was sent to Meta',
+      ]);
+    }
+    this.status = 'Consultation dismissed. Nothing was sent to Meta.';
+    await this.postState();
+  }
+
+  // ----- Autonomous Mission (R9): bounded internal runs chained by the host -----
+
+  /** Hash of one workspace file now (null when missing or unreadable). */
+  private async currentFileHash(fs: AgentFs, file: string): Promise<string | null> {
+    const gate = checkAgentRelPath(file);
+    if (!gate.ok) {
+      return null;
+    }
+    try {
+      const rel = (gate as { ok: true; rel: string }).rel;
+      const st = await fs.stat(rel);
+      return st.kind === 'file' ? hashContent(await fs.readText(rel)) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * A target frozen by the running Mission's acceptance check (checked by
+   * hash), or inside node_modules (only blocked for RAME's own tools, not
+   * hashed: scripts, other processes, or the user can still change it).
+   */
+  private frozenTarget(targets: readonly string[]): string | null {
+    const auto = this.missionAuto;
+    if (auto === null) {
+      return null;
+    }
+    const frozen = frozenPaths(this.missions.get(auto.missionId));
+    if (frozen.length === 0) {
+      return null;
+    }
+    for (const target of targets) {
+      const gate = checkAgentRelPath(target);
+      const rel = gate.ok ? (gate as { ok: true; rel: string }).rel : target;
+      if (frozen.includes(rel) || rel === 'node_modules' || rel.startsWith('node_modules/')) {
+        return rel;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The user's acceptance check, run by the host itself (never the model):
+   * every frozen file and package.json must still have its granted hash, and
+   * the granted command must exit 0.
+   */
+  private async runAcceptance(
+    mission: MissionRecord,
+    root: string,
+    fs: AgentFs,
+  ): Promise<{ passed: boolean; summary: string; output: string; tampered: boolean }> {
+    const acceptance = mission.grant?.acceptance ?? null;
+    if (acceptance === null) {
+      return { passed: true, summary: 'no acceptance check', output: '', tampered: false };
+    }
+    for (const file of acceptance.files) {
+      if ((await this.currentFileHash(fs, file.path)) !== file.hash) {
+        return { passed: false, summary: `${file.path} changed since the Mission was authorized`, output: '', tampered: true };
+      }
+    }
+    if ((await this.currentFileHash(fs, 'package.json')) !== acceptance.packageJsonHash) {
+      return { passed: false, summary: 'package.json changed since the Mission was authorized', output: '', tampered: true };
+    }
+    const command = (await this.testCommandContext(root)).allowlist.find((entry) => entry.id === acceptance.commandId);
+    if (!command) {
+      return { passed: false, summary: `${acceptance.commandId} is no longer allowlisted`, output: '', tampered: true };
+    }
+    const controller = new AbortController();
+    this.acceptanceController = controller;
+    try {
+      const output = await this.runAllowlistedTest(command, controller.signal, root);
+      const exit = /^exit=(\d+)/.exec(output);
+      const code = exit ? Number(exit[1]) : null;
+      return { passed: code === 0, summary: `${acceptance.commandId} exit=${code ?? 'unknown'} with every frozen file intact`, output, tampered: false };
+    } finally {
+      this.acceptanceController = null;
+    }
+  }
+
+  /** Whether the running Mission's grant covers this tool for this exact run. */
+  private missionGrantAllows(
+    tool: string,
+    scopeId: string,
+    provider: string,
+    model: string,
+    test: { commandId: string; packageJsonHash: string },
+  ): boolean {
+    const auto = this.missionAuto;
+    if (auto === null || this.activeMission === null || auto.missionId !== this.activeMission.id || auto.holdAutonomy) {
+      return false;
+    }
+    return grantAllows(this.missions.get(auto.missionId), { missionId: auto.missionId, scopeId, provider, model }, tool, test);
+  }
+
+  private isLeaseAlive(lease: MissionLease): boolean {
+    if (lease.pid === process.pid) {
+      return LIVE_LEASE_TOKENS.has(lease.token);
+    }
+    try {
+      process.kill(lease.pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'EPERM';
+    }
+  }
+
+  /**
+   * The user authorizes the Mission once (mode, local model, optional Meta
+   * consultations) and starts it. Nothing runs before this explicit step.
+   */
+  async startMission(
+    missionId: string,
+    expectedRevision: number,
+    mode: MissionGrant['mode'],
+    escalation: { maxConsultations: number } | null,
+    trustedProject = false,
+    acceptance: { commandId: string; files: string[] } | null = null,
+  ): Promise<void> {
+    const mission = this.missions.get(missionId);
+    const scope = await this.memoryScopeForUi();
+    if (mission === null || !scope.ok || mission.scopeId !== scope.scopeId) {
+      this.status = 'That Mission does not belong to the open project.';
+      await this.postState();
+      return;
+    }
+    if (escalation !== null && !this.settings.allowCloudEscalation) {
+      this.status = 'Meta consultations need cloud escalation ON in Settings. Nothing was authorized.';
+      await this.postState();
+      return;
+    }
+    // The test commands are bound to the exact package.json they come from now.
+    const testContext = await this.testCommandContext(scope.root);
+    // The user's acceptance check is frozen now: its command and its files by hash.
+    let frozen: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }> } | null = null;
+    if (acceptance !== null) {
+      const files: Array<{ path: string; hash: string }> = [];
+      // Also frozen, when present: what decides how the check runs.
+      const environment: string[] = [];
+      for (const file of ACCEPTANCE_ENVIRONMENT_FILES) {
+        if ((await this.currentFileHash(scope.fs, file)) !== null && !acceptance.files.includes(file)) {
+          environment.push(file);
+        }
+      }
+      for (const file of [...acceptance.files, ...environment]) {
+        const hash = await this.currentFileHash(scope.fs, file);
+        const gate = checkAgentRelPath(file);
+        if (hash === null || !gate.ok) {
+          this.status = `The acceptance file ${file.slice(0, 120)} does not exist in this project. Nothing was authorized.`;
+          await this.postState();
+          return;
+        }
+        files.push({ path: (gate as { ok: true; rel: string }).rel, hash });
+      }
+      if (!testContext.allowlist.some((entry) => entry.id === acceptance.commandId) || testContext.packageJsonRaw.length === 0) {
+        this.status = `The acceptance command ${acceptance.commandId.slice(0, 60)} is not an allowlisted test of this project. Nothing was authorized.`;
+        await this.postState();
+        return;
+      }
+      frozen = { commandId: acceptance.commandId, packageJsonHash: hashContent(testContext.packageJsonRaw), files };
+    }
+    const granted = await this.missions.update(missionId, expectedRevision, (draft) =>
+      grantMission(
+        draft,
+        {
+          model: this.generationModel('local'),
+          mode,
+          escalation: escalation === null ? null : { model: this.selectedCloudModel(), maxConsultations: escalation.maxConsultations, maxOutputTokens: MISSION_CONSULT_OUTPUT_TOKENS },
+          tests:
+            mode === 'autonomous-workspace'
+              ? {
+                  trustedProject: trustedProject,
+                  packageJsonHash: testContext.packageJsonRaw.length > 0 ? hashContent(testContext.packageJsonRaw) : '',
+                  commandIds: testContext.allowlist.map((entry) => entry.id),
+                }
+              : null,
+          acceptance: frozen,
+        },
+        Date.now(),
+      ),
+    );
+    if (!granted.ok) {
+      this.status = granted.error;
+      await this.refreshMemoryView();
+      await this.postState();
+      return;
+    }
+    this.missionStarting = missionId;
+    try {
+      if (this.missionStartRequest !== null && this.missionStartRequest.missionId === missionId && this.missionStartRequest.state === 'authorizing') {
+        // The grant is saved: confirm the click before the first internal run.
+        this.missionStartRequest = { ...this.missionStartRequest, state: 'started' };
+        this.status = 'Mission started.';
+        await this.refreshMemoryView();
+        await this.postState();
+      }
+      await this.runMissionAutonomous(missionId, granted.value.revision);
+    } finally {
+      this.missionStarting = null;
+    }
+  }
+
+  /**
+   * One click of "Authorize and start": confirmed at once as authorizing,
+   * then as started or failed. While one start is being authorized, another
+   * (a double click, a second message) changes nothing.
+   */
+  private async requestMissionStart(requestId: string, start: () => Promise<void>, missionId: string): Promise<void> {
+    const current = this.missionStartRequest;
+    if (current !== null && (current.state === 'authorizing' || current.requestId === requestId)) {
+      await this.postState();
+      return;
+    }
+    if (this.missionAuto !== null && this.missionAuto.missionId === missionId) {
+      await this.postState();
+      return;
+    }
+    this.missionStartRequest = { requestId, missionId, state: 'authorizing', error: '' };
+    this.status = 'Authorizing the Mission…';
+    await this.refreshMemoryView();
+    await this.postState();
+    try {
+      await start();
+    } finally {
+      const after = this.missionStartRequest;
+      if (after !== null && after.requestId === requestId && after.state === 'authorizing') {
+        // Nothing was granted: the reason is the host's own status.
+        this.missionStartRequest = { ...after, state: 'failed', error: this.status };
+        await this.refreshMemoryView();
+        await this.postState();
+      }
+    }
+  }
+
+  /** Continue an authorized Mission (after a pause, a block, or a reload). */
+  async resumeMission(missionId: string, expectedRevision: number): Promise<void> {
+    const mission = this.missions.get(missionId);
+    if (mission !== null && mission.grant === null) {
+      this.status = 'Authorize the Mission before running it.';
+      await this.postState();
+      return;
+    }
+    if (mission !== null && (mission.status === 'paused' || mission.status === 'blocked')) {
+      // An explicit resume makes it runnable again; the loop re-checks everything.
+      const reopened = await this.missions.update(missionId, expectedRevision, (draft) => {
+        draft.status = 'interrupted';
+        draft.note = 'Resumed by you.';
+        if (draft.auto !== null) {
+          draft.auto.noProgressStreak = 0;
+        }
+        return { ok: true, value: draft };
+      });
+      if (!reopened.ok) {
+        this.status = reopened.error;
+        await this.postState();
+        return;
+      }
+      expectedRevision = reopened.value.revision;
+    }
+    this.missionStarting = missionId;
+    try {
+      await this.runMissionAutonomous(missionId, expectedRevision);
+    } finally {
+      this.missionStarting = null;
+    }
+  }
+
+  /** Pause (resumable) or cancel (final) at once: the current internal run is stopped. */
+  async stopMission(missionId: string, kind: 'pause' | 'cancel'): Promise<void> {
+    if (this.missionAuto !== null && this.missionAuto.missionId === missionId) {
+      this.missionAuto.stop = kind;
+      this.cancelRequest();
+      this.status = kind === 'pause' ? 'Pausing the Mission…' : 'Cancelling the Mission…';
+      await this.postState();
+      return;
+    }
+    const mission = this.missions.get(missionId);
+    if (mission === null) {
+      this.status = 'That Mission no longer exists or could not be read.';
+      await this.postState();
+      return;
+    }
+    const result = await this.missions.update(missionId, mission.revision, (draft) =>
+      kind === 'pause' ? pauseMission(draft, Date.now()) : cancelMission(draft, Date.now()),
+    );
+    this.status = result.ok ? result.value.note : result.error;
+    await this.refreshMemoryView();
+    await this.postState();
+  }
+
+  /**
+   * The loop: one bounded Agent run (12 steps) at a time, a checkpoint after
+   * each, and the next run started by the host until the goal is verified,
+   * an approval is pending, the user stops it, or the host sees no progress.
+   */
+  async runMissionAutonomous(missionId: string, expectedRevision: number): Promise<void> {
+    if (this.running || this.agentRunner.isRunning || this.missionAuto !== null) {
+      this.status = 'A request is already running. Cancel it before starting a Mission.';
+      await this.postState();
+      return;
+    }
+    await this.missionRecovery;
+    const scope = await this.memoryScopeForUi();
+    let mission = this.missions.get(missionId);
+    if (mission === null || !scope.ok || mission.scopeId !== scope.scopeId) {
+      this.status = 'That Mission does not belong to the open project.';
+      await this.postState();
+      return;
+    }
+    if (leaseHeldByOther(mission, this.leaseToken, (lease) => this.isLeaseAlive(lease))) {
+      this.status = 'This Mission is running in another VS Code window.';
+      await this.postState();
+      return;
+    }
+    if (mission.revision !== expectedRevision) {
+      this.status = 'The Mission changed; review it again before continuing.';
+      await this.refreshMemoryView();
+      await this.postState();
+      return;
+    }
+    if (mission.grant === null || mission.grant.model !== this.generationModel('local')) {
+      this.status = 'Authorize the Mission for the current local model before running it.';
+      await this.postState();
+      return;
+    }
+    if (!this.store.get(mission.threadId)) {
+      this.status = 'The Mission thread no longer exists.';
+      await this.postState();
+      return;
+    }
+    const leased = await this.missions.update(missionId, expectedRevision, (draft) => {
+      if (leaseHeldByOther(draft, this.leaseToken, (lease) => this.isLeaseAlive(lease))) {
+        return { ok: false, error: 'This Mission is running in another VS Code window.' };
+      }
+      draft.lease = { pid: process.pid, token: this.leaseToken, at: Date.now() };
+      return { ok: true, value: draft };
+    });
+    if (!leased.ok) {
+      this.status = leased.error;
+      await this.postState();
+      return;
+    }
+    LIVE_LEASE_TOKENS.add(this.leaseToken);
+    mission = leased.value;
+    // After an interruption with an unknown result, the first run checks
+    // before any automatic write: its writes still ask.
+    this.missionAuto = { missionId, stop: null, holdAutonomy: uncertainActions(mission).length > 0 };
+    const testCommands = (await this.testCommandContext(scope.root)).allowlist.map((entry) => entry.id);
+    let ended = '';
+    try {
+      for (;;) {
+        mission = this.missions.get(missionId);
+        if (mission === null) {
+          ended = 'The Mission could not be read.';
+          break;
+        }
+        if (this.missionAuto.stop !== null || ['paused', 'cancelled', 'blocked', 'completed', 'failed'].includes(mission.status)) {
+          break;
+        }
+        const allowed = canRunTask(mission);
+        if (!allowed.ok) {
+          if (currentTask(mission) !== null) {
+            await this.missions.update(mission.id, mission.revision, (draft) => blockMission(draft, allowed.error, Date.now()));
+          }
+          break;
+        }
+        // The files already read, with their hash as they are now, for the operational summary.
+        const fileHashes: Record<string, string | null> = {};
+        for (const file of filesReadInMission(mission)) {
+          fileHashes[file] = await this.currentFileHash(scope.fs, file);
+        }
+        const prompt = buildAutoTaskPrompt(mission, testCommands, fileHashes);
+        const decisions = this.memory.listCurrentDecisions(scope.scopeId).map((entry) => ({ key: entry.key, version: entry.version }));
+        const started = await this.missions.update(mission.id, mission.revision, (draft) => {
+          const result = startTaskRun(draft, decisions, Date.now());
+          // Advice is quoted in exactly one internal run.
+          if (result.ok && result.value.auto !== null) {
+            result.value.auto.pendingAdvice = '';
+          }
+          return result;
+        });
+        if (!started.ok) {
+          ended = started.error;
+          break;
+        }
+        this.activeMission = { id: started.value.id, revision: started.value.revision };
+        this.missionProfileCap = null;
+        this.lastAgentOutcome = null;
+        this.activeThreadId = mission.threadId;
+        this.pinnedRunRoot = scope.root;
+        this.hostPromptText = prompt.trim();
+        try {
+          await this.sendMessage(prompt, 'agent', providerToRuntime('local'));
+        } finally {
+          this.pinnedRunRoot = null;
+          this.hostPromptText = null;
+        }
+        if (this.disposed) {
+          // This window is going away (a reload): like a killed process, it
+          // writes nothing more; the next window recovers the Mission.
+          break;
+        }
+        this.missionAuto.holdAutonomy = false;
+        const stop = this.missionAuto.stop as 'pause' | 'cancel' | null;
+        if (stop !== null) {
+          await this.updateActiveMission((draft) => (stop === 'pause' ? pauseMission(draft, Date.now()) : cancelMission(draft, Date.now())));
+          break;
+        }
+        const outcome = this.lastAgentOutcome as RameCodeViewProvider['lastAgentOutcome'];
+        if (outcome === null || outcome.threadId !== mission.threadId || outcome.outcome === 'rejected' || outcome.outcome === 'stale') {
+          const reason = outcome === null ? this.status : outcome.outcome === 'rejected' ? 'You rejected an action.' : this.status;
+          await this.updateActiveMission((draft) => interrupt(draft, `The internal run ended without a result: ${reason}`, Date.now(), outcome?.hostRecord ?? []));
+          break;
+        }
+        const current = this.missions.get(missionId);
+        const observation: RunObservation = {
+          outcome: outcome.outcome,
+          writes: outcome.writes ?? [],
+          lastTest: outcome.lastTest ?? null,
+          wroteAfterLastTest: outcome.wroteAfterLastTest ?? false,
+          uncertain: current !== null ? uncertainActions(current).length : 1,
+          hostRecord: outcome.hostRecord,
+          report: outcome.report,
+          repeatedReads: outcome.repeatedReads ?? 0,
+        };
+        let next = 'continue' as 'complete-task' | 'continue' | 'blocked';
+        let assessment = null as RunAssessment | null;
+        const recorded = await this.updateActiveMission((draft) => {
+          assessment = assessRun(draft, observation);
+          const result = recordRun(draft, observation, assessment, Date.now());
+          if (!result.ok) {
+            return result;
+          }
+          next = result.value.next;
+          // Back to a runnable state between internal runs.
+          result.value.mission.status = 'active';
+          return { ok: true, value: result.value.mission };
+        });
+        if (!recorded) {
+          ended = 'The Mission checkpoint could not be saved; stopping before the next run.';
+          break;
+        }
+        if (next === 'complete-task') {
+          const latest = this.missions.get(missionId);
+          const lastTask = latest !== null && latest.tasks.filter((task) => task.status === 'pending').length === 0;
+          if (latest !== null && lastTask && latest.grant?.acceptance) {
+            // Before the Mission can end, the host runs the user's frozen check.
+            this.status = `Running the acceptance check ${latest.grant.acceptance.commandId}…`;
+            await this.postState();
+            const acceptance = await this.runAcceptance(latest, scope.root, scope.fs);
+            if (acceptance.tampered) {
+              // The criteria themselves changed: no run of the agent can fix that.
+              await this.updateActiveMission((draft) => blockMission(draft, `the acceptance check can no longer be trusted: ${acceptance.summary}.`, Date.now()));
+              break;
+            }
+            if (this.missionAuto.stop !== null) {
+              const stopNow = this.missionAuto.stop;
+              await this.updateActiveMission((draft) => (stopNow === 'pause' ? pauseMission(draft, Date.now()) : cancelMission(draft, Date.now())));
+              break;
+            }
+            let decision = 'continue' as 'complete-task' | 'continue' | 'blocked';
+            await this.updateActiveMission((draft) => {
+              const result = recordAcceptance(draft, acceptance, Date.now());
+              if (!result.ok) {
+                return result;
+              }
+              decision = result.value.next;
+              return { ok: true, value: result.value.mission };
+            });
+            if (decision === 'blocked') {
+              await this.updateActiveMission((draft) => blockMission(draft, `the user's acceptance check kept failing (${acceptance.summary}).`, Date.now()));
+              break;
+            }
+            if (decision === 'continue') {
+              continue;
+            }
+          }
+          await this.updateActiveMission((draft) => completeTask(draft, [], outcome.report || 'verified by the host', Date.now()));
+          continue;
+        }
+        if (next === 'blocked') {
+          const summary = assessment?.summary ?? '';
+          await this.updateActiveMission((draft) =>
+            blockMission(draft, `${MAX_NO_PROGRESS_RUNS} internal runs in a row without verifiable progress, or the run ceiling was reached (last: ${summary}).`, Date.now()),
+          );
+          break;
+        }
+        if (outcome.capabilityReason) {
+          await this.consultForMission(missionId, outcome.capabilityReason, outcome.hostRecord, scope.scopeId);
+        }
+      }
+    } finally {
+      this.activeMission = null;
+      this.missionProfileCap = null;
+      const finalMission = this.disposed ? null : this.missions.get(missionId);
+      if (finalMission !== null && finalMission.lease?.token === this.leaseToken) {
+        await this.missions.update(missionId, finalMission.revision, (draft) => {
+          draft.lease = null;
+          return { ok: true, value: draft };
+        });
+      }
+      LIVE_LEASE_TOKENS.delete(this.leaseToken);
+      this.missionAuto = null;
+      const done = this.disposed ? null : this.missions.get(missionId);
+      if (done !== null) {
+        this.appendMissionReport(done);
+        this.status = ended || done.note;
+      }
+      await this.refreshMemoryView();
+      await this.postState();
+    }
+  }
+
+  /**
+   * One host-written entry for the whole Mission, apart from the internal
+   * runs. The final report is written only for a completed Mission and, when
+   * the user froze an acceptance check, only after the host's own run of it
+   * exited 0; any other stop gets a short status note instead.
+   */
+  private appendMissionReport(mission: MissionRecord): void {
+    if (!['completed', 'blocked', 'paused', 'cancelled', 'interrupted', 'waiting_approval'].includes(mission.status)) {
+      return;
+    }
+    const tests = missionTestRuns(mission);
+    const changed = missionChangedFiles(mission);
+    const report = missionFinalReport(mission);
+    const lines = [
+      `mission: ${mission.status}${report !== null ? ' (every task verified by the host: a passing test after its last change, nothing uncertain)' : ''}`,
+      `mission: tasks ${mission.tasks.map((task) => `${task.title.slice(0, 60)} [${task.status}, ${task.runs} run(s)]`).join('; ')}`,
+      `mission: internal runs ${mission.taskRunsUsed}; grant ${mission.grant?.mode ?? 'none'}${mission.grant?.escalation ? `; Meta consultations ${mission.grant.escalation.used}/${mission.grant.escalation.maxConsultations}` : ''}`,
+      mission.grant?.acceptance
+        ? `mission: user acceptance check ${mission.grant.acceptance.commandId} (frozen: ${mission.grant.acceptance.files.map((file) => file.path).join(', ')}, package.json) — ${acceptanceState(mission).summary || 'not run'}`
+        : 'mission: no user acceptance check; completion means the project and agent tests passed',
+      ...(mission.grant?.tests
+        ? [
+            `mission: trusted project; tests granted ${mission.grant.tests.commandIds.join(', ')} for package.json ${mission.grant.tests.packageJsonHash.slice(0, 12)}…; test scripts run with your user permissions (path checks are not an operating-system sandbox)`,
+          ]
+        : []),
+      `mission: files changed ${changed.length > 0 ? changed.slice(0, 12).join(', ') : 'none'}`,
+      `mission: last test ${tests.length > 0 ? tests[tests.length - 1] : 'none'}`,
+      ...(report !== null
+        ? [
+            `mission: tests run ${report.tests.length > 0 ? report.tests.join(' | ') : 'none'}`,
+            `mission: time ${report.minutes} min since authorization`,
+            `mission: models ${report.models.join('; ')}; Meta consultations ${report.metaConsultations}`,
+            'mission: no sandbox: test scripts ran with your user permissions and could reach other files, the network, or other processes',
+          ]
+        : []),
+      `mission: ${mission.note}`,
+    ];
+    const title = report !== null ? 'Mission completed and verified by the host.' : `Mission ${mission.status.replace('_', ' ')} — status note, not a final report.`;
+    const current = this.store.get(mission.threadId);
+    if (current) {
+      this.store.save(appendAssistantTurn(current, title, undefined, lines.map((line) => `• ${line}`.slice(0, MAX_HOST_RECORD_LINE_LENGTH))));
+    }
+  }
+
+  /**
+   * Mission escalation: only within the grant (model, count, output budget)
+   * and only after a capability stop. The advice is quoted as untrusted data
+   * in the next internal run; it never acts.
+   */
+  private async consultForMission(missionId: string, reason: string, hostRecord: string[], scopeId: string): Promise<void> {
+    const mission = this.missions.get(missionId);
+    const grant = mission?.grant ?? null;
+    if (mission === null || grant === null || grant.escalation === null || grant.escalation.used >= grant.escalation.maxConsultations || !this.settings.allowCloudEscalation) {
+      return;
+    }
+    const apiKey = await this.secrets.get(API_KEY_SECRET);
+    if (!apiKey) {
+      return;
+    }
+    const escalation = grant.escalation;
+    const task = currentTask(mission);
+    const payload = buildConsultPayload({
+      task: `${mission.goal}\nCurrent task: ${task?.title ?? ''}`,
+      reason,
+      hostRecord,
+      decisions: this.memory.listCurrentDecisions(scopeId).map((entry) => ({ key: entry.key, value: entry.value, version: entry.version })),
+    });
+    // Counted before the call: a consultation that fails still used its slot.
+    const counted = await this.missions.update(missionId, mission.revision, (draft) => {
+      if (draft.grant?.escalation) {
+        draft.grant.escalation.used += 1;
+      }
+      return { ok: true, value: draft };
+    });
+    if (!counted.ok) {
+      return;
+    }
+    if (this.activeMission !== null && this.activeMission.id === missionId) {
+      this.activeMission = { id: counted.value.id, revision: counted.value.revision };
+    }
+    let note: string;
+    let advice = '';
+    try {
+      const result = await this.chatRunner.start(async ({ signal }) =>
+        createCascadeAdvice({
+          apiKey,
+          model: escalation.model,
+          payload,
+          schema: cascadeAdviceSchema,
+          generation: { maxCompletionTokens: escalation.maxOutputTokens, reasoning: null, reasoningParam: null },
+          signal,
+        }),
+      );
+      this.recordUsage('cloud', result.usage);
+      const parsed = validateCascadeAdvice(JSON.parse(result.content) as unknown);
+      advice = formatAdvisory(escalation.model, parsed);
+      note = `Meta ${escalation.model} consulted (${escalation.used + 1}/${escalation.maxConsultations}, in ${result.usage.inputTokens} / out ${result.usage.outputTokens} tokens); advice kept as untrusted data`;
+    } catch (error) {
+      const detail = redactKeyFromText(error instanceof Error ? error.message : 'Unknown error.', apiKey).replace(/\s+/g, ' ').slice(0, 160);
+      note = `Meta ${escalation.model} consultation ${escalation.used + 1}/${escalation.maxConsultations} not used (${detail})`;
+    }
+    await this.updateActiveMission((draft) => {
+      const current = currentTask(draft);
+      if (current) {
+        draft.evidence.push({ taskId: current.id, kind: 'note', text: note.slice(0, 300), at: Date.now() });
+      }
+      if (draft.auto !== null) {
+        draft.auto.pendingAdvice = advice.slice(0, 4000);
+      }
+      return { ok: true, value: draft };
+    });
+  }
+
+  // ----- Project memory (host-controlled; the model only reads and proposes) -----
+
+  /**
+   * The project Settings memory acts on: the open folder chosen in Settings
+   * or used by the latest Agent run, else the single open folder. Never a
+   * model path; a folder chosen in the view is accepted only when it is
+   * exactly one of the open workspace folders.
+   */
+  private async memoryScopeForUi(): Promise<{ ok: true; root: string; scopeId: string; label: string; fs: AgentFs } | { ok: false; error: string }> {
+    let root: string | null = null;
+    if (this.memoryRoot !== null && this.isBoundRootStillOpen(this.memoryRoot)) {
+      root = this.memoryRoot;
+    } else if (this.agentRunWorkspace !== null && this.isBoundRootStillOpen(this.agentRunWorkspace.root)) {
+      root = this.agentRunWorkspace.root;
+    } else {
+      const single = this.heldWorkspaceRoot();
+      root = single.ok ? single.root : null;
+    }
+    if (root === null) {
+      return {
+        ok: false,
+        error: this.listOpenWorkspaceFolders().length > 1
+          ? 'Several folders are open. Choose the project above to manage its memory.'
+          : 'Open a folder to manage its project memory.',
+      };
+    }
+    const fs = this.agentFsFor(root);
+    try {
+      const canonical = await this.heldCanonicalRoot(root, fs);
+      return { ok: true, root, scopeId: scopeIdForRoot(canonical), label: path.basename(root), fs };
+    } catch {
+      return { ok: false, error: 'The project folder could not be resolved.' };
+    }
+  }
+
+  /** Recompute what Settings shows about memory (decisions, history, files, pending). */
+  async refreshMemoryView(): Promise<void> {
+    const scope = await this.memoryScopeForUi();
+    const folders = this.listOpenWorkspaceFolders().map((folder) => ({ name: folder.name, path: folder.path }));
+    if (!scope.ok) {
+      this.memoryView = { project: null, readable: true, decisions: [], history: [], artifacts: [], corruptKeys: [], pending: null, note: scope.error, mission: null, folders, selectedPath: null };
+      return;
+    }
+    await this.missionRecovery;
+    const testContext = await this.testCommandContext(scope.root);
+    this.missionTestCommands = testContext.allowlist.map((entry) => entry.id);
+    const environmentFiles: string[] = [];
+    for (const file of ACCEPTANCE_ENVIRONMENT_FILES) {
+      if ((await this.currentFileHash(scope.fs, file)) !== null) {
+        environmentFiles.push(file);
+      }
+    }
+    this.missionSetup = {
+      scopeId: scope.scopeId,
+      testCommands: this.missionTestCommands,
+      candidates: await listAcceptanceCandidates(scope.fs),
+      environmentFiles,
+      packageJsonHash: testContext.packageJsonRaw.length > 0 ? hashContent(testContext.packageJsonRaw) : '',
+    };
+    const readout = this.memory.readScope(scope.scopeId);
+    const artifacts = this.memory.artifactStatuses(scope.scopeId, await this.liveArtifactHashes(scope.scopeId, scope.fs));
+    const pending = this.memoryPending !== null && this.memoryPending.proposal.scopeId === scope.scopeId ? this.memoryPending : null;
+    this.memoryView = {
+      project: scope.label,
+      readable: readout.readable,
+      decisions: readout.current.map((entry) => ({
+        key: entry.key,
+        value: JSON.stringify(entry.value),
+        version: entry.version,
+        source: entry.provenance.source,
+        provider: entry.provenance.provider,
+        createdAt: entry.createdAt,
+      })),
+      history: readout.current.map((entry) => ({
+        key: entry.key,
+        versions: this.memory.getDecisionHistory(scope.scopeId, entry.key).map((version) => ({
+          version: version.version,
+          value: version.op === 'delete' ? '(removed)' : JSON.stringify(version.value),
+          createdAt: version.createdAt,
+          source: version.provenance.source,
+          provider: version.provenance.provider,
+          reason: version.provenance.reason,
+        })),
+      })),
+      artifacts: artifacts.map((entry) => ({
+        path: entry.path,
+        decisionKey: entry.decisionKey,
+        decisionVersion: entry.decisionVersion,
+        status: entry.status,
+        detail: entry.detail,
+      })),
+      corruptKeys: readout.corruptKeys,
+      pending: pending
+        ? { actionId: pending.action.actionId, digest: pending.action.digest, text: describeProposal(pending.proposal) }
+        : null,
+      note: readout.readable ? '' : 'Project memory could not be read; RAME Code will not overwrite it.',
+      mission: this.missionView(scope.scopeId, readout.current),
+      folders,
+      selectedPath: scope.root,
+    };
+  }
+
+  /**
+   * Settings: the user chooses which open folder's memory to show. Only an
+   * exact open workspace folder is accepted; a pending card must be
+   * answered first so it can never be approved against another project.
+   */
+  async selectMemoryProject(rawPath: string): Promise<void> {
+    const chosen = validateChosenWorkspace(rawPath, this.listOpenWorkspaceFolders());
+    if (chosen === null) {
+      this.status = 'That folder is not open in this window.';
+    } else if (this.memoryPending !== null) {
+      this.status = 'Approve or reject the pending memory change first.';
+    } else if (this.activeMission !== null) {
+      this.status = 'A Mission task is running. Wait for it to finish before changing the project.';
+    } else {
+      this.memoryRoot = chosen;
+      this.status = `Project memory: ${path.basename(chosen)}.`;
+    }
+    await this.refreshMemoryView();
+    await this.postState();
+  }
+
+  /** Interface language of the view; host messages for the model stay English. */
+  async setLanguage(language: ViewLanguage): Promise<void> {
+    this.settings = { ...this.settings, language };
+    this.persistSettings();
+    await this.postState();
+  }
+
+  private missionView(scopeId: string, current: Array<{ key: string; version: number }>): MissionView | null {
+    const mission = this.missions
+      .list()
+      .filter((entry) => entry.scopeId === scopeId)
+      .sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (!mission) {
+      return null;
+    }
+    const task = currentTask(mission);
+    const running = this.activeMission?.id === mission.id;
+    return {
+      id: mission.id,
+      revision: mission.revision,
+      threadId: mission.threadId,
+      goal: mission.goal,
+      status: mission.status,
+      tasks: mission.tasks.map((entry) => ({ title: entry.title, status: entry.status, runs: entry.runs })),
+      current: task?.title ?? null,
+      pendingCount: mission.tasks.filter((entry) => entry.status !== 'completed').length,
+      decisionsUsed: mission.decisionsUsed.map((entry) => ({
+        key: entry.key,
+        version: entry.version,
+        currentVersion: current.find((decision) => decision.key === entry.key)?.version ?? null,
+      })),
+      evidence: mission.evidence.slice(-20).map((entry) => `${entry.kind}: ${entry.text}`),
+      runsUsed: mission.taskRunsUsed,
+      maxRuns: mission.maxTaskRuns,
+      note: mission.note,
+      canRun: !running && !this.running && mission.grant === null && canRunTask(mission).ok,
+      resume: (task?.runs ?? 0) > 0,
+      autonomy: this.missionAutonomyView(mission),
+    };
+  }
+
+  private isAuthorizing(missionId: string): boolean {
+    return this.missionStartRequest !== null && this.missionStartRequest.missionId === missionId && this.missionStartRequest.state === 'authorizing';
+  }
+
+  /**
+   * The live card of the open thread's Mission, from host data only: the
+   * phase, progress, acceptance state, controls, and, once completed and
+   * accepted, the final report. Computed on every state message so the
+   * step and run counters move while the Mission works.
+   */
+  private missionLiveView(threadId: string | null): MissionLiveView | null {
+    if (threadId === null) {
+      return null;
+    }
+    const mission = this.missions
+      .list()
+      .filter((entry) => entry.threadId === threadId)
+      .sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (!mission) {
+      if (this.running && this.runThreadId === threadId && this.runKind === 'mission-plan') {
+        const thread = this.store.get(threadId);
+        const goal = [...(thread?.turns ?? [])].reverse().find((turn) => turn.kind === 'user');
+        return {
+          missionId: null,
+          revision: 0,
+          threadId,
+          goal: goal && 'text' in goal && typeof goal.text === 'string' ? goal.text : '',
+          phase: 'planning',
+          currentTask: null,
+          tasksDone: 0,
+          tasksTotal: 0,
+          internalRun: 0,
+          step: null,
+          maxSteps: MAX_AGENT_STEPS,
+          startedAt: null,
+          endedAt: null,
+          lastProgress: '',
+          lastTest: '',
+          grant: null,
+          model: null,
+          acceptance: null,
+          canStart: false,
+          canPause: false,
+          canResume: false,
+          canCancel: false,
+          setup: null,
+          startRequest: null,
+          report: null,
+          blocked: null,
+          review: [],
+          note: '',
+        };
+      }
+      return null;
+    }
+    const auto = this.missionAutonomyView(mission);
+    // Started or resumed here and about to take the lease: already running.
+    const driving = auto.running || (this.missionStarting === mission.id && this.missionAuto === null && mission.status === 'active');
+    const phase = missionPhase(mission, {
+      driving,
+      authorizing: this.isAuthorizing(mission.id),
+      manualTask: this.activeMission?.id === mission.id,
+      runningElsewhere: !driving && leaseHeldByOther(mission, this.leaseToken, (lease) => this.isLeaseAlive(lease)),
+    });
+    const acceptance = acceptanceState(mission);
+    const tests = missionTestRuns(mission);
+    const request = this.missionStartRequest !== null && this.missionStartRequest.missionId === mission.id ? this.missionStartRequest : null;
+    const ended = ['completed', 'cancelled', 'failed', 'paused', 'blocked', 'interrupted'].includes(phase);
+    return {
+      missionId: mission.id,
+      revision: mission.revision,
+      threadId,
+      goal: mission.goal,
+      phase,
+      currentTask: currentTask(mission)?.title ?? null,
+      tasksDone: mission.tasks.filter((task) => task.status === 'completed').length,
+      tasksTotal: mission.tasks.length,
+      internalRun: mission.auto === null ? 0 : mission.auto.runs + (driving ? 1 : 0),
+      step: driving ? this.agentStepNow : null,
+      maxSteps: MAX_AGENT_STEPS,
+      startedAt: mission.grant?.grantedAt ?? null,
+      endedAt: ended && mission.grant !== null ? mission.updatedAt : null,
+      lastProgress: mission.auto?.lastProgress ?? '',
+      lastTest: tests.length > 0 ? (tests[tests.length - 1] as string) : '',
+      grant: mission.grant?.mode ?? null,
+      model: mission.grant?.model ?? null,
+      acceptance:
+        mission.grant?.acceptance == null
+          ? null
+          : {
+              commandId: mission.grant.acceptance.commandId,
+              files: mission.grant.acceptance.files.map((file) => ({ path: file.path, hash: file.hash })),
+              state: acceptance.state,
+              summary: acceptance.summary,
+            },
+      canStart: auto.canStart,
+      canPause: auto.canPause && !['paused', 'cancelled', 'completed', 'failed'].includes(mission.status),
+      canResume: auto.canResume && ['paused', 'blocked', 'interrupted'].includes(phase),
+      canCancel: auto.canCancel,
+      setup:
+        auto.canStart && this.missionSetup !== null && this.missionSetup.scopeId === mission.scopeId
+          ? {
+              testCommands: [...this.missionSetup.testCommands],
+              candidates: [...this.missionSetup.candidates],
+              environmentFiles: [...this.missionSetup.environmentFiles],
+              packageJsonHash: this.missionSetup.packageJsonHash,
+            }
+          : null,
+      startRequest: request === null ? null : { requestId: request.requestId, state: request.state, error: request.error },
+      report: missionFinalReport(mission),
+      blocked: phase === 'blocked' ? { reason: mission.note, runs: mission.auto?.runs ?? 0, lastProgress: mission.auto?.lastProgress ?? '', testsNotRun: missionTestsNotRun(mission) } : null,
+      review: mission.evidence.slice(-40).map((entry) => `${entry.kind}: ${entry.text}`),
+      note: mission.note,
+    };
+  }
+
+  /**
+   * Retry a blocked Mission with guidance the user typed: it is quoted to the
+   * next internal runs, and the Mission resumes under the same grant.
+   */
+  async retryMission(missionId: string, expectedRevision: number, guidance: string): Promise<void> {
+    const mission = this.missions.get(missionId);
+    if (mission === null || mission.status !== 'blocked' || mission.auto === null) {
+      this.status = 'Only a blocked Mission can be retried with guidance.';
+      await this.postState();
+      return;
+    }
+    const guided = await this.missions.update(missionId, expectedRevision, (draft) => {
+      if (draft.auto === null) {
+        return { ok: false, error: 'This Mission was never started.' };
+      }
+      draft.auto.userGuidance = guidance.replace(/[\u0000-\u001F\u007F]+/g, ' ').trim().slice(0, MAX_USER_GUIDANCE);
+      return { ok: true, value: draft };
+    });
+    if (!guided.ok) {
+      this.status = guided.error;
+      await this.postState();
+      return;
+    }
+    await this.resumeMission(missionId, guided.value.revision);
+  }
+
+  private missionAutonomyView(mission: MissionRecord): MissionView['autonomy'] {
+    const driving = this.missionAuto !== null && this.missionAuto.missionId === mission.id;
+    const ended = ['completed', 'cancelled', 'failed'].includes(mission.status);
+    const lastTest = [...mission.evidence].reverse().find((entry) => /run_tests /.test(entry.text) && entry.kind === 'host-record');
+    return {
+      grant: mission.grant?.mode ?? null,
+      model: mission.grant?.model ?? null,
+      running: driving,
+      internalRuns: mission.auto?.runs ?? 0,
+      step: driving ? this.agentStepNow : null,
+      maxSteps: MAX_AGENT_STEPS,
+      startedAt: mission.auto?.startedAt ?? null,
+      lastProgress: mission.auto?.lastProgress ?? '',
+      lastTest: lastTest ? lastTest.text.replace(/^•\s*/, '') : '',
+      escalation: mission.grant?.escalation ? { used: mission.grant.escalation.used, max: mission.grant.escalation.maxConsultations, model: mission.grant.escalation.model } : null,
+      canStart: !driving && !this.running && !ended && mission.grant === null && !this.isAuthorizing(mission.id),
+      canResume: !driving && !this.running && !ended && mission.grant !== null && mission.status !== 'waiting_approval',
+      canPause: driving || ['interrupted', 'blocked'].includes(mission.status),
+      canCancel: !ended,
+      cloudEscalationAllowed: this.settings.allowCloudEscalation,
+      testCommands: this.missionTestCommands,
+      acceptance: mission.grant?.acceptance ? { commandId: mission.grant.acceptance.commandId, files: mission.grant.acceptance.files.map((file) => file.path) } : null,
+    };
+  }
+
+  /**
+   * Settings: the user proposes a value. Nothing is written yet; an exact
+   * approval card is shown and only its approval commits the change.
+   */
+  async proposeUserDecision(key: string, valueType: DecisionValueType, valueText: string): Promise<void> {
+    if (this.memoryPending !== null) {
+      this.status = 'Approve or reject the pending memory change first.';
+      await this.postState();
+      return;
+    }
+    const scope = await this.memoryScopeForUi();
+    if (!scope.ok) {
+      this.status = scope.error;
+      await this.postState();
+      return;
+    }
+    const value = parseDecisionValueText(valueType, valueText);
+    if (value === null) {
+      this.status = `The value is not a valid ${valueType}.`;
+      await this.postState();
+      return;
+    }
+    const latest = this.memory.latestVersion(scope.scopeId, key);
+    const prepared = this.memory.preparePut({
+      scopeId: scope.scopeId,
+      scopeLabel: scope.label,
+      key,
+      value,
+      expectedVersion: latest ?? 0,
+      provenance: { source: 'user', provider: 'none', threadId: SETTINGS_MEMORY_THREAD, reason: 'Entered in Settings.' },
+    });
+    if (!prepared.ok) {
+      this.status = `Not proposed: ${prepared.error}`;
+      await this.refreshMemoryView();
+      await this.postState();
+      return;
+    }
+    const described = this.describeMemoryProposal(prepared.value);
+    const action = createPendingAction(
+      {
+        tool: 'propose_decision',
+        targets: described.targets,
+        body: described.body,
+        provider: 'none',
+        workspaceId: scope.root,
+        threadId: SETTINGS_MEMORY_THREAD,
+        preconditions: described.preconditions,
+      },
+      this.memoryGeneration,
+    );
+    this.memoryPending = { action, proposal: prepared.value };
+    this.status = 'Review the exact memory change below, then approve or reject it.';
+    await this.refreshMemoryView();
+    await this.postState();
+  }
+
+  /** Approve the exact Settings card: one use, same project, same version. */
+  async approveMemoryChange(actionId: string, digest: string): Promise<void> {
+    const pending = this.memoryPending;
+    if (pending === null || pending.action.actionId !== actionId || pending.action.digest !== digest) {
+      this.status = 'That memory approval is no longer valid.';
+      await this.postState();
+      return;
+    }
+    const scope = await this.memoryScopeForUi();
+    const live = await this.liveApprovalContext(pending.action);
+    const drift = memoryDrift(pending.action, live.currentHashes);
+    const checked = drift !== null ? { ok: false as const, error: drift } : verifyApproval(pending.action, { actionId, digest }, {
+      ...live,
+      workspaceId: scope.ok ? scope.root : '',
+      threadId: SETTINGS_MEMORY_THREAD,
+      provider: 'none',
+      generation: this.memoryGeneration,
+    });
+    this.memoryPending = null;
+    if (!checked.ok) {
+      this.memory.discardProposals({ proposalId: pending.proposal.proposalId });
+      this.status = `Not written: ${checked.error}`;
+      await this.refreshMemoryView();
+      await this.postState();
+      return;
+    }
+    pending.action.used = true;
+    const result = await this.memory.commitAuthorizedChange({
+      proposalId: pending.proposal.proposalId,
+      proposalDigest: pending.proposal.digest,
+      scopeId: pending.proposal.scopeId,
+      threadId: SETTINGS_MEMORY_THREAD,
+      provider: 'none',
+      approvedBy: 'user',
+      approvalDigest: pending.action.digest,
+      approvedAt: Date.now(),
+    });
+    this.status = result.ok
+      ? 'version' in result.value
+        ? `Saved ${result.value.key} v${result.value.version} = ${JSON.stringify(result.value.value)}.`
+        : 'Artifact recorded.'
+      : `Not written: ${result.error}`;
+    await this.refreshMemoryView();
+    await this.postState();
+  }
+
+  async rejectMemoryChange(actionId: string, digest: string): Promise<void> {
+    const pending = this.memoryPending;
+    if (pending === null || pending.action.actionId !== actionId || pending.action.digest !== digest) {
+      this.status = 'That memory approval is no longer valid.';
+      await this.postState();
+      return;
+    }
+    this.memoryPending = null;
+    this.memory.discardProposals({ proposalId: pending.proposal.proposalId });
+    this.status = 'Memory change rejected. Nothing was written.';
+    await this.refreshMemoryView();
+    await this.postState();
+  }
+
+  /** Bounded labeled snapshot of one project's memory, with live file status. */
+  private async memorySnapshotText(scope: { scopeId: string; label: string }, fs: AgentFs): Promise<string> {
+    const readout = this.memory.readScope(scope.scopeId);
+    const artifacts = this.memory.artifactStatuses(scope.scopeId, await this.liveArtifactHashes(scope.scopeId, fs));
+    return buildMemorySnapshot(scope.label, readout, artifacts, this.memory.listPendingProposals(scope.scopeId));
+  }
+
+  /** Hash every bound file now (null = missing); unreadable paths are left out. */
+  private async liveArtifactHashes(scopeId: string, fs: AgentFs): Promise<Record<string, string | null>> {
+    const hashes: Record<string, string | null> = {};
+    for (const binding of this.memory.listArtifacts(scopeId)) {
+      if (binding.path in hashes) {
+        continue;
+      }
+      const gate = checkAgentRelPath(binding.path);
+      if (!gate.ok) {
+        continue;
+      }
+      try {
+        const rel = (gate as { ok: true; rel: string }).rel;
+        const st = await fs.stat(rel);
+        if (st.kind === 'missing') {
+          hashes[binding.path] = null;
+        } else if (st.kind === 'file') {
+          hashes[binding.path] = hashContent(await fs.readText(rel));
+        }
+      } catch {
+        // Left out: reads as unverified, never as current.
+      }
+    }
+    return hashes;
+  }
+
+  private prepareModelDecision(
+    call: ValidatedToolCall,
+    scope: { scopeId: string; label: string },
+    threadId: string,
+    provider: ProviderId,
+  ): { ok: true; value: MemoryProposal } | { ok: false; error: string } {
+    const args = call.args as { key: string; valueType: DecisionValueType; value: string; expectedVersion: number; userWords: string; reason: string };
+    const value = parseDecisionValueText(args.valueType, args.value);
+    if (value === null) {
+      return { ok: false, error: `the value is not a valid ${args.valueType}.` };
+    }
+    // The source must be what the user typed in this thread, checked here.
+    const statement = checkUserStatement({ quote: args.userWords, value, userMessages: userWrittenTexts(this.store.get(threadId)) });
+    if (!statement.ok) {
+      return statement;
+    }
+    return this.memory.preparePut({
+      scopeId: scope.scopeId,
+      scopeLabel: scope.label,
+      key: args.key,
+      value,
+      expectedVersion: args.expectedVersion,
+      provenance: { source: 'model', provider, threadId, reason: args.reason, quote: statement.quote },
+    });
+  }
+
+  /**
+   * After a passing test: tell the model which files it changed and which
+   * decisions are in force, so it can ask to bind the files that implement
+   * one. The host never infers the link itself.
+   */
+  private bindArtifactHint(resultText: string, scopeId: string, changedFiles: ReadonlySet<string>, commandId: string): string {
+    if (!/^exit=0\b/.test(resultText) || changedFiles.size === 0) {
+      return '';
+    }
+    const decisions = this.memory.listCurrentDecisions(scopeId);
+    if (decisions.length === 0) {
+      return '';
+    }
+    const files = [...changedFiles].slice(0, 20).join(', ');
+    const versions = decisions.slice(0, 20).map((entry) => `${entry.key} v${entry.version}`).join(', ');
+    return (
+      `\n\nHost note: ${commandId} passed and no file changed since. Files you changed in this run: ${files}. ` +
+      `Authorized decisions: ${versions}. If one of these files implements one of these decisions, call bind_artifact for it now ` +
+      `(commandId ${commandId}, the decision's current version). Do not bind a file that does not implement the decision.`
+    );
+  }
+
+  /**
+   * Prepare an artifact binding from evidence the host itself holds: the
+   * file hash it reads now and a passing run_tests of this run with no file
+   * change since. The model's claims are not evidence.
+   */
+  private async prepareModelArtifact(
+    call: ValidatedToolCall,
+    scope: { scopeId: string; label: string },
+    threadId: string,
+    provider: ProviderId,
+    fs: AgentFs,
+    canonicalRoot: string,
+    testRuns: ReadonlyArray<{ commandId: string; exitCode: number | null; writes: number; at: number; outputDigest: string }>,
+    workspaceWrites: number,
+  ): Promise<{ ok: true; value: MemoryProposal } | { ok: false; error: string }> {
+    const args = call.args as { path: string; decisionKey: string; decisionVersion: number; commandId: string };
+    const gate = checkAgentRelPath(args.path);
+    if (!gate.ok) {
+      return { ok: false, error: gate.error };
+    }
+    const rel = (gate as { ok: true; rel: string }).rel;
+    let fileHash: string;
+    try {
+      await guardFsPath(fs, rel, canonicalRoot);
+      const st = await fs.stat(rel);
+      if (st.kind !== 'file') {
+        return { ok: false, error: 'the artifact must be an existing file.' };
+      }
+      fileHash = hashContent(await fs.readText(rel));
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'the artifact could not be read.' };
+    }
+    const run = [...testRuns].reverse().find((entry) => entry.commandId === args.commandId);
+    if (!run) {
+      return { ok: false, error: `no run_tests ${args.commandId} ran in this run; run it after your last change, then bind.` };
+    }
+    if (run.exitCode !== 0) {
+      return { ok: false, error: `the last ${args.commandId} run did not pass, so it cannot verify the file.` };
+    }
+    if (run.writes !== workspaceWrites) {
+      return { ok: false, error: `files changed after the last ${args.commandId} run; run it again before binding.` };
+    }
+    return this.memory.prepareArtifactBinding({
+      scopeId: scope.scopeId,
+      scopeLabel: scope.label,
+      path: rel,
+      fileHash,
+      decisionKey: args.decisionKey,
+      decisionVersion: args.decisionVersion,
+      verification: { commandId: args.commandId, exitCode: 0, ranAt: run.at, resultDigest: run.outputDigest },
+      provenance: { source: 'model', provider, threadId, reason: '' },
+    });
+  }
+
+  /** Approval card content: the exact change, bound to the store's digest and versions. */
+  private describeMemoryProposal(proposal: MemoryProposal): { targets: string[]; body: string; preconditions: Record<string, string> } {
+    const body = `${describeProposal(proposal)}\nProposal ${proposal.proposalId}, digest ${proposal.digest}.`;
+    if (proposal.kind === 'decision') {
+      return {
+        targets: [`memory:${proposal.key}`],
+        body,
+        preconditions: { [memoryPreconditionKey(proposal.scopeId, proposal.key)]: memoryPreconditionValue(proposal.expectedVersion) },
+      };
+    }
+    return {
+      targets: [proposal.path, `memory:${proposal.decisionKey}`],
+      body,
+      preconditions: {
+        [proposal.path]: proposal.fileHash,
+        [memoryPreconditionKey(proposal.scopeId, proposal.decisionKey)]: memoryPreconditionValue(proposal.decisionVersion),
+      },
+    };
+  }
+
+  /** Commit a model proposal only with the user's approval of its exact card. */
+  private async commitModelProposal(
+    proposal: MemoryProposal,
+    approved: PendingAgentAction | null,
+    threadId: string,
+    provider: ProviderId,
+  ): Promise<string> {
+    if (approved === null || !approved.used) {
+      this.memory.discardProposals({ proposalId: proposal.proposalId });
+      return 'not written: memory changes need your approval.';
+    }
+    const authorization: MemoryAuthorization = {
+      proposalId: proposal.proposalId,
+      proposalDigest: proposal.digest,
+      scopeId: proposal.scopeId,
+      threadId,
+      provider,
+      approvedBy: 'user',
+      approvalDigest: approved.digest,
+      approvedAt: Date.now(),
+    };
+    const result = await this.memory.commitAuthorizedChange(authorization);
+    if (!result.ok) {
+      return `not written: ${result.error}`;
+    }
+    if ('version' in result.value) {
+      const entry = result.value;
+      return `committed ${entry.key} v${entry.version} = ${entry.op === 'delete' ? '(removed)' : JSON.stringify(entry.value)} (approved by you)`;
+    }
+    const binding = result.value;
+    return `recorded ${binding.path} as verified against ${binding.decisionKey} v${binding.decisionVersion} (approved by you)`;
+  }
+
   private async executeAgentTool(
     call: ValidatedToolCall,
     fs: AgentFs,
@@ -2265,6 +4384,25 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
         void workspaceId;
         return this.applyPatchViaFs(files, fs, signal, canonicalRoot ?? null);
       }
+      case 'replace_in_file': {
+        // Checked again right before writing; the atomic applier then
+        // re-verifies the hash, writes, and rolls back on any failure.
+        const checked = await this.checkReplacement(call, fs, canonicalRoot ?? null);
+        if (!checked.ok) {
+          throw new Error(checked.error);
+        }
+        const args = call.args as unknown as ReplaceInFileArgs;
+        const applied = await this.applyPatchViaFs([{ path: checked.rel, expectedHash: args.expectedHash, newContent: checked.newContent }], fs, signal, canonicalRoot ?? null);
+        return `Replaced 1 fragment in ${checked.rel} (${args.oldText.length} -> ${args.newText.length} characters).\n${applied}`;
+      }
+      case 'read_decisions': {
+        const root = canonicalRoot ?? workspaceId;
+        return this.memorySnapshotText({ scopeId: scopeIdForRoot(root), label: path.basename(root) }, fs);
+      }
+      case 'propose_decision':
+      case 'bind_artifact':
+        // Reached only by a bug: memory writes never run as plain tools.
+        throw new Error('Memory changes are committed only through your approval.');
       case 'run_tests': {
         const id = String((call.args as Record<string, unknown>).commandId ?? '');
         const command = findAllowedCommand(allowlist, id);
@@ -2276,6 +4414,42 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       default:
         throw new Error('Unknown tool.');
     }
+  }
+
+  /**
+   * replace_in_file preconditions, read from the workspace now: the file
+   * exists with the expected hash and holds oldText exactly once. Returns the
+   * whole new content for the atomic applier. Throws only on a path the
+   * live guard refuses (symlink or canonical escape).
+   */
+  private async checkReplacement(
+    call: ValidatedToolCall,
+    fs: AgentFs,
+    canonicalRoot: string | null,
+  ): Promise<{ ok: true; rel: string; newContent: string } | { ok: false; error: string }> {
+    const args = call.args as unknown as ReplaceInFileArgs;
+    const gate = checkAgentRelPath(args.path);
+    if (!gate.ok) {
+      return { ok: false, error: gate.error };
+    }
+    const rel = (gate as { ok: true; rel: string }).rel;
+    await guardFsPath(fs, rel, canonicalRoot);
+    const st = await fs.stat(rel);
+    if (st.kind !== 'file') {
+      return { ok: false, error: 'That file does not exist.' };
+    }
+    const text = await fs.readText(rel);
+    if (hashContent(text) !== args.expectedHash) {
+      return { ok: false, error: 'The file changed; re-read and re-propose the action.' };
+    }
+    const first = text.indexOf(args.oldText);
+    if (first === -1) {
+      return { ok: false, error: REPLACE_NOT_FOUND_MESSAGE };
+    }
+    if (text.indexOf(args.oldText, first + 1) !== -1) {
+      return { ok: false, error: REPLACE_NOT_UNIQUE_MESSAGE };
+    }
+    return { ok: true, rel, newContent: `${text.slice(0, first)}${args.newText}${text.slice(first + args.oldText.length)}` };
   }
 
   private async applyPatchViaFs(
@@ -2411,6 +4585,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     error: unknown,
   ): Promise<void> {
     this.running = false;
+    this.memory.discardProposals({ threadId });
     if (
       (error instanceof Error && error.name === 'AbortError') ||
       (error instanceof DOMException && error.name === 'AbortError')
@@ -2522,6 +4697,10 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
   /** Cancel the running request. Returns false when nothing was running. */
   cancelRequest(): boolean {
     let cancelled = false;
+    if (this.acceptanceController !== null) {
+      this.acceptanceController.abort();
+      cancelled = true;
+    }
     // Aborting the run clears the waiter synchronously; remember it first.
     const hadAgentWait = this.agentPending !== null || this.agentWaiter !== null;
     if (this.missionRunner.isRunning) {
@@ -2532,6 +4711,13 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     }
     if (this.agentRunner.isRunning) {
       cancelled = this.agentRunner.cancel() || cancelled;
+    }
+    if (this.memoryPending !== null) {
+      // A cancelled Settings card can never commit later.
+      this.memory.discardProposals({ proposalId: this.memoryPending.proposal.proposalId });
+      this.memoryPending = null;
+      this.memoryGeneration += 1;
+      cancelled = true;
     }
     // Cancellation invalidates pending Agent approvals exactly once.
     if (hadAgentWait || this.agentPending || this.agentWaiter) {
@@ -3161,6 +5347,55 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       case 'setMaxOutputTokens':
         await this.setMaxOutputTokens(message.local, message.cloud);
         return;
+      case 'proposeDecision':
+        await this.proposeUserDecision(message.key, message.valueType, message.value);
+        return;
+      case 'approveMemoryChange':
+        await this.approveMemoryChange(message.actionId, message.digest);
+        return;
+      case 'runMissionTask':
+        await this.runMissionTask(message.missionId, message.revision);
+        return;
+      case 'rejectMemoryChange':
+        await this.rejectMemoryChange(message.actionId, message.digest);
+        return;
+      case 'selectMemoryProject':
+        await this.selectMemoryProject(message.path);
+        return;
+      case 'setLanguage':
+        await this.setLanguage(message.language);
+        return;
+      case 'missionStart':
+        await this.requestMissionStart(message.requestId ?? `req_${randomBytes(8).toString('hex')}`, () =>
+          this.startMission(
+            message.missionId,
+            message.revision,
+            message.mode,
+            message.maxConsultations > 0 ? { maxConsultations: message.maxConsultations } : null,
+            message.trustedProject,
+            message.acceptanceCommand.length > 0 ? { commandId: message.acceptanceCommand, files: message.acceptanceFiles } : null,
+          ),
+          message.missionId,
+        );
+        return;
+      case 'missionResume':
+        await this.resumeMission(message.missionId, message.revision);
+        return;
+      case 'missionPause':
+        await this.stopMission(message.missionId, 'pause');
+        return;
+      case 'missionCancel':
+        await this.stopMission(message.missionId, 'cancel');
+        return;
+      case 'missionRetry':
+        await this.retryMission(message.missionId, message.revision, message.guidance);
+        return;
+      case 'consultApprove':
+        await this.approveConsult(message.digest);
+        return;
+      case 'consultDismiss':
+        await this.dismissConsult();
+        return;
       case 'approveAgentAction':
         await this.approveAgentAction(message.actionId, message.digest);
         return;
@@ -3235,6 +5470,14 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
         agentLog: inRunThread ? this.agentLogView.map((entry) => ({ ...entry })) : [],
         runThreadId: this.runThreadId,
         generation: this.generationView(),
+        memory: this.memoryView,
+        language: this.settings.language,
+        consult: this.consultOffer !== null && this.consultOffer.threadId === active?.id
+          ? { reason: this.consultOffer.reason, payload: this.consultOffer.payload, model: this.consultOffer.model, digest: this.consultOffer.digest }
+          : null,
+        missionLive: this.missionLiveView(active ? active.id : null),
+        runKind: this.runKind,
+        about: this.about,
       }),
     );
   }
@@ -3317,15 +5560,74 @@ function summarizeToolResult(tool: string, resultText: string): string {
       : 'workspace inspection completed';
   } else if (tool === 'read_file') {
     summary = `read ${(lines[0] ?? '').replace(/^path: /, '')}`;
+  } else if (tool === 'read_decisions') {
+    // Count only the decision lines of the AUTHORIZED MEMORY section.
+    const end = lines.findIndex((line) => line === 'VERIFIED FILES:');
+    const inForce = lines.slice(1, end < 0 ? undefined : end).filter((line) => /^- [a-z]/.test(line)).length;
+    summary = `read project memory (${inForce} decision(s) in force)`;
   } else {
     summary = lines[0] ?? '';
   }
   return summary.slice(0, 120);
 }
 
+/** Files that decide how an acceptance check runs; frozen with it when present. */
+const ACCEPTANCE_ENVIRONMENT_FILES = ['package-lock.json', 'npm-shrinkwrap.json', 'tsconfig.json', '.npmrc'];
+
+/** Folders never offered as acceptance files: dependencies and build output. */
+const ACCEPTANCE_SKIP_DIRS = new Set(['node_modules', '.git', 'out', 'dist', 'build', 'coverage', '.vscode-test', '.rame', '.private']);
+const ACCEPTANCE_TEST_DIR = /^(test|tests|__tests__|spec|acceptance|e2e)$/i;
+const ACCEPTANCE_TEST_FILE = /\.(test|spec|acceptance)\.[cm]?[jt]sx?$/i;
+const ACCEPTANCE_SCRIPT_FILE = /\.([cm]?[jt]sx?|json)$/i;
+
+/**
+ * Files the user can pick for a Verified Mission: test files and files in
+ * test folders, bounded, never through a symlink or a protected path. The
+ * host checks every chosen file again when the Mission is authorized.
+ */
+async function listAcceptanceCandidates(fs: AgentFs): Promise<string[]> {
+  const found: string[] = [];
+  const queue: Array<{ dir: string; depth: number; inTests: boolean }> = [{ dir: '', depth: 0, inTests: false }];
+  let visited = 0;
+  while (queue.length > 0 && found.length < 80 && visited < 2000) {
+    const current = queue.shift() as { dir: string; depth: number; inTests: boolean };
+    let entries: AgentFsEntry[];
+    try {
+      entries = await fs.listEntries(current.dir);
+    } catch {
+      continue;
+    }
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      visited += 1;
+      const rel = current.dir === '' ? entry.name : `${current.dir}/${entry.name}`;
+      if (entry.isSymlink || !checkAgentRelPath(rel).ok) {
+        continue;
+      }
+      if (entry.isDir && current.depth < 4 && !ACCEPTANCE_SKIP_DIRS.has(entry.name)) {
+        queue.push({ dir: rel, depth: current.depth + 1, inTests: current.inTests || ACCEPTANCE_TEST_DIR.test(entry.name) });
+      } else if (entry.isFile && (ACCEPTANCE_TEST_FILE.test(entry.name) || (current.inTests && ACCEPTANCE_SCRIPT_FILE.test(entry.name)))) {
+        found.push(rel);
+      }
+    }
+  }
+  return found.sort().slice(0, 80);
+}
+
+/** Output budget of one Mission consultation of Meta (part of the grant). */
+const MISSION_CONSULT_OUTPUT_TOKENS = 2048;
+
+/** Lease tokens of Mission loops alive in this extension host process. */
+const LIVE_LEASE_TOKENS = new Set<string>();
+
+const REPLACE_NOT_FOUND_MESSAGE = 'The text to replace is not in the file; read it again and copy the fragment exactly.';
+const REPLACE_NOT_UNIQUE_MESSAGE = 'The text to replace appears more than once; include more surrounding lines so it is unique.';
+
 /** Failures with no side effects that the bounded loop may inspect and repair. */
 function isRecoverableAgentToolError(detail: string): boolean {
   return [
+    REPLACE_NOT_FOUND_MESSAGE,
+    REPLACE_NOT_UNIQUE_MESSAGE,
     'That file does not exist.',
     'That directory does not exist.',
     'The source file does not exist.',

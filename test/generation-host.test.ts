@@ -147,7 +147,9 @@ test('a request that cannot fit the local context is refused before sending, wit
 
 test('when the free context is smaller than the budget, the budget shrinks visibly and the input is untouched', async () => {
   await withHarness({}, async (h) => {
-    h.model.props = glimmerProps(4000);
+    // A context a little larger than the Agent's fixed prompt and tools (about
+    // 3,400 tokens since replace_in_file), so the free space is below 4096.
+    h.model.props = glimmerProps(4500);
     h.model.enqueue({ kind: 'json', body: assistantText('Done. Files changed: none.') });
     await h.provider.sendMessage('Say hello.', 'agent', 'local');
     const sent = h.model.requests[0]?.max_completion_tokens as number;

@@ -42,7 +42,16 @@ export interface UserTurn {
   kind: 'user';
   text: string;
   timestamp: number;
+  /**
+   * Set when RAME Code wrote this turn for the user (a Mission task
+   * prompt). Such text is never the user's own words.
+   */
+  host?: true;
+  /** The mode the message was sent in, so a change of mode stays visible. */
+  mode?: 'agent' | 'chat' | 'mission';
 }
+
+const USER_TURN_MODES = ['agent', 'chat', 'mission'];
 
 export interface PlanTurn {
   kind: 'plan';
@@ -142,7 +151,16 @@ export function deriveTitle(text: string): string {
 }
 
 function validateUserTurn(value: unknown): UserTurn | null {
-  if (!isRecord(value) || !hasExactKeys(value, ['kind', 'text', 'timestamp'])) {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const keys = Object.keys(value);
+  if (
+    !['kind', 'text', 'timestamp'].every((key) => keys.includes(key)) ||
+    !keys.every((key) => ['kind', 'text', 'timestamp', 'host', 'mode'].includes(key)) ||
+    ('host' in value && value.host !== true) ||
+    ('mode' in value && !USER_TURN_MODES.includes(value.mode as string))
+  ) {
     return null;
   }
   if (value.kind !== 'user') {
@@ -158,7 +176,14 @@ function validateUserTurn(value: unknown): UserTurn | null {
   if (!isValidTimestamp(value.timestamp)) {
     return null;
   }
-  return { kind: 'user', text: value.text, timestamp: value.timestamp };
+  const turn: UserTurn = { kind: 'user', text: value.text, timestamp: value.timestamp };
+  if (value.host === true) {
+    turn.host = true;
+  }
+  if (typeof value.mode === 'string') {
+    turn.mode = value.mode as UserTurn['mode'];
+  }
+  return turn;
 }
 
 function validatePlanTurn(value: unknown): PlanTurn | null {
@@ -347,7 +372,7 @@ function randomSuffix(): string {
 /** Create a new thread whose first turn is the submitted mission text. */
 export function createThread(
   missionText: string,
-  options?: { now?: number; id?: string },
+  options?: { now?: number; id?: string; mode?: UserTurn['mode'] },
 ): ChatThread {
   const now = options?.now ?? Date.now();
   const id = options?.id ?? `t-${now.toString(36)}-${randomSuffix()}`;
@@ -357,7 +382,7 @@ export function createThread(
     title: deriveTitle(text),
     createdAt: now,
     updatedAt: now,
-    turns: [{ kind: 'user', text, timestamp: now }],
+    turns: [options?.mode !== undefined ? { kind: 'user', text, timestamp: now, mode: options.mode } : { kind: 'user', text, timestamp: now }],
   };
 }
 
@@ -366,13 +391,26 @@ export function appendUserTurn(
   thread: ChatThread,
   text: string,
   now?: number,
+  options?: { host?: boolean; mode?: UserTurn['mode'] },
 ): ChatThread {
   const timestamp = now ?? Date.now();
+  const turn: UserTurn = options?.host === true ? { kind: 'user', text, timestamp, host: true } : { kind: 'user', text, timestamp };
+  if (options?.mode !== undefined) {
+    turn.mode = options.mode;
+  }
   return {
     ...thread,
     updatedAt: timestamp,
-    turns: [...thread.turns, { kind: 'user', text, timestamp }],
+    turns: [...thread.turns, turn],
   };
+}
+
+/** What the user typed in a thread, oldest first (never host-written turns). */
+export function userWrittenTexts(thread: ChatThread | undefined): string[] {
+  if (!thread) {
+    return [];
+  }
+  return thread.turns.filter((turn): turn is UserTurn => turn.kind === 'user' && turn.host !== true).map((turn) => turn.text);
 }
 
 /** Append a validated assistant plan, returning a new thread record. */
@@ -470,9 +508,9 @@ export class ThreadStore {
   }
 
   /** Create, persist, and return a new thread for the given mission text. */
-  create(missionText: string): ChatThread {
+  create(missionText: string, mode?: UserTurn['mode']): ChatThread {
     const now = this.clock();
-    const thread = createThread(missionText, { now });
+    const thread = createThread(missionText, { now, mode });
     this.threads = upsertThread(this.threads, thread);
     this.persist();
     return thread;

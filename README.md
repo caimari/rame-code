@@ -1,12 +1,20 @@
 # RAME Code
 
-**A local-first coding agent for VS Code powered by Meta Muse models, with explicit permissions and host-verified evidence.**
+**A local-first VS Code coding agent born at the Meta Global AI Developer Hackathon, powered by Meta Muse models and built around explicit permissions and host-verified evidence.**
 
 [Versión en español](README.es.md) · [Changelog](CHANGELOG.md) · [License](LICENSE)
 
-RAME Code is an independent open-source project created during the Meta Global AI Developer Hackathon 2026. It runs as a VS Code extension and supports both a local Muse Glimmer runtime and Meta Model API cloud models.
+RAME Code is an independent open-source project started from scratch during the [Meta Global AI Developer Hackathon 2026](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details). It runs as a VS Code extension and supports both a local Muse Glimmer runtime and Meta Model API cloud models.
 
 Version `0.1.0` is the first public preview. It is suitable for evaluation on disposable projects. It is not yet a production security boundary.
+
+## Follow the build
+
+This repository is also a public build journal for people interested in how a coding agent is created from the ground up. The first implementation was bootstrapped by directing **Muse Code CLI** through explicit prompts, then checking the resulting code with automated tests and host-side evidence.
+
+Download the latest [release](https://github.com/caimari/rame-code/releases), install the VSIX and try it on a disposable project. As development advances, new releases will make each verified stage available for testing instead of presenting only a finished demo.
+
+The next important milestone is intentionally recursive: RAME Code should use its own Agent mode and Meta Muse models to inspect, test and improve RAME Code itself. When a release contains a verified improvement produced through RAME Code rather than only through the original Muse Code CLI bootstrap, it will be identified explicitly in the changelog and evidence.
 
 ## What works in v0.1.0
 
@@ -123,7 +131,7 @@ Press `F5` in VS Code to open an Extension Development Host.
 - Track: **Indie Developer**.
 - Author: **Antoni Caimari Caldés**.
 
-The public implementation and Git history start independently in this repository. Earlier private code, services, datasets and evaluation results are not included or required. Development milestones are recorded in [HACKATHON_WORK.md](HACKATHON_WORK.md).
+The public implementation and Git history start independently in this repository. Earlier private code, services, datasets and evaluation results are not included or required. Development milestones are recorded in [HACKATHON_WORK.md](HACKATHON_WORK.md). Private working notes are deliberately excluded from Git and from release packages.
 
 ## Roadmap
 

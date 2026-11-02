@@ -110,6 +110,33 @@ main {
   animation: none;
 }
 
+/* Mission phases: the dot spins only while something is working. */
+#runIndicator[data-state="plan_ready"] #runIndicatorDot,
+#runIndicator[data-state="waiting_approval"] #runIndicatorDot {
+  border: 0;
+  background-color: var(--vscode-inputValidation-warningBorder, #b89500);
+  animation: none;
+}
+
+#runIndicator[data-state="paused"] #runIndicatorDot,
+#runIndicator[data-state="interrupted"] #runIndicatorDot {
+  border: 0;
+  background-color: var(--vscode-descriptionForeground, #8b8b8b);
+  animation: none;
+}
+
+#runIndicator[data-state="blocked"],
+#runIndicator[data-state="failed"] {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+#runIndicator[data-state="blocked"] #runIndicatorDot,
+#runIndicator[data-state="failed"] #runIndicatorDot {
+  border: 0;
+  background-color: var(--vscode-errorForeground, #f48771);
+  animation: none;
+}
+
 button.icon-btn {
   padding: 2px 7px;
   min-width: 28px;
@@ -727,4 +754,43 @@ button.secondary:hover {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* Project memory (Settings) */
+#memoryPendingCard {
+  border: 2px solid var(--vscode-inputValidation-warningBorder, #b89500);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 6px 0;
+}
+
+#memoryPendingCard[hidden] {
+  display: none;
+}
+
+#memoryPendingText {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#memoryDecisions,
+#memoryArtifacts,
+#memoryHistory ol {
+  margin: 4px 0;
+  padding-left: 18px;
+  word-break: break-word;
+}
+
+/* Not colour alone: stale and corrupt entries are also bold and labeled in text. */
+#memoryArtifacts li[data-state="stale"],
+#memoryArtifacts li[data-state="modified"],
+#memoryArtifacts li[data-state="missing"],
+#memoryArtifacts li[data-state="decision-removed"],
+#memoryDecisions li[data-state="corrupt"] {
+  color: var(--vscode-errorForeground, #f48771);
+  font-weight: 600;
+}
+
+#memoryHistory h5 {
+  margin: 6px 0 2px;
 }

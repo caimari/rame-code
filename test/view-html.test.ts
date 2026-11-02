@@ -127,7 +127,8 @@ test('unified document keeps strict CSP and local assets only', () => {
 test('chat header is compact with icon buttons and stays visible at 220px', () => {
   const html = document();
   // Title plus three compact icon buttons with accessible names.
-  assert.match(html, /<h2 class="view-title">RAME Code<\/h2>/);
+  // The public version sits inside the title, filled by the host (never hard-coded).
+  assert.match(html, /<h2 class="view-title">RAME Code <span id="versionBadge" class="version-chip" title="Public version"><\/span><\/h2>/);
   assert.match(html, /id="newThread"[^>]*aria-label="New thread"/);
   assert.match(html, /id="refresh"[^>]*aria-label="Refresh history"/);
   assert.match(html, /id="openSettings"[^>]*aria-label="Open Settings"/);

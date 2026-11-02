@@ -43,10 +43,27 @@ export const AGENT_TOOL_NAMES = [
   'delete_file',
   'set_executable',
   'apply_patch',
+  'replace_in_file',
   'run_tests',
 ] as const;
 
-export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
+export type AgentWorkspaceToolName = (typeof AGENT_TOOL_NAMES)[number];
+
+/**
+ * Project-memory tools. The model can read authorized memory and propose
+ * changes; it can never write memory. Proposals always wait for the user,
+ * in every profile, including workspace-full.
+ */
+export const MEMORY_TOOL_NAMES = ['read_decisions', 'propose_decision', 'bind_artifact'] as const;
+export type MemoryToolName = (typeof MEMORY_TOOL_NAMES)[number];
+/** Memory tools that only a user approval can complete. */
+export const USER_APPROVAL_ONLY_TOOLS: readonly MemoryToolName[] = ['propose_decision', 'bind_artifact'];
+
+export type AgentToolName = AgentWorkspaceToolName | MemoryToolName;
+
+export function isMemoryToolName(value: unknown): value is MemoryToolName {
+  return (MEMORY_TOOL_NAMES as readonly unknown[]).includes(value);
+}
 
 const READ_TOOLS: readonly AgentToolName[] = [
   'list_files',
@@ -54,6 +71,7 @@ const READ_TOOLS: readonly AgentToolName[] = [
   'filesystem_usage',
   'search_text',
   'read_file',
+  'read_decisions',
 ];
 
 export interface AgentProfileOption {
@@ -160,6 +178,10 @@ export function isAutoAllowed(
   profile: AgentProfileId,
   tool: AgentToolName,
 ): boolean {
+  if ((USER_APPROVAL_ONLY_TOOLS as readonly string[]).includes(tool)) {
+    // Memory changes are never automatic, whatever the profile.
+    return false;
+  }
   if (profile === ASK_PROFILE_ID) {
     return false;
   }
@@ -168,5 +190,5 @@ export function isAutoAllowed(
   }
   // workspace-full: every allowlisted tool may run without a prompt once
   // policy, patch preconditions, and the test allowlist all pass.
-  return (AGENT_TOOL_NAMES as readonly string[]).includes(tool);
+  return (AGENT_TOOL_NAMES as readonly string[]).includes(tool) || tool === 'read_decisions';
 }

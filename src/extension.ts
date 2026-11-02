@@ -31,6 +31,9 @@ export function activate(context: vscode.ExtensionContext): void {
     store,
     mainState,
     output,
+    // Project memory and Missions live in files every window of this
+    // machine shares, written under a cross-window lock.
+    vscode.Uri.joinPath(context.globalStorageUri, 'shared-state').fsPath,
   );
 
   context.subscriptions.push(

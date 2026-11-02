@@ -21,3 +21,6 @@ media/settings.js
 media/settings.css
 tsconfig.json
 *.vsix
+.private/**
+.rame/**
+scripts/**

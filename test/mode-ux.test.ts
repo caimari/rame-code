@@ -20,11 +20,11 @@ test('default mode is Agent with order Agent, Mission, Chat', () => {
   assert.equal(DEFAULT_CHAT_MODE, 'agent');
   assert.deepEqual(
     CHAT_MODES.map((mode) => mode.id),
-    ['agent', 'mission', 'chat'],
+    ['agent', 'chat', 'mission'],
   );
   assert.deepEqual(
     CHAT_MODES.map((mode) => mode.label),
-    ['Agent', 'Mission', 'Chat'],
+    ['Agent', 'Chat only', 'Mission'],
   );
   assert.equal(defaultSettings().mode, 'agent');
   assert.equal(validateSettings(undefined).mode, 'agent');
@@ -42,8 +42,9 @@ test('composer defaults to Agent and permission defaults to Ask', () => {
   const agentAt = modeSelect.indexOf('value="agent"');
   const missionAt = modeSelect.indexOf('value="mission"');
   const chatAt = modeSelect.indexOf('value="chat"');
-  assert.ok(agentAt >= 0 && missionAt > agentAt && chatAt > missionAt);
-  assert.match(html, /<option value="agent" selected>Agent<\/option>/);
+  assert.ok(agentAt >= 0 && chatAt > agentAt && missionAt > chatAt);
+  assert.match(html, /<option value="agent" selected title="Recommended: talks naturally and uses tools when they are needed\.">Agent<\/option>/);
+  assert.match(html, /<option value="chat" title="Conversation only, with no tools and no file access\.">Chat only<\/option>/);
   assert.match(html, /<option value="ask" selected>Ask \(safest\)<\/option>/);
   // Legacy select stays as a hidden internal sync control; the visible
   // permission UI is the single permissionBtn/menu.
@@ -154,7 +155,7 @@ test('webview script gives async pending feedback and never claims early success
   // posted message carries the exact type key plus the visible local settings.
   assert.match(script, /readLocalForm\(\s*['"]startLocal['"]\s*\)/);
   assert.match(script, /type:\s*type\s*\|\|\s*['"]updateLocalSettings['"]/);
-  assert.match(script, /markPending\(\s*startLocalBtn\s*,\s*['"]Starting…['"]\s*\)/);
+  assert.match(script, /markPending\(\s*startLocalBtn\s*,\s*t\(['"]Starting…['"]\)\s*\)/);
   assert.match(script, /type:\s*['"]refreshModels['"]/);
   assert.match(script, /type:\s*['"]saveKey['"]/);
   assert.match(script, /type:\s*['"]stopLocal['"]/);

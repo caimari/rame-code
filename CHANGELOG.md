@@ -6,10 +6,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Planned
+### Added
 
-- User-authorized, versioned project decisions.
-- Stale-artifact detection and resumable missions.
+- User-authorized, versioned project decisions with provenance and history.
+- Verified-file bindings that become stale when a referenced decision changes.
+- Persistent, resumable Missions with supervised and trusted autonomous-workspace execution.
+- Frozen acceptance checks that the Agent can read and run but cannot modify through RAME Code tools.
+- Host-verified Mission checkpoints, progress evidence, pause, resume, cancellation and bounded no-progress stopping.
+- Explicit, user-approved local-to-Meta advice escalation with a local verification pass afterwards.
+- Natural project-memory proposals in English and Spanish, with conservative host checks for negation, temporary instructions and exact boolean values.
+- English and Spanish interface selection, project selection for multi-root workspaces, and candidate build information.
+
+### Changed
+
+- Mission internal runs now receive a bounded host checkpoint instead of replaying earlier internal-run conversations. This keeps the cross-run context approximately flat while preserving the complete stored thread and evidence.
+- Mission completion now depends on host-observed changes and successful tests after the last change; verified Missions additionally require the frozen acceptance command to pass.
+- Mission setup and progress are presented in the conversation, with distinct planning, authorization, running, paused, blocked, interrupted and completed states.
+- Local Glimmer generation uses the model's verified reasoning control and a configurable output budget rather than a single fixed response limit.
+
+### Fixed
+
+- Prevented model-authored text from impersonating the host record.
+- Made malformed local tool-call replies recoverable within a bounded retry budget.
+- Added exact-fragment editing with hash-bound approval and atomic rollback.
+- Prevented negated or temporary user statements from becoming persistent project decisions without clarification.
+- Prevented repeated Mission history from growing on every autonomous internal run.
+
+### Security
+
+- Autonomous workspace permission is bound to one Mission, project, provider and model and requires explicit project trust.
+- Acceptance files, package metadata and supported configuration files are hash-bound for the Mission; RAME Code tools cannot modify `node_modules`.
+- Persistent memory and Mission state use shared atomic files with inter-window locking and damaged-file fail-closed behavior.
+- Repository files, model output and tool output remain untrusted and cannot grant themselves persistent authority.
+
+### Known limitations
+
+- Autonomous verification currently supports Node/npm package scripts only. Python, Rust and Go project adapters are not implemented.
+- Autonomous execution is not an operating-system sandbox; approved project scripts run with the VS Code user's permissions.
+- Natural decision-source validation is deliberately conservative and its host-side vocabulary is verified only in English and Spanish.
+- Meta escalation has automated coverage but still requires a final real-API validation for this candidate.
+- `src/mainProvider.ts` has grown beyond the context window of the local Glimmer configuration. Before the next public release, the provider, Mission orchestration and project-adapter responsibilities will be extracted into bounded modules without changing verified behavior.
+
+### Architecture work in progress
+
+- Introduce a `ProjectAdapter` boundary, preserving the current npm behavior as the first adapter.
+- Introduce a `ModelProvider` boundary for llama.cpp-compatible local inference and Meta Model API.
+- Move Mission orchestration and checkpoint construction out of `mainProvider.ts`.
+- Keep implementation files small enough to be inspected by supported local models; exceptions must be documented and justified.
 
 ## [0.1.0] - 2026-11-02
 

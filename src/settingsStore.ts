@@ -123,6 +123,14 @@ export interface RameSettings {
   agentProfile: AgentProfileId;
   /** Reasoning level per provider/model and manual output maxima. */
   generation: GenerationSettings;
+  /** Interface language of the view only; text sent to models stays English. */
+  language: ViewLanguage;
+}
+
+export type ViewLanguage = 'en' | 'es';
+
+export function isViewLanguage(value: unknown): value is ViewLanguage {
+  return value === 'en' || value === 'es';
 }
 
 function defaultLocal(): LocalRuntimeSettings {
@@ -152,6 +160,7 @@ export function defaultSettings(): RameSettings {
     allowCloudEscalation: false,
     agentProfile: DEFAULT_AGENT_PROFILE,
     generation: defaultGenerationSettings(),
+    language: 'en',
   };
 }
 
@@ -270,6 +279,7 @@ export function validateSettings(value: unknown): RameSettings {
     allowCloudEscalation: value.allowCloudEscalation === true,
     agentProfile: parseAgentProfile(value.agentProfile),
     generation: validateGenerationSettings(value.generation),
+    language: isViewLanguage(value.language) ? value.language : 'en',
   };
 }
 

@@ -207,9 +207,28 @@ export function describeAgentCall(call: ValidatedToolCall): {
       }
       return { targets, body, preconditions };
     }
+    case 'replace_in_file': {
+      const args = call.args as Record<string, unknown>;
+      const target = String(args.path ?? '');
+      const hash = String(args.expectedHash ?? '');
+      // The card shows the exact change; the digest binds this exact text.
+      const replacement =
+        `Replace exactly one occurrence in ${target} (file sha256 ${hash}).\n` +
+        `--- text to replace (${String(args.oldText ?? '').length} characters) ---\n${String(args.oldText ?? '')}\n` +
+        `--- replacement (${String(args.newText ?? '').length} characters) ---\n${String(args.newText ?? '')}`;
+      return { targets: [target], body: replacement, preconditions: { [target]: hash } };
+    }
     case 'run_tests': {
       const id = String((call.args as Record<string, unknown>).commandId ?? '');
       return { targets: [id], body, preconditions: {} };
+    }
+    case 'read_decisions':
+      return { targets: ['project memory'], body, preconditions: {} };
+    case 'propose_decision':
+      return { targets: [`memory:${String((call.args as Record<string, unknown>).key ?? '')}`], body, preconditions: {} };
+    case 'bind_artifact': {
+      const args = call.args as Record<string, unknown>;
+      return { targets: [String(args.path ?? ''), `memory:${String(args.decisionKey ?? '')}`], body, preconditions: {} };
     }
     default:
       return { targets: [call.id], body, preconditions: {} };
@@ -235,7 +254,7 @@ export function policyGateForCall(
     paths.push(String((call.args as Record<string, unknown>).dir ?? '.'));
   } else if (call.tool === 'read_file') {
     paths.push(String((call.args as Record<string, unknown>).path ?? ''));
-  } else if (call.tool === 'create_directory' || call.tool === 'delete_file' || call.tool === 'set_executable') {
+  } else if (call.tool === 'create_directory' || call.tool === 'delete_file' || call.tool === 'set_executable' || call.tool === 'replace_in_file') {
     paths.push(String((call.args as Record<string, unknown>).path ?? ''));
   } else if (call.tool === 'move_file') {
     paths.push(String((call.args as Record<string, unknown>).source ?? ''));
@@ -245,6 +264,12 @@ export function policyGateForCall(
     for (const file of files) {
       paths.push(String(file.path));
     }
+  } else if (call.tool === 'bind_artifact') {
+    const target = String((call.args as Record<string, unknown>).path ?? '');
+    if (target === '' || target === '.' || target === './') {
+      return { ok: false, error: 'An artifact must be a file inside the workspace.' };
+    }
+    paths.push(target);
   } else if (call.tool === 'run_tests') {
     const id = String((call.args as Record<string, unknown>).commandId ?? '');
     if (id.length === 0 || /[;&|`$><\n\0]/.test(id)) {
@@ -259,6 +284,10 @@ export function policyGateForCall(
     // Allow the workspace root itself for listing/searching.
     if (candidate === '' || candidate === '.' || candidate === './') {
       continue;
+    }
+    if (candidate.startsWith('memory:')) {
+      // Reserved for project-memory approval preconditions, never a file.
+      return { ok: false, error: 'Paths starting with memory: are reserved.' };
     }
     const gate = checkAgentRelPath(candidate, platform);
     if (!gate.ok) {

@@ -1,0 +1,81 @@
+{
+  "name": "rame-code",
+  "displayName": "RAME Code",
+  "description": "Local-first coding agent powered by Meta Muse with explicit permissions and host-verified evidence.",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "author": "Antoni Caimari Caldés",
+  "publisher": "caimari",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/caimari/rame-code.git"
+  },
+  "homepage": "https://github.com/caimari/rame-code#readme",
+  "bugs": {
+    "url": "https://github.com/caimari/rame-code/issues"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": ["Machine Learning", "Other"],
+  "keywords": ["meta", "muse", "agent", "local", "llama.cpp", "coding-assistant"],
+  "activationEvents": [
+    "onCommand:rameCode.setMetaApiKey",
+    "onCommand:rameCode.startMission",
+    "onCommand:rameCode.openPanel",
+    "onCommand:rameCode.newThread",
+    "onView:rameCode.main"
+  ],
+  "main": "./out/src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "rameCode.openPanel",
+        "title": "RAME Code: Open RAME Code"
+      },
+      {
+        "command": "rameCode.newThread",
+        "title": "RAME Code: New Thread"
+      },
+      {
+        "command": "rameCode.setMetaApiKey",
+        "title": "RAME Code: Set Meta API Key"
+      },
+      {
+        "command": "rameCode.startMission",
+        "title": "RAME Code: Start Mission"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rameCode",
+          "title": "RAME Code",
+          "icon": "media/rame-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "rameCode": [
+        {
+          "id": "rameCode.main",
+          "name": "RAME Code",
+          "type": "webview"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
+    "compile": "tsc -p .",
+    "test": "npm run compile && node --test out/test/*.test.js",
+    "check": "npm run test",
+    "package": "npm run check && vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "3.7.1",
+    "typescript": "^5.7.2"
+  }
+}

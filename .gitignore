@@ -1,0 +1,29 @@
+# Dependencies and build outputs
+node_modules/
+dist/
+out/
+coverage/
+*.vsix
+
+# Local state
+.rame/
+.private/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editors and operating systems
+.vscode-test/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*

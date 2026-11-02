@@ -25,7 +25,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
-import { chmod as nodeChmod, realpath as nodeRealpath, stat as nodeStat, statfs as nodeStatfs } from 'node:fs/promises';
 import * as path from 'node:path';
 
 import * as vscode from 'vscode';
@@ -66,7 +65,6 @@ import {
   WINDOWS_SET_EXECUTABLE_ERROR,
   resolveCanonicalRoot,
   type AgentFs,
-  type AgentFsEntry,
 } from './agentHost.js';
 import { AgentRunner, buildAgentMessages } from './agentLoop.js';
 import {
@@ -166,6 +164,23 @@ import {
   type RunAssessment,
   type RunObservation,
 } from './missionStore.js';
+import {
+  MISSION_CONSULT_OUTPUT_TOKENS,
+  isLiveMissionLease,
+  registerLiveMissionLease,
+  unregisterLiveMissionLease,
+} from './missionRuntime.js';
+import {
+  ACCEPTANCE_ENVIRONMENT_FILES,
+  listAcceptanceCandidates,
+} from './projectAdapters/npmProjectAdapter.js';
+import { createVscodeWorkspaceFs } from './projectAdapters/vscodeWorkspaceFs.js';
+import {
+  REPLACE_NOT_FOUND_MESSAGE,
+  REPLACE_NOT_UNIQUE_MESSAGE,
+  isRecoverableAgentToolError,
+  summarizeToolResult,
+} from './toolResultSummary.js';
 import {
   MEMORY_RULES_TEXT,
   buildMemorySnapshot,
@@ -611,7 +626,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     // reload never leaves owned work behind.
     this.cancelRequest();
     // This window no longer drives a Mission: its lease is no longer alive.
-    LIVE_LEASE_TOKENS.delete(this.leaseToken);
+    unregisterLiveMissionLease(this.leaseToken);
     this.clearIdleTimer();
     this.stopOwnedChild();
     vscode.Disposable.from(...this.disposables).dispose();
@@ -1494,102 +1509,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
   }
 
   private agentFsFor(root: string): AgentFs {
-    const rootUri = vscode.Uri.file(root);
-    const join = (rel: string): vscode.Uri =>
-      rel === '' ? rootUri : vscode.Uri.joinPath(rootUri, ...rel.split('/'));
-    const fsPathFor = (rel: string): string =>
-      rel === '' ? root : path.join(root, ...rel.split('/'));
-    const canonicalRealpath = async (rel: string): Promise<string> =>
-      nodeRealpath(fsPathFor(rel));
-    return {
-      async listEntries(rel: string) {
-        const entries = await vscode.workspace.fs.readDirectory(join(rel));
-        return entries.map(([name, type]) => ({
-          name,
-          isFile: (type & vscode.FileType.File) !== 0,
-          isDir: (type & vscode.FileType.Directory) !== 0,
-          isSymlink: (type & vscode.FileType.SymbolicLink) !== 0,
-        }));
-      },
-      async readText(rel: string) {
-        const bytes = await vscode.workspace.fs.readFile(join(rel));
-        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      },
-      async stat(rel: string) {
-        try {
-          const info = await vscode.workspace.fs.stat(join(rel));
-          if ((info.type & vscode.FileType.SymbolicLink) !== 0) {
-            return { kind: 'symlink' as const };
-          }
-          if ((info.type & vscode.FileType.Directory) !== 0) {
-            return { kind: 'dir' as const, size: info.size };
-          }
-          if ((info.type & vscode.FileType.File) !== 0) {
-            const native = await nodeStat(fsPathFor(rel));
-            return {
-              kind: 'file' as const,
-              size: info.size,
-              ownerExecutable: (native.mode & 0o100) !== 0,
-            };
-          }
-          return { kind: 'other' as const };
-        } catch {
-          return { kind: 'missing' as const };
-        }
-      },
-      async writeText(rel: string, content: string) {
-        await vscode.workspace.fs.writeFile(
-          join(rel),
-          new TextEncoder().encode(content),
-        );
-      },
-      async createDirectory(rel: string) {
-        await vscode.workspace.fs.createDirectory(join(rel));
-      },
-      async moveFile(source: string, destination: string) {
-        await vscode.workspace.fs.rename(join(source), join(destination), { overwrite: false });
-      },
-      async deleteFile(rel: string) {
-        await vscode.workspace.fs.delete(join(rel), { recursive: false, useTrash: false });
-      },
-      // Windows has no owner-executable bit: leave the capability out so
-      // the host reports it as unavailable instead of faking a change.
-      ...(process.platform === 'win32'
-        ? {}
-        : {
-          async setOwnerExecutable(rel: string, executable: boolean) {
-            const absolute = fsPathFor(rel);
-            const info = await nodeStat(absolute);
-            const nextMode = executable ? (info.mode | 0o100) : (info.mode & ~0o100);
-            await nodeChmod(absolute, nextMode);
-          },
-        }),
-      async filesystemUsage() {
-        const info = await nodeStatfs(root, { bigint: true });
-        const total = info.bsize * info.blocks;
-        const free = info.bsize * info.bfree;
-        const available = info.bsize * info.bavail;
-        return {
-          totalBytes: total.toString(),
-          usedBytes: (total - free).toString(),
-          freeBytes: free.toString(),
-          availableBytes: available.toString(),
-        };
-      },
-      // Bounded rollback-only delete: called solely for files created by the
-      // exact pending patch during rollback. Never exposed as an Agent tool.
-      async removeFile(rel: string) {
-        await vscode.workspace.fs.delete(join(rel), { recursive: false });
-      },
-      // Direct Node canonicalization for local file workspaces. Retained
-      // behind the testable AgentFs abstraction used by agentHost guards.
-      async realpath(rel: string) {
-        return canonicalRealpath(rel);
-      },
-      async realpathRoot() {
-        return nodeRealpath(root);
-      },
-    };
+    return createVscodeWorkspaceFs(root);
   }
 
   /** Canonical root held for the run; falls back to the label when unavailable. */
@@ -3164,7 +3084,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
 
   private isLeaseAlive(lease: MissionLease): boolean {
     if (lease.pid === process.pid) {
-      return LIVE_LEASE_TOKENS.has(lease.token);
+      return isLiveMissionLease(lease.token);
     }
     try {
       process.kill(lease.pid, 0);
@@ -3409,7 +3329,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       await this.postState();
       return;
     }
-    LIVE_LEASE_TOKENS.add(this.leaseToken);
+    registerLiveMissionLease(this.leaseToken);
     mission = leased.value;
     // After an interruption with an unknown result, the first run checks
     // before any automatic write: its writes still ask.
@@ -3568,7 +3488,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
           return { ok: true, value: draft };
         });
       }
-      LIVE_LEASE_TOKENS.delete(this.leaseToken);
+      unregisterLiveMissionLease(this.leaseToken);
       this.missionAuto = null;
       const done = this.disposed ? null : this.missions.get(missionId);
       if (done !== null) {
@@ -5533,108 +5453,4 @@ function tryParseMissionPlan(text: string): MissionPlan | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Content-free one-line outcome for Activity/audit. Tool output may hold
- * file text or matched lines, so only its structural first line (or a
- * count) is kept.
- */
-function summarizeToolResult(tool: string, resultText: string): string {
-  const lines = resultText.split('\n');
-  let summary: string;
-  if (tool === 'search_text') {
-    summary = resultText.trim() === '(no matches)' ? 'no matches' : `${lines.filter((line) => line.length > 0).length} matching line(s)`;
-  } else if (tool === 'list_files') {
-    summary = resultText.trim() === '(empty directory)' ? 'empty directory' : `${lines.filter((line) => line.length > 0).length} entr(ies) listed`;
-  } else if (tool === 'inspect_workspace') {
-    const fields = new Map(
-      lines.flatMap((line) => {
-        const match = /^(directory|files|directories|totalBytes|entriesVisited|truncated): ([A-Za-z0-9._/-]{1,120}|\d+|true|false)$/.exec(line);
-        return match ? [[match[1], match[2]] as const] : [];
-      }),
-    );
-    const required = ['directory', 'files', 'directories', 'totalBytes', 'entriesVisited', 'truncated'] as const;
-    summary = required.every((field) => fields.has(field))
-      ? required.map((field) => `${field}=${fields.get(field)}`).join(' ')
-      : 'workspace inspection completed';
-  } else if (tool === 'read_file') {
-    summary = `read ${(lines[0] ?? '').replace(/^path: /, '')}`;
-  } else if (tool === 'read_decisions') {
-    // Count only the decision lines of the AUTHORIZED MEMORY section.
-    const end = lines.findIndex((line) => line === 'VERIFIED FILES:');
-    const inForce = lines.slice(1, end < 0 ? undefined : end).filter((line) => /^- [a-z]/.test(line)).length;
-    summary = `read project memory (${inForce} decision(s) in force)`;
-  } else {
-    summary = lines[0] ?? '';
-  }
-  return summary.slice(0, 120);
-}
-
-/** Files that decide how an acceptance check runs; frozen with it when present. */
-const ACCEPTANCE_ENVIRONMENT_FILES = ['package-lock.json', 'npm-shrinkwrap.json', 'tsconfig.json', '.npmrc'];
-
-/** Folders never offered as acceptance files: dependencies and build output. */
-const ACCEPTANCE_SKIP_DIRS = new Set(['node_modules', '.git', 'out', 'dist', 'build', 'coverage', '.vscode-test', '.rame', '.private']);
-const ACCEPTANCE_TEST_DIR = /^(test|tests|__tests__|spec|acceptance|e2e)$/i;
-const ACCEPTANCE_TEST_FILE = /\.(test|spec|acceptance)\.[cm]?[jt]sx?$/i;
-const ACCEPTANCE_SCRIPT_FILE = /\.([cm]?[jt]sx?|json)$/i;
-
-/**
- * Files the user can pick for a Verified Mission: test files and files in
- * test folders, bounded, never through a symlink or a protected path. The
- * host checks every chosen file again when the Mission is authorized.
- */
-async function listAcceptanceCandidates(fs: AgentFs): Promise<string[]> {
-  const found: string[] = [];
-  const queue: Array<{ dir: string; depth: number; inTests: boolean }> = [{ dir: '', depth: 0, inTests: false }];
-  let visited = 0;
-  while (queue.length > 0 && found.length < 80 && visited < 2000) {
-    const current = queue.shift() as { dir: string; depth: number; inTests: boolean };
-    let entries: AgentFsEntry[];
-    try {
-      entries = await fs.listEntries(current.dir);
-    } catch {
-      continue;
-    }
-    entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
-      visited += 1;
-      const rel = current.dir === '' ? entry.name : `${current.dir}/${entry.name}`;
-      if (entry.isSymlink || !checkAgentRelPath(rel).ok) {
-        continue;
-      }
-      if (entry.isDir && current.depth < 4 && !ACCEPTANCE_SKIP_DIRS.has(entry.name)) {
-        queue.push({ dir: rel, depth: current.depth + 1, inTests: current.inTests || ACCEPTANCE_TEST_DIR.test(entry.name) });
-      } else if (entry.isFile && (ACCEPTANCE_TEST_FILE.test(entry.name) || (current.inTests && ACCEPTANCE_SCRIPT_FILE.test(entry.name)))) {
-        found.push(rel);
-      }
-    }
-  }
-  return found.sort().slice(0, 80);
-}
-
-/** Output budget of one Mission consultation of Meta (part of the grant). */
-const MISSION_CONSULT_OUTPUT_TOKENS = 2048;
-
-/** Lease tokens of Mission loops alive in this extension host process. */
-const LIVE_LEASE_TOKENS = new Set<string>();
-
-const REPLACE_NOT_FOUND_MESSAGE = 'The text to replace is not in the file; read it again and copy the fragment exactly.';
-const REPLACE_NOT_UNIQUE_MESSAGE = 'The text to replace appears more than once; include more surrounding lines so it is unique.';
-
-/** Failures with no side effects that the bounded loop may inspect and repair. */
-function isRecoverableAgentToolError(detail: string): boolean {
-  return [
-    REPLACE_NOT_FOUND_MESSAGE,
-    REPLACE_NOT_UNIQUE_MESSAGE,
-    'That file does not exist.',
-    'That directory does not exist.',
-    'The source file does not exist.',
-    'The target already exists; inspect and re-propose the action.',
-    'The destination already exists; overwrite is not allowed.',
-    'The source changed; re-read and re-propose the action.',
-    'The file changed; re-read and re-propose the action.',
-    REGEX_SEARCH_TIMEOUT_MESSAGE,
-  ].includes(detail);
 }

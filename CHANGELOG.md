@@ -52,6 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Enforce an approximate 16,000-token limit for new implementation modules; the three legacy monoliths are frozen and may only shrink during extraction.
 - Established a `ProjectAdapter` boundary, preserving npm acceptance discovery as the first independently tested adapter.
 - Moved VS Code workspace filesystem access, host-result summaries and live Mission leases behind small typed modules.
+- Moved npm script discovery and Mission presentation/report construction out of the extension-host coordinator.
 - Introduce a `ModelProvider` boundary for llama.cpp-compatible local inference and Meta Model API.
 - Move Mission orchestration and checkpoint construction out of `mainProvider.ts`.
 - Keep implementation files small enough to be inspected by supported local models; exceptions must be documented and justified.

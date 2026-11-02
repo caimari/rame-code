@@ -1,6 +1,7 @@
 import { type AgentFs, type AgentFsEntry } from '../agentHost.js';
+import { deriveAllowedCommands } from '../agentCommands.js';
 import { checkAgentRelPath } from '../agentPolicy.js';
-import type { ProjectAdapter } from './types.js';
+import type { ProjectAdapter, ProjectTestContext } from './types.js';
 
 export const ACCEPTANCE_ENVIRONMENT_FILES = ['package-lock.json', 'npm-shrinkwrap.json', 'tsconfig.json', '.npmrc'] as const;
 
@@ -39,8 +40,42 @@ export async function listAcceptanceCandidates(fs: AgentFs): Promise<string[]> {
   return found.sort().slice(0, 80);
 }
 
+export function parsePackageScripts(raw: string): Record<string, string> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) {
+      return undefined;
+    }
+    const rawScripts = (parsed as Record<string, unknown>).scripts;
+    if (typeof rawScripts !== 'object' || rawScripts === null) {
+      return undefined;
+    }
+    const scripts: Record<string, string> = {};
+    for (const [key, value] of Object.entries(rawScripts as Record<string, unknown>)) {
+      if (typeof value === 'string') {
+        scripts[key] = value;
+      }
+    }
+    return scripts;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Derive npm verification capabilities from the selected project. */
+export async function npmTestContext(fs: AgentFs): Promise<ProjectTestContext> {
+  try {
+    const packageJsonRaw = await fs.readText('package.json');
+    const scripts = parsePackageScripts(packageJsonRaw) ?? {};
+    return { allowlist: deriveAllowedCommands(scripts, []), packageJsonRaw, scripts };
+  } catch {
+    return { allowlist: [], packageJsonRaw: '', scripts: {} };
+  }
+}
+
 export const npmProjectAdapter: ProjectAdapter = {
   id: 'npm',
   acceptanceEnvironmentFiles: ACCEPTANCE_ENVIRONMENT_FILES,
   listAcceptanceCandidates,
+  testContext: npmTestContext,
 };

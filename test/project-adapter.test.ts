@@ -5,7 +5,9 @@ import type { AgentFs, AgentFsEntry } from '../src/agentHost.js';
 import {
   ACCEPTANCE_ENVIRONMENT_FILES,
   listAcceptanceCandidates,
+  npmTestContext,
   npmProjectAdapter,
+  parsePackageScripts,
 } from '../src/projectAdapters/npmProjectAdapter.js';
 
 function treeFs(tree: Record<string, AgentFsEntry[]>): AgentFs {
@@ -37,6 +39,23 @@ test('npm project adapter exposes its stable environment boundary', () => {
   assert.equal(npmProjectAdapter.id, 'npm');
   assert.deepEqual(npmProjectAdapter.acceptanceEnvironmentFiles, ACCEPTANCE_ENVIRONMENT_FILES);
   assert.deepEqual(ACCEPTANCE_ENVIRONMENT_FILES, ['package-lock.json', 'npm-shrinkwrap.json', 'tsconfig.json', '.npmrc']);
+});
+
+test('npm project adapter parses only string scripts and derives safe test commands', async () => {
+  assert.deepEqual(parsePackageScripts('{"scripts":{"test":"node --test","check":"npm test","bad":5}}'), {
+    test: 'node --test',
+    check: 'npm test',
+  });
+  assert.equal(parsePackageScripts('{broken'), undefined);
+  const fs = treeFs({});
+  fs.readText = async (rel) => {
+    assert.equal(rel, 'package.json');
+    return '{"scripts":{"test":"node --test","check":"npm test","start":"node server.js"}}';
+  };
+  const context = await npmTestContext(fs);
+  assert.equal(context.packageJsonRaw.length > 0, true);
+  assert.deepEqual(context.scripts, { test: 'node --test', check: 'npm test', start: 'node server.js' });
+  assert.deepEqual(context.allowlist.map((command) => command.id), ['npm:test', 'npm:check']);
 });
 
 test('acceptance discovery is bounded to test-like files and skips dependencies, output, and links', async () => {

@@ -40,7 +40,6 @@ import {
 import {
   boundRunTestsStillMatches,
   buildTestSpawnSpec,
-  deriveAllowedCommands,
   derivedNpmScriptName,
   describeBoundRunTestsAction,
   findAllowedCommand,
@@ -170,9 +169,17 @@ import {
   registerLiveMissionLease,
   unregisterLiveMissionLease,
 } from './missionRuntime.js';
+import { buildMissionReportEntry } from './missionReport.js';
+import {
+  buildMissionLiveView,
+  buildMissionView,
+  buildPlanningMissionLiveView,
+  type MissionViewRuntime,
+} from './missionViews.js';
 import {
   ACCEPTANCE_ENVIRONMENT_FILES,
   listAcceptanceCandidates,
+  npmTestContext,
 } from './projectAdapters/npmProjectAdapter.js';
 import { createVscodeWorkspaceFs } from './projectAdapters/vscodeWorkspaceFs.js';
 import {
@@ -287,7 +294,6 @@ import {
   type ViewConnection,
   type ViewScreen,
 } from './viewMessages.js';
-import { acceptanceState, missionChangedFiles, missionFinalReport, missionPhase, missionTestRuns, missionTestsNotRun } from './missionPhase.js';
 import { readBuildInfo } from './buildInfo.js';
 import { parseViewInboundMessage } from './viewMessages.js';
 import { buildViewHtml, createViewNonce } from './viewHtml.js';
@@ -1517,55 +1523,17 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     return resolveCanonicalRoot(fs, labelRoot);
   }
 
-  private async allowedTestCommands(): Promise<AllowedTestCommand[]> {
-    return (await this.testCommandContext()).allowlist;
-  }
-
-  private parsePackageScripts(raw: string): Record<string, string> | undefined {
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      if (typeof parsed === 'object' && parsed !== null) {
-        const record = parsed as Record<string, unknown>;
-        if (typeof record.scripts === 'object' && record.scripts !== null) {
-          const scripts: Record<string, string> = {};
-          for (const [key, value] of Object.entries(record.scripts as Record<string, unknown>)) {
-            if (typeof value === 'string') {
-              scripts[key] = value;
-            }
-          }
-          return scripts;
-        }
-      }
-    } catch {
-      return undefined;
-    }
-    return undefined;
-  }
-
   private async testCommandContext(boundRoot?: string): Promise<{
     allowlist: AllowedTestCommand[];
     packageJsonRaw: string;
     scripts: Record<string, string>;
   }> {
-    let packageJsonRaw = '';
-    let scripts: Record<string, string> = {};
     const root = boundRoot ?? (this.heldWorkspaceRoot().ok
       ? (this.heldWorkspaceRoot() as { ok: true; root: string }).root
       : null);
-    if (root !== null) {
-      try {
-        const fs = this.agentFsFor(root);
-        const raw = await fs.readText('package.json');
-        packageJsonRaw = raw;
-        scripts = this.parsePackageScripts(raw) ?? {};
-      } catch {
-        packageJsonRaw = '';
-        scripts = {};
-      }
-    }
-    // No explicit executable settings in this slice: derive only from
-    // package.json safe scripts.
-    return { allowlist: deriveAllowedCommands(scripts, []), packageJsonRaw, scripts };
+    return root === null
+      ? { allowlist: [], packageJsonRaw: '', scripts: {} }
+      : npmTestContext(this.agentFsFor(root));
   }
 
   private async runAllowlistedTest(
@@ -3507,40 +3475,13 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
    * exited 0; any other stop gets a short status note instead.
    */
   private appendMissionReport(mission: MissionRecord): void {
-    if (!['completed', 'blocked', 'paused', 'cancelled', 'interrupted', 'waiting_approval'].includes(mission.status)) {
+    const entry = buildMissionReportEntry(mission);
+    if (entry === null) {
       return;
     }
-    const tests = missionTestRuns(mission);
-    const changed = missionChangedFiles(mission);
-    const report = missionFinalReport(mission);
-    const lines = [
-      `mission: ${mission.status}${report !== null ? ' (every task verified by the host: a passing test after its last change, nothing uncertain)' : ''}`,
-      `mission: tasks ${mission.tasks.map((task) => `${task.title.slice(0, 60)} [${task.status}, ${task.runs} run(s)]`).join('; ')}`,
-      `mission: internal runs ${mission.taskRunsUsed}; grant ${mission.grant?.mode ?? 'none'}${mission.grant?.escalation ? `; Meta consultations ${mission.grant.escalation.used}/${mission.grant.escalation.maxConsultations}` : ''}`,
-      mission.grant?.acceptance
-        ? `mission: user acceptance check ${mission.grant.acceptance.commandId} (frozen: ${mission.grant.acceptance.files.map((file) => file.path).join(', ')}, package.json) — ${acceptanceState(mission).summary || 'not run'}`
-        : 'mission: no user acceptance check; completion means the project and agent tests passed',
-      ...(mission.grant?.tests
-        ? [
-            `mission: trusted project; tests granted ${mission.grant.tests.commandIds.join(', ')} for package.json ${mission.grant.tests.packageJsonHash.slice(0, 12)}…; test scripts run with your user permissions (path checks are not an operating-system sandbox)`,
-          ]
-        : []),
-      `mission: files changed ${changed.length > 0 ? changed.slice(0, 12).join(', ') : 'none'}`,
-      `mission: last test ${tests.length > 0 ? tests[tests.length - 1] : 'none'}`,
-      ...(report !== null
-        ? [
-            `mission: tests run ${report.tests.length > 0 ? report.tests.join(' | ') : 'none'}`,
-            `mission: time ${report.minutes} min since authorization`,
-            `mission: models ${report.models.join('; ')}; Meta consultations ${report.metaConsultations}`,
-            'mission: no sandbox: test scripts ran with your user permissions and could reach other files, the network, or other processes',
-          ]
-        : []),
-      `mission: ${mission.note}`,
-    ];
-    const title = report !== null ? 'Mission completed and verified by the host.' : `Mission ${mission.status.replace('_', ' ')} — status note, not a final report.`;
     const current = this.store.get(mission.threadId);
     if (current) {
-      this.store.save(appendAssistantTurn(current, title, undefined, lines.map((line) => `• ${line}`.slice(0, MAX_HOST_RECORD_LINE_LENGTH))));
+      this.store.save(appendAssistantTurn(current, entry.title, undefined, entry.hostRecord));
     }
   }
 
@@ -3751,30 +3692,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     if (!mission) {
       return null;
     }
-    const task = currentTask(mission);
-    const running = this.activeMission?.id === mission.id;
-    return {
-      id: mission.id,
-      revision: mission.revision,
-      threadId: mission.threadId,
-      goal: mission.goal,
-      status: mission.status,
-      tasks: mission.tasks.map((entry) => ({ title: entry.title, status: entry.status, runs: entry.runs })),
-      current: task?.title ?? null,
-      pendingCount: mission.tasks.filter((entry) => entry.status !== 'completed').length,
-      decisionsUsed: mission.decisionsUsed.map((entry) => ({
-        key: entry.key,
-        version: entry.version,
-        currentVersion: current.find((decision) => decision.key === entry.key)?.version ?? null,
-      })),
-      evidence: mission.evidence.slice(-20).map((entry) => `${entry.kind}: ${entry.text}`),
-      runsUsed: mission.taskRunsUsed,
-      maxRuns: mission.maxTaskRuns,
-      note: mission.note,
-      canRun: !running && !this.running && mission.grant === null && canRunTask(mission).ok,
-      resume: (task?.runs ?? 0) > 0,
-      autonomy: this.missionAutonomyView(mission),
-    };
+    return buildMissionView(mission, current, this.missionViewRuntime(mission));
   }
 
   private isAuthorizing(missionId: string): boolean {
@@ -3799,98 +3717,11 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       if (this.running && this.runThreadId === threadId && this.runKind === 'mission-plan') {
         const thread = this.store.get(threadId);
         const goal = [...(thread?.turns ?? [])].reverse().find((turn) => turn.kind === 'user');
-        return {
-          missionId: null,
-          revision: 0,
-          threadId,
-          goal: goal && 'text' in goal && typeof goal.text === 'string' ? goal.text : '',
-          phase: 'planning',
-          currentTask: null,
-          tasksDone: 0,
-          tasksTotal: 0,
-          internalRun: 0,
-          step: null,
-          maxSteps: MAX_AGENT_STEPS,
-          startedAt: null,
-          endedAt: null,
-          lastProgress: '',
-          lastTest: '',
-          grant: null,
-          model: null,
-          acceptance: null,
-          canStart: false,
-          canPause: false,
-          canResume: false,
-          canCancel: false,
-          setup: null,
-          startRequest: null,
-          report: null,
-          blocked: null,
-          review: [],
-          note: '',
-        };
+        return buildPlanningMissionLiveView(threadId, goal && 'text' in goal && typeof goal.text === 'string' ? goal.text : '');
       }
       return null;
     }
-    const auto = this.missionAutonomyView(mission);
-    // Started or resumed here and about to take the lease: already running.
-    const driving = auto.running || (this.missionStarting === mission.id && this.missionAuto === null && mission.status === 'active');
-    const phase = missionPhase(mission, {
-      driving,
-      authorizing: this.isAuthorizing(mission.id),
-      manualTask: this.activeMission?.id === mission.id,
-      runningElsewhere: !driving && leaseHeldByOther(mission, this.leaseToken, (lease) => this.isLeaseAlive(lease)),
-    });
-    const acceptance = acceptanceState(mission);
-    const tests = missionTestRuns(mission);
-    const request = this.missionStartRequest !== null && this.missionStartRequest.missionId === mission.id ? this.missionStartRequest : null;
-    const ended = ['completed', 'cancelled', 'failed', 'paused', 'blocked', 'interrupted'].includes(phase);
-    return {
-      missionId: mission.id,
-      revision: mission.revision,
-      threadId,
-      goal: mission.goal,
-      phase,
-      currentTask: currentTask(mission)?.title ?? null,
-      tasksDone: mission.tasks.filter((task) => task.status === 'completed').length,
-      tasksTotal: mission.tasks.length,
-      internalRun: mission.auto === null ? 0 : mission.auto.runs + (driving ? 1 : 0),
-      step: driving ? this.agentStepNow : null,
-      maxSteps: MAX_AGENT_STEPS,
-      startedAt: mission.grant?.grantedAt ?? null,
-      endedAt: ended && mission.grant !== null ? mission.updatedAt : null,
-      lastProgress: mission.auto?.lastProgress ?? '',
-      lastTest: tests.length > 0 ? (tests[tests.length - 1] as string) : '',
-      grant: mission.grant?.mode ?? null,
-      model: mission.grant?.model ?? null,
-      acceptance:
-        mission.grant?.acceptance == null
-          ? null
-          : {
-              commandId: mission.grant.acceptance.commandId,
-              files: mission.grant.acceptance.files.map((file) => ({ path: file.path, hash: file.hash })),
-              state: acceptance.state,
-              summary: acceptance.summary,
-            },
-      canStart: auto.canStart,
-      canPause: auto.canPause && !['paused', 'cancelled', 'completed', 'failed'].includes(mission.status),
-      canResume: auto.canResume && ['paused', 'blocked', 'interrupted'].includes(phase),
-      canCancel: auto.canCancel,
-      setup:
-        auto.canStart && this.missionSetup !== null && this.missionSetup.scopeId === mission.scopeId
-          ? {
-              testCommands: [...this.missionSetup.testCommands],
-              candidates: [...this.missionSetup.candidates],
-              environmentFiles: [...this.missionSetup.environmentFiles],
-              packageJsonHash: this.missionSetup.packageJsonHash,
-            }
-          : null,
-      startRequest: request === null ? null : { requestId: request.requestId, state: request.state, error: request.error },
-      report: missionFinalReport(mission),
-      blocked: phase === 'blocked' ? { reason: mission.note, runs: mission.auto?.runs ?? 0, lastProgress: mission.auto?.lastProgress ?? '', testsNotRun: missionTestsNotRun(mission) } : null,
-      review: mission.evidence.slice(-40).map((entry) => `${entry.kind}: ${entry.text}`),
-      note: mission.note,
-    };
+    return buildMissionLiveView(mission, this.missionViewRuntime(mission));
   }
 
   /**
@@ -3919,28 +3750,20 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     await this.resumeMission(missionId, guided.value.revision);
   }
 
-  private missionAutonomyView(mission: MissionRecord): MissionView['autonomy'] {
-    const driving = this.missionAuto !== null && this.missionAuto.missionId === mission.id;
-    const ended = ['completed', 'cancelled', 'failed'].includes(mission.status);
-    const lastTest = [...mission.evidence].reverse().find((entry) => /run_tests /.test(entry.text) && entry.kind === 'host-record');
+  private missionViewRuntime(mission: MissionRecord): MissionViewRuntime {
     return {
-      grant: mission.grant?.mode ?? null,
-      model: mission.grant?.model ?? null,
-      running: driving,
-      internalRuns: mission.auto?.runs ?? 0,
-      step: driving ? this.agentStepNow : null,
-      maxSteps: MAX_AGENT_STEPS,
-      startedAt: mission.auto?.startedAt ?? null,
-      lastProgress: mission.auto?.lastProgress ?? '',
-      lastTest: lastTest ? lastTest.text.replace(/^•\s*/, '') : '',
-      escalation: mission.grant?.escalation ? { used: mission.grant.escalation.used, max: mission.grant.escalation.maxConsultations, model: mission.grant.escalation.model } : null,
-      canStart: !driving && !this.running && !ended && mission.grant === null && !this.isAuthorizing(mission.id),
-      canResume: !driving && !this.running && !ended && mission.grant !== null && mission.status !== 'waiting_approval',
-      canPause: driving || ['interrupted', 'blocked'].includes(mission.status),
-      canCancel: !ended,
+      hostRunning: this.running,
+      driving: this.missionAuto?.missionId === mission.id,
+      starting: this.missionStarting === mission.id && this.missionAuto === null,
+      manualTask: this.activeMission?.id === mission.id,
+      agentStep: this.agentStepNow,
+      authorizing: this.isAuthorizing(mission.id),
+      leaseToken: this.leaseToken,
+      isLeaseAlive: (lease) => this.isLeaseAlive(lease),
       cloudEscalationAllowed: this.settings.allowCloudEscalation,
       testCommands: this.missionTestCommands,
-      acceptance: mission.grant?.acceptance ? { commandId: mission.grant.acceptance.commandId, files: mission.grant.acceptance.files.map((file) => file.path) } : null,
+      setup: this.missionSetup,
+      startRequest: this.missionStartRequest?.missionId === mission.id ? this.missionStartRequest : null,
     };
   }
 

@@ -53,7 +53,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Established a `ProjectAdapter` boundary, preserving npm acceptance discovery as the first independently tested adapter.
 - Moved VS Code workspace filesystem access, host-result summaries and live Mission leases behind small typed modules.
 - Moved npm script discovery and Mission presentation/report construction out of the extension-host coordinator.
-- Introduce a `ModelProvider` boundary for llama.cpp-compatible local inference and Meta Model API.
+- Established the first `ModelProvider` boundary for Agent inference, with explicit llama.cpp-compatible local and Meta adapters and no silent fallback.
 - Move Mission orchestration and checkpoint construction out of `mainProvider.ts`.
 - Keep implementation files small enough to be inspected by supported local models; exceptions must be documented and justified.
 

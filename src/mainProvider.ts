@@ -71,8 +71,6 @@ import {
   LocalMalformedToolCallError,
   assertAgentModelForProvider,
   buildAgentSystemPrompt,
-  createLocalAgentCompletion,
-  createMetaAgentCompletion,
   isAgentToolProtocolError,
   type AgentCompletion,
   type AgentChatMessage,
@@ -176,6 +174,7 @@ import {
   buildPlanningMissionLiveView,
   type MissionViewRuntime,
 } from './missionViews.js';
+import { LocalAgentModelProvider, MetaAgentModelProvider } from './modelProviders/agentProvider.js';
 import {
   ACCEPTANCE_ENVIRONMENT_FILES,
   listAcceptanceCandidates,
@@ -1843,24 +1842,21 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
         }
         let completion: AgentCompletion;
         try {
-          completion = provider === 'cloud'
-            ? await createMetaAgentCompletion({ apiKey, model, messages, generation: stepRequest.request, tools: runTools, signal }).then((result) => {
-                this.recordUsage('cloud', result.usage);
-                return result;
-              })
-            : await createLocalAgentCompletion({
-                endpoint: this.localEndpoint() as string,
-                model,
-                messages,
-                generation: stepRequest.request,
-                tools: runTools,
-                signal,
-                toolChoice,
-              }).then((result) => {
-                this.recordUsage('local', result.usage);
-                this.armIdleShutdown();
-                return result;
-              });
+          const modelProvider = provider === 'cloud'
+            ? new MetaAgentModelProvider(apiKey)
+            : new LocalAgentModelProvider(this.localEndpoint() as string);
+          completion = await modelProvider.complete({
+            model,
+            messages,
+            generation: stepRequest.request,
+            tools: runTools,
+            signal,
+            toolChoice,
+          });
+          this.recordUsage(modelProvider.id, completion.usage);
+          if (modelProvider.id === 'local') {
+            this.armIdleShutdown();
+          }
           if (completion.usage.inputTokens > 0) {
             calibration = { chars: JSON.stringify(estimateBody).length, tokens: completion.usage.inputTokens };
           }

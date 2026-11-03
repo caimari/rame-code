@@ -15,10 +15,10 @@ responsibilities to a single provider class.
 - Public interfaces should be narrow, typed and independently testable.
 - Cyclic dependencies between feature modules are not allowed.
 
-`npm run compile` enforces the per-file rule. During the migration,
-`src/mainProvider.ts`, `media/main.js` and `media/i18n.js` are frozen legacy
-exceptions: they may shrink but cannot grow. The exceptions must be removed
-when the extraction is complete.
+`npm run compile` enforces the per-file rule. `src/mainProvider.ts` now follows
+the normal limit. The remaining frozen legacy exceptions are the presentation
+assets `media/main.js` and `media/i18n.js`; they may shrink but cannot grow and
+must be decomposed along UI responsibility boundaries in a later change.
 
 ## Target boundaries
 
@@ -26,6 +26,10 @@ when the extraction is complete.
 
 Owns VS Code lifecycle, webview wiring and composition. It does not implement
 Agent, Mission, memory, provider or project-specific behavior.
+
+`src/mainProvider.ts` is this shell. It delegates generation, Agent execution,
+Mission coordination and project memory through the typed contracts in
+`src/providerTypes.ts`.
 
 ### Model providers
 
@@ -46,16 +50,25 @@ Owns the bounded tool loop, permission profiles, approvals, filesystem policy
 and host-authored evidence. It receives provider and project capabilities
 through interfaces.
 
+The orchestration loop lives in `src/agentEngine.ts`; approval and bounded tool
+operations live in `src/agentController.ts`.
+
 ### Mission coordinator
 
 Owns persistent plans, grants, checkpoints, leases, autonomous continuation,
 acceptance checks and terminal reports. It invokes the Agent engine but does
 not implement its tools.
 
+This boundary is implemented by `src/missionCoordinator.ts` and the smaller
+Mission state, presentation, runtime and report modules.
+
 ### Project memory
 
 Owns authorized decisions, versions, provenance, verified artifacts and stale
 detection. Model text and repository content remain untrusted inputs.
+
+Host integration is isolated in `src/memoryController.ts`; the persistent
+domain model remains in the decision and project-memory modules.
 
 ### Presentation
 

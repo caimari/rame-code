@@ -10,7 +10,6 @@ const CHARS_PER_TOKEN = 4;
 // Temporary migration caps. These files must only shrink until their
 // responsibilities have moved into bounded modules, then the exceptions go.
 const LEGACY_CAPS = new Map([
-  ['src/mainProvider.ts', 232_605],
   ['media/main.js', 102_543],
   ['media/i18n.js', 65_200],
 ]);

@@ -198,7 +198,7 @@ test('webview script renders safely and binds approvals to id plus digest', () =
 });
 
 test('host gives malformed model tool calls a bounded schema repair path', () => {
-  const host = readFileSync('src/mainProvider.ts', 'utf8');
+  const host = readFileSync('src/agentEngine.ts', 'utf8');
   assert.match(host, /protocolRepairs > 2/);
   assert.match(host, /Correcting malformed tool call/);
   assert.match(host, /did not exactly match the declared JSON schema/);
@@ -206,7 +206,7 @@ test('host gives malformed model tool calls a bounded schema repair path', () =>
 });
 
 test('new-file approval binds absence and stale approvals trigger re-proposal', () => {
-  const host = readFileSync('src/mainProvider.ts', 'utf8');
+  const host = readFileSync('src/agentEngine.ts', 'utf8');
   assert.match(host, /bindPatchApprovalPreconditions/);
   assert.match(host, /MISSING_FILE_PRECONDITION/);
   assert.match(host, /choice\.kind === 'stale'/);
@@ -215,7 +215,7 @@ test('new-file approval binds absence and stale approvals trigger re-proposal', 
 });
 
 test('empty Agent replies are retried and never reported as successful completion', () => {
-  const host = readFileSync('src/mainProvider.ts', 'utf8');
+  const host = readFileSync('src/agentEngine.ts', 'utf8');
   assert.match(host, /Retrying an empty Agent response/);
   assert.match(host, /model repeatedly returned an empty response/);
   assert.match(host, /No success was claimed/);

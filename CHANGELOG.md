@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Replaced the extension-host monolith with a bounded composition shell plus dedicated generation, Agent, Mission and project-memory controllers; every TypeScript implementation file now fits the approximate 16,000-token source-file policy.
 - Mission internal runs now receive a bounded host checkpoint instead of replaying earlier internal-run conversations. This keeps the cross-run context approximately flat while preserving the complete stored thread and evidence.
 - Mission completion now depends on host-observed changes and successful tests after the last change; verified Missions additionally require the frozen acceptance command to pass.
 - Mission setup and progress are presented in the conversation, with distinct planning, authorization, running, paused, blocked, interrupted and completed states.
@@ -45,9 +46,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Autonomous execution is not an operating-system sandbox; approved project scripts run with the VS Code user's permissions.
 - Natural decision-source validation is deliberately conservative and its host-side vocabulary is verified only in English and Spanish.
 - Meta escalation has automated coverage but still requires a final real-API validation for this candidate.
-- `src/mainProvider.ts` has grown beyond the context window of the local Glimmer configuration. Before the next public release, the provider, Mission orchestration and project-adapter responsibilities will be extracted into bounded modules without changing verified behavior.
+- The two legacy presentation assets `media/main.js` and `media/i18n.js` remain above the normal source-file target; their frozen size caps prevent further growth until they are split by UI responsibility.
 
-### Architecture work in progress
+### Architecture
 
 - Enforce an approximate 16,000-token limit for each new implementation source file, not for a whole functional module; the three legacy monoliths are frozen and may only shrink during extraction.
 - Established a `ProjectAdapter` boundary, preserving npm acceptance discovery as the first independently tested adapter.
@@ -55,8 +56,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Moved npm script discovery and Mission presentation/report construction out of the extension-host coordinator.
 - Moved owned `llama-server` process lifecycle, health checks, diagnostics and idle shutdown into a dedicated runtime manager.
 - Established the first `ModelProvider` boundary for Agent inference, with explicit llama.cpp-compatible local and Meta adapters and no silent fallback.
-- Move Mission orchestration and checkpoint construction out of `mainProvider.ts`.
-- Keep implementation files small enough to be inspected by supported local models; exceptions must be documented and justified.
+- Moved generation, Agent execution, Mission orchestration, checkpoint construction and project-memory host integration out of `mainProvider.ts` into typed controllers without changing the verified behavior.
+- Reduced `mainProvider.ts` to the VS Code lifecycle, state-composition and message-routing shell; it now satisfies the same per-file context policy as new source files.
+- Keep the remaining presentation exceptions frozen, documented and unable to grow until they are decomposed.
 
 ## [0.1.0] - 2026-11-02
 

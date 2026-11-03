@@ -214,7 +214,7 @@ test('unreachable local endpoint shows an actionable message with Settings actio
   assert.match(script, /Local model is not reachable at /);
   assert.match(script, /Open Settings/);
   assert.match(script, /type:\s*['"]navigate['"]/);
-  const host = readFileSync('src/mainProvider.ts', 'utf8');
+  const host = readFileSync('src/generationController.ts', 'utf8');
   assert.match(host, /localUnreachableMessage/);
   assert.match(host, /looksUnreachable/);
   assert.ok(!host.includes("appendErrorTurn(current, 'Request failed.')"), 'generic failure must carry actionable detail');

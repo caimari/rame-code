@@ -34,6 +34,7 @@ import {
   MAX_USER_GUIDANCE,
   pauseMission,
   recordAcceptance,
+  recordVerifierRecheck,
   recordRun,
   startTaskRun,
   uncertainActions,
@@ -535,6 +536,9 @@ export async function runMissionAutonomous(
         break;
       }
       const current = host.missions.get(missionId);
+      // The manifest the tests ran against: a blocking verifier recovers only under the same one.
+      const runContext = await host.testCommandContext(scope.root);
+      const conditions = runContext.packageJsonRaw.length > 0 ? hashContent(runContext.packageJsonRaw) : '';
       const observation: RunObservation = {
         outcome: outcome.outcome,
         writes: outcome.writes ?? [],
@@ -544,6 +548,8 @@ export async function runMissionAutonomous(
         hostRecord: outcome.hostRecord,
         report: outcome.report,
         repeatedReads: outcome.repeatedReads ?? 0,
+        verifiers: outcome.verifiers ?? [],
+        conditions,
       };
       let next = 'continue' as 'complete-task' | 'continue' | 'blocked';
       let assessment = null as RunAssessment | null;
@@ -561,6 +567,13 @@ export async function runMissionAutonomous(
       if (!recorded) {
         ended = 'The Mission checkpoint could not be saved; stopping before the next run.';
         break;
+      }
+      if (next === 'continue' && (assessment as RunAssessment | null)?.blockedByVerifier === true) {
+        // The run is otherwise verified: the host re-runs the verifiers that
+        // failed, itself, and only their passing result accepts the task.
+        if (await recheckBlockingVerifiers(host, missionId, runContext, conditions, scope.root)) {
+          next = 'complete-task';
+        }
       }
       if (next === 'complete-task') {
         const latest = host.missions.get(missionId);
@@ -835,6 +848,57 @@ export async function runAcceptance(
   } finally {
     host.acceptanceController = null;
   }
+}
+
+/**
+ * The host's own re-run of the open blocking verifiers. Only commands the
+ * autonomous grant already allows, under the package.json it was granted
+ * for: a supervised Mission keeps asking, so the host never runs them there.
+ */
+export async function recheckBlockingVerifiers(
+  host: ProviderHost,
+  missionId: string,
+  context: { allowlist: Array<{ id: string }>; packageJsonRaw: string },
+  conditions: string,
+  root: string,
+): Promise<boolean> {
+  const mission = host.missions.get(missionId);
+  const tests = mission?.grant?.mode === 'autonomous-workspace' ? mission.grant.tests : null;
+  const blockers = mission?.auto?.blockers ?? [];
+  if (mission === null || tests === null || blockers.length === 0 || tests.packageJsonHash !== conditions) {
+    return false;
+  }
+  const results: Array<{ commandId: string; exitCode: number | null }> = [];
+  for (const blocker of blockers) {
+    const command = (await host.testCommandContext(root)).allowlist.find((entry) => entry.id === blocker.commandId);
+    if (!command || !tests.commandIds.includes(blocker.commandId)) {
+      return false;
+    }
+    host.status = `Re-running the blocking verifier ${blocker.commandId}\u2026`;
+    await host.postState();
+    const controller = new AbortController();
+    host.acceptanceController = controller;
+    try {
+      const output = await host.runAllowlistedTest(command, controller.signal, root);
+      const exit = /^exit=(\d+)/.exec(output);
+      results.push({ commandId: blocker.commandId, exitCode: exit ? Number(exit[1]) : null });
+    } finally {
+      host.acceptanceController = null;
+    }
+    if (host.missionAuto?.stop !== null && host.missionAuto?.stop !== undefined) {
+      return false;
+    }
+  }
+  let cleared = false;
+  await updateActiveMission(host, (draft) => {
+    const result = recordVerifierRecheck(draft, results, conditions, Date.now());
+    if (!result.ok) {
+      return result;
+    }
+    cleared = result.value.cleared;
+    return { ok: true, value: result.value.mission };
+  });
+  return cleared;
 }
 
 /** Whether this window is currently authorizing the given Mission. */

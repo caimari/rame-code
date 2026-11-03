@@ -67,7 +67,7 @@
   },
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
-    "compile": "node scripts/check-module-size.js && tsc -p . && node scripts/build-info.js",
+    "compile": "node scripts/check-module-size.js && node scripts/check-module-deps.js && tsc -p . && node scripts/build-info.js",
     "test": "npm run compile && node --test out/test/*.test.js",
     "check": "npm run test",
     "package": "npm run check && vsce package --allow-missing-repository"

@@ -82,10 +82,37 @@ RAME Code can start `llama-server` directly; Ollama is not required.
 
 1. Select **Muse Glimmer — Local**.
 2. Configure the `llama-server` executable and Muse Glimmer GGUF path.
-3. Optionally configure a multimodal projector or DFlash draft model.
+3. Optionally configure a multimodal projector or DFlash draft model for the local server.
 4. Choose **Save**, then **Start Muse Glimmer**.
 
 The managed server binds to `127.0.0.1`. RAME Code stops only the process it started. You may also select an existing loopback OpenAI-compatible endpoint.
+
+In the public `v0.1.0` extension, local operation means that RAME Code sends text requests to a `llama-server` running on the user's own machine. The model files are read from user-configured disk paths and are not included in the extension or this repository. The alternative cloud runtime sends requests to Meta Model API using the user's own API key.
+
+### Tested local Meta Muse stack
+
+The development system has been tested with the following independently supplied files:
+
+| Component | Tested file | Approximate disk size |
+| --- | --- | ---: |
+| Text model | Muse Glimmer 30B Q4_K_M GGUF | 15.61 GiB |
+| Vision projector | Muse Glimmer 30B Q4_K_M `mmproj` GGUF | 1.30 GiB |
+| Optional text acceleration | Muse Glimmer 30B Q4_K_M DFlash GGUF | 1.52 GiB |
+
+The full tested set occupies approximately 18.43 GiB on disk. On the tested NVIDIA RTX 5090 system, loading the model, projector and DFlash used approximately 21.3 GiB of VRAM; actual memory use depends on the build, context and offload settings.
+
+A recent Muse-Glimmer-compatible build of `llama.cpp` is required. A generic older `llama-server` may not recognize this model or its projector. A minimal standalone launch with vision support looks like:
+
+```bash
+llama-server \
+  -m /path/to/Muse-Glimmer-30B-Q4_K_M.gguf \
+  --mmproj /path/to/mmproj-Muse-Glimmer-30B-Q4_K_M.gguf \
+  -ngl 99 \
+  -c 32768 \
+  --jinja
+```
+
+**Vision is not active in the RAME Code `v0.1.0` user experience.** The local runtime can be configured to load the separately supplied `mmproj`, and that runtime has been validated independently with images and OCR, but RAME Code does not yet provide image attachment or send multimodal messages. Until that integration is implemented and verified, RAME Code uses this local stack for text-only Agent, Mission and Chat requests.
 
 ## Permission profiles
 

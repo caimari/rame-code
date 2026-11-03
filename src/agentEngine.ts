@@ -1445,6 +1445,8 @@ export async function sendAgent(
       writes,
       wroteAfterLastTest: lastTestRun ? workspaceWrites > lastTestRun.writes : workspaceWrites > 0,
       repeatedReads,
+      // The last result of each test command, for the Mission's blocking verifiers.
+      verifiers: [...new Map(testRuns.map((run) => [run.commandId, { commandId: run.commandId, exitCode: run.exitCode, afterLastWrite: run.writes === workspaceWrites }])).values()],
     };
   }
   let capabilityReason: string | null = null;

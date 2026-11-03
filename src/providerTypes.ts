@@ -87,6 +87,8 @@ export interface AgentOutcomeRecord {
   wroteAfterLastTest?: boolean;
   capabilityReason?: string | null;
   repeatedReads?: number;
+  /** The last result of each test command in the run. */
+  verifiers?: Array<{ commandId: string; exitCode: number | null; afterLastWrite: boolean }>;
 }
 
 /**

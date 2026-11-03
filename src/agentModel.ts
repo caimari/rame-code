@@ -59,6 +59,7 @@ export function buildAgentSystemPrompt(_workspaceLabel: string): string {
     'read_file, create_directory, move_file, delete_file, set_executable, apply_patch, replace_in_file, run_tests). ' +
     'Read a file first to obtain its SHA-256 before moving, deleting, or replacing it. ' +
     'To change part of an existing file use replace_in_file with a short exact fragment; use apply_patch for new files or full rewrites. ' +
+    'Keep code modular: one clear responsibility per file and narrow interfaces; before a file grows large, split it along a responsibility boundary instead of waiting for a size limit. ' +
     'Before creating or editing JavaScript or TypeScript, read the nearest package.json and match its module system; never mix ESM import/export with CommonJS require/module.exports. ' +
     'Before run_tests, read package.json. A safe npm script named X uses commandId npm:X; ' +
     'for the test script use exactly npm:test, never a raw command such as node --test. ' +

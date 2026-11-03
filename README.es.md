@@ -82,10 +82,37 @@ RAME Code puede arrancar directamente `llama-server`; Ollama no es obligatorio.
 
 1. Selecciona **Muse Glimmer — Local**.
 2. Configura el ejecutable de `llama-server` y el GGUF de Muse Glimmer.
-3. Opcionalmente configura el proyector multimodal o el modelo borrador DFlash.
+3. Opcionalmente configura el proyector multimodal o el modelo borrador DFlash para el servidor local.
 4. Pulsa **Save** y después **Start Muse Glimmer**.
 
 El servidor administrado escucha únicamente en `127.0.0.1`. RAME Code solo detiene el proceso que él mismo inició. También puedes utilizar un endpoint OpenAI-compatible existente en loopback.
+
+En la extensión pública `v0.1.0`, el funcionamiento local significa que RAME Code envía peticiones de texto a un `llama-server` ejecutado en la propia máquina del usuario. Los modelos se leen desde rutas de disco configuradas por el usuario y no se incluyen en la extensión ni en este repositorio. La alternativa en la nube envía las peticiones a Meta Model API mediante la clave API del propio usuario.
+
+### Stack local Meta Muse probado
+
+El sistema de desarrollo se ha probado con los siguientes archivos suministrados de forma independiente:
+
+| Componente | Archivo probado | Tamaño aproximado en disco |
+| --- | --- | ---: |
+| Modelo de texto | Muse Glimmer 30B Q4_K_M GGUF | 15,61 GiB |
+| Proyector de visión | Muse Glimmer 30B Q4_K_M `mmproj` GGUF | 1,30 GiB |
+| Aceleración de texto opcional | Muse Glimmer 30B Q4_K_M DFlash GGUF | 1,52 GiB |
+
+El conjunto completo probado ocupa aproximadamente 18,43 GiB en disco. En el sistema de pruebas con una NVIDIA RTX 5090, cargar modelo, proyector y DFlash utilizó aproximadamente 21,3 GiB de VRAM; el consumo real depende de la compilación, el contexto y la descarga de capas a la GPU.
+
+Se necesita una compilación reciente de `llama.cpp` compatible con Muse Glimmer. Un `llama-server` antiguo cualquiera podría no reconocer el modelo o su proyector. Un arranque independiente mínimo con soporte visual sería:
+
+```bash
+llama-server \
+  -m /ruta/a/Muse-Glimmer-30B-Q4_K_M.gguf \
+  --mmproj /ruta/a/mmproj-Muse-Glimmer-30B-Q4_K_M.gguf \
+  -ngl 99 \
+  -c 32768 \
+  --jinja
+```
+
+**La visión no está activa en la experiencia de usuario de RAME Code `v0.1.0`.** El runtime local puede configurarse para cargar el `mmproj` suministrado por separado, y ese runtime se ha validado independientemente con imágenes y OCR, pero RAME Code todavía no permite adjuntar imágenes ni envía mensajes multimodales. Hasta implementar y verificar esa integración, RAME Code utiliza este stack local únicamente para peticiones de texto de Agent, Mission y Chat.
 
 ## Perfiles de permisos
 

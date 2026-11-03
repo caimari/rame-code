@@ -67,7 +67,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - First public VS Code extension preview.
 - Agent, Mission and Chat modes in one Activity Bar view.
 - Meta Model API provider with user-owned credentials in SecretStorage.
-- Managed Muse Glimmer runtime through loopback `llama-server`.
+- Managed Muse Glimmer text runtime through a loopback `llama-server`, using user-supplied executable and GGUF paths or an existing local OpenAI-compatible endpoint; model weights are not bundled.
 - Explicit local-to-cloud escalation consent.
 - Bounded workspace inspection, file operations, patches and allowlisted test execution.
 - Ask, Safe auto and Workspace full permission profiles.
@@ -88,6 +88,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Persistent versioned project memory is not part of this release.
 - Missions do not yet resume after a complete extension restart.
+- Vision input is not active in RAME Code v0.1.0. A separately supplied Muse Glimmer `mmproj` may be loaded by the local server, but the extension does not yet attach images or send multimodal messages.
 - The local audit is bounded but is not tamper-proof.
 - Project test scripts run with the operating-system permissions of VS Code.
 

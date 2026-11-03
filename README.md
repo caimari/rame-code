@@ -99,7 +99,7 @@ The development system has been tested with the following independently supplied
 | Vision projector | Muse Glimmer 30B Q4_K_M `mmproj` GGUF | 1.30 GiB |
 | Optional text acceleration | Muse Glimmer 30B Q4_K_M DFlash GGUF | 1.52 GiB |
 
-The full tested set occupies approximately 18.43 GiB on disk. On the tested NVIDIA RTX 5090 system, loading the model, projector and DFlash used approximately 21.3 GiB of VRAM; actual memory use depends on the build, context and offload settings.
+The RAME Code development machine is equipped with an NVIDIA RTX 5090 and runs Muse Glimmer locally through `llama-server`. The full tested set occupies approximately 18.43 GiB on disk. On this machine, loading the model, projector and DFlash used approximately 21.3 GiB of VRAM; actual memory use depends on the build, context and offload settings.
 
 A recent Muse-Glimmer-compatible build of `llama.cpp` is required. A generic older `llama-server` may not recognize this model or its projector. A minimal standalone launch with vision support looks like:
 

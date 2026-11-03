@@ -5,16 +5,17 @@ implementation unit without loading the whole extension host. The repository
 uses composition around a small orchestration shell rather than adding new
 responsibilities to a single provider class.
 
-## Module-size rule
+## Source-file context rule
 
-- New implementation modules must stay below approximately **16,000 tokens**
+- Each new implementation source file must stay below approximately **16,000 tokens**
   (estimated conservatively as four characters per token).
-- Prefer a new cohesive module over extending an unrelated file.
-- A split must follow a responsibility boundary, not arbitrary line counts.
+- A functional module may contain as many cohesive source files as it needs.
+- Prefer a new cohesive file or submodule over extending an unrelated file.
+- A split must follow a responsibility boundary, never an arbitrary file or line count.
 - Public interfaces should be narrow, typed and independently testable.
 - Cyclic dependencies between feature modules are not allowed.
 
-`npm run compile` enforces the rule. During the migration,
+`npm run compile` enforces the per-file rule. During the migration,
 `src/mainProvider.ts`, `media/main.js` and `media/i18n.js` are frozen legacy
 exceptions: they may shrink but cannot grow. The exceptions must be removed
 when the extraction is complete.

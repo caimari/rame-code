@@ -22,7 +22,6 @@
  *   endpoint is never owned and never killed.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
 import * as path from 'node:path';
@@ -219,16 +218,13 @@ import {
 } from './generationSettings.js';
 import { createLocalChatCompletion, createLocalMissionPlan } from './localProvider.js';
 import {
-  buildLlamaServerArgs,
-  initialLocalRuntimeStatus,
   isLoopbackUrl,
   loopbackEndpoint,
   nextLocalRuntimeStatus,
-  sanitizeDiagnostics,
-  STARTUP_TIMEOUT_MS,
   validateLocalSettings,
   type LocalRuntimeStatus,
 } from './localRuntime.js';
+import { LocalRuntimeManager } from './localRuntimeManager.js';
 import {
   CLOUD_MODEL_FALLBACK,
   fallbackCatalog,
@@ -326,7 +322,6 @@ type AgentDecision =
   | { kind: 'cancelled' }
   | { kind: 'stale'; reason: string };
 
-const MAX_DIAGNOSTIC_BYTES = 8192;
 const APPROVAL_PREVIEW_CHARS = 2000;
 /** The model is told to wrap up when this many steps of the budget remain. */
 const AGENT_STEPS_WARNING_REMAINING = 2;
@@ -405,14 +400,20 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
   private usageLast: ProviderUsage = { ...EMPTY_USAGE };
   private cloudCatalog: CloudModelInfo[] = fallbackCatalog();
   private localSettingsRev = 1;
-  private local: LocalRuntimeStatus = initialLocalRuntimeStatus();
+  private readonly localRuntime = new LocalRuntimeManager({
+    publish: async (status, message) => {
+      this.localRuntime.replaceStatus(status);
+      this.status = message;
+      await this.postState();
+    },
+    probe: async (endpoint) => { await this.probeLocalProps(endpoint); },
+    isBusy: () => this.isBusy(),
+    idleTimeoutSeconds: () => this.settings.local.idleTimeoutSec,
+  });
   private escalation: EscalationState = { pending: false, reason: '' };
   private pendingRequest: PendingEscalation | null = null;
   private activeThreadId: string | null = null;
   private disposed = false;
-  private child: ChildProcess | null = null;
-  private stderrTail: string[] = [];
-  private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly agentRunner = new AgentRunner();
   private readonly audit = new AgentAuditLog();
   private agentPending: PendingAgentAction | null = null;
@@ -515,6 +516,14 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
   private acceptanceController: AbortController | null = null;
   /** This window's identity for Mission leases. */
   private readonly leaseToken = randomBytes(12).toString('hex');
+
+  private get local(): LocalRuntimeStatus {
+    return this.localRuntime.status;
+  }
+
+  private set local(status: LocalRuntimeStatus) {
+    this.localRuntime.replaceStatus(status);
+  }
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -632,8 +641,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     this.cancelRequest();
     // This window no longer drives a Mission: its lease is no longer alive.
     unregisterLiveMissionLease(this.leaseToken);
-    this.clearIdleTimer();
-    this.stopOwnedChild();
+    this.localRuntime.dispose();
     vscode.Disposable.from(...this.disposables).dispose();
     this.disposables.length = 0;
     this.view = undefined;
@@ -4728,16 +4736,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     port: number;
     idleTimeoutSec: number;
   }): Promise<void> {
-    if (this.local.lifecycle === 'running' || this.local.lifecycle === 'starting') {
-      this.status = 'The local runtime is already starting or running.';
-      await this.postState();
-      return;
-    }
-    if (this.local.lifecycle === 'stopping') {
-      this.status = 'The local runtime is stopping. Try again in a moment.';
-      await this.postState();
-      return;
-    }
     const checked = validateLocalSettings(value ?? this.settings.local);
     if (!checked.ok || !checked.settings) {
       this.status = checked.error ?? 'Local settings are invalid.';
@@ -4748,187 +4746,15 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
     this.settings = { ...this.settings, local: checked.settings };
     this.localSettingsRev += 1;
     this.persistSettings();
-    const endpoint = loopbackEndpoint(checked.settings.port);
-    this.local = nextLocalRuntimeStatus(this.local, {
-      kind: 'start-requested',
-      endpoint,
-    });
-    this.status = `Starting the local runtime on ${endpoint}…`;
-    await this.postState();
-
-    const args = buildLlamaServerArgs(checked.settings);
-    let child: ChildProcess;
-    try {
-      // Direct spawn with an argument array; never a shell command string.
-      child = spawn(checked.settings.executablePath, args, {
-        shell: false,
-        windowsHide: true,
-        stdio: ['ignore', 'ignore', 'pipe'],
-      });
-    } catch {
-      this.local = nextLocalRuntimeStatus(this.local, {
-        kind: 'health-failed',
-      });
-      this.status = 'Could not start the local runtime executable.';
-      await this.postState();
-      return;
-    }
-    this.child = child;
-    this.stderrTail = [];
-    child.stderr?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString('utf8');
-      const joined = (this.stderrTail.join('\n') + '\n' + text).slice(
-        -MAX_DIAGNOSTIC_BYTES,
-      );
-      this.stderrTail = joined.split('\n').slice(-40);
-    });
-    // Spawn failures (e.g. missing executable) surface as an async 'error'
-    // event, not a synchronous throw: handle it so a bad path can never
-    // crash the host with an unhandled error event.
-    child.on('error', () => {
-      if (this.child === child) {
-        this.child = null;
-        this.clearIdleTimer();
-        this.local = nextLocalRuntimeStatus(this.local, { kind: 'stopped' });
-        this.local = {
-          ...this.local,
-          diagnostics: sanitizeDiagnostics(this.stderrTail),
-        };
-        this.status = 'Could not start the local runtime executable.';
-        void this.postState();
-      }
-    });
-    child.on('exit', () => {
-      if (this.child === child) {
-        this.child = null;
-        this.clearIdleTimer();
-        if (
-          this.local.lifecycle === 'running' ||
-          this.local.lifecycle === 'starting' ||
-          this.local.lifecycle === 'stopping'
-        ) {
-          this.local = nextLocalRuntimeStatus(this.local, { kind: 'stopped' });
-          this.local = {
-            ...this.local,
-            diagnostics: sanitizeDiagnostics(this.stderrTail),
-          };
-          this.status = 'The local runtime stopped.';
-          void this.postState();
-        }
-      }
-    });
-
-    const healthy = await this.waitForHealth(endpoint, STARTUP_TIMEOUT_MS);
-    if (this.child !== child) {
-      return; // Stopped or replaced while waiting.
-    }
-    if (!healthy) {
-      this.stopOwnedChild();
-      this.local = nextLocalRuntimeStatus(this.local, {
-        kind: 'health-failed',
-      });
-      this.local = {
-        ...this.local,
-        diagnostics: sanitizeDiagnostics(this.stderrTail),
-      };
-      this.status = `The local runtime did not become healthy within ${STARTUP_TIMEOUT_MS / 1000}s.`;
-      await this.postState();
-      return;
-    }
-    this.local = nextLocalRuntimeStatus(this.local, {
-      kind: 'started',
-      endpoint,
-    });
-    this.status = `Local runtime running on ${endpoint}.`;
-    this.armIdleShutdown();
-    // Learn the served context and template so Settings shows real options.
-    await this.probeLocalProps(endpoint);
-    await this.postState();
+    await this.localRuntime.start(checked.settings);
   }
 
   async stopLocalRuntime(): Promise<void> {
-    if (!this.local.owned || !this.child) {
-      this.status =
-        'Nothing owned to stop. An external endpoint is never stopped by RAME.';
-      await this.postState();
-      return;
-    }
-    this.local = nextLocalRuntimeStatus(this.local, { kind: 'stop-requested' });
-    this.status = 'Stopping the local runtime…';
-    await this.postState();
-    this.stopOwnedChild();
-    this.local = nextLocalRuntimeStatus(this.local, { kind: 'stopped' });
-    this.local = {
-      ...this.local,
-      diagnostics: sanitizeDiagnostics(this.stderrTail),
-    };
-    this.status = 'Local runtime stopped.';
-    await this.postState();
-  }
-
-  private stopOwnedChild(): void {
-    // Only the tracked child handle is signalled: never kill by port or
-    // name, so unrelated processes are never touched.
-    const owned = this.child;
-    this.child = null;
-    this.clearIdleTimer();
-    try {
-      owned?.kill();
-    } catch {
-      // The child may already have exited; deactivation still completes.
-    }
-  }
-
-  private async waitForHealth(
-    endpoint: string,
-    timeoutMs: number,
-  ): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (this.child === null) {
-        return false; // Cancelled/stopped while waiting.
-      }
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 2000);
-        try {
-          const response = await fetch(`${endpoint}/health`, {
-            signal: controller.signal,
-          });
-          if (response.ok) {
-            return true;
-          }
-        } finally {
-          clearTimeout(timer);
-        }
-      } catch {
-        // Not up yet; retry until the deadline.
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-    return false;
+    await this.localRuntime.stop();
   }
 
   private armIdleShutdown(): void {
-    this.clearIdleTimer();
-    const idleSec = this.settings.local.idleTimeoutSec;
-    if (!this.local.owned || idleSec <= 0) {
-      return;
-    }
-    this.idleTimer = setTimeout(
-      () => {
-        // A run waiting for approval or a test is not idle: stopping the
-        // runtime now would fail its next model call.
-        if (this.isBusy()) {
-          this.armIdleShutdown();
-          return;
-        }
-        void this.stopLocalRuntime();
-      },
-      idleSec * 1000,
-    );
-    const timer = this.idleTimer as unknown as { unref?: () => void };
-    timer.unref?.();
+    this.localRuntime.armIdleShutdown();
   }
 
   private isBusy(): boolean {
@@ -4938,13 +4764,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider {
       this.chatRunner.isRunning ||
       this.agentRunner.isRunning
     );
-  }
-
-  private clearIdleTimer(): void {
-    if (this.idleTimer !== null) {
-      clearTimeout(this.idleTimer);
-      this.idleTimer = null;
-    }
   }
 
   // ----- State plumbing -----

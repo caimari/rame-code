@@ -45,11 +45,11 @@ for (const rel of [...sourceFiles('src'), ...sourceFiles('media')]) {
 }
 
 if (failures.length > 0) {
-  console.error('Module size policy failed:');
+  console.error('Source-file context policy failed:');
   for (const failure of failures) {
     console.error(`- ${failure}`);
   }
   process.exitCode = 1;
 } else {
-  console.log(`Module size policy passed (max approximately ${MAX_APPROX_TOKENS} tokens; legacy caps may only shrink).`);
+  console.log(`Source-file context policy passed (each new file max approximately ${MAX_APPROX_TOKENS} tokens; legacy files may only shrink).`);
 }

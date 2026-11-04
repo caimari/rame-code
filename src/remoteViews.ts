@@ -6,6 +6,7 @@
 
 import { META_FAILURE_CATEGORIES, type MetaFailureCategory } from './metaFailures.js';
 import type { DelegationState } from './remoteAuthority.js';
+import { parseLocalSourceMessage, sanitizeLocalSourceView, type LocalSourceMessage, type LocalSourceView } from './localSourceView.js';
 
 export interface EscalateApproveMessage {
   type: 'escalateApprove';
@@ -72,7 +73,7 @@ export interface AcceptanceReviewDecideMessage {
 export type RemoteMessage =
   | EscalateApproveMessage | ConsultIncludeFilesMessage | DelegationRunLocalMessage | LocalIssueStartMessage
   | DisclosureDecideMessage | DisclosureStopMessage | AcceptanceReviewPrepareMessage
-  | AcceptanceReviewActionMessage | AcceptanceReviewDecideMessage;
+  | AcceptanceReviewActionMessage | AcceptanceReviewDecideMessage | LocalSourceMessage;
 
 const DIGEST = /^[0-9a-f]{64}$/;
 
@@ -162,7 +163,7 @@ export function parseRemoteMessage(record: Record<string, unknown>): RemoteMessa
       }
       return { type: 'acceptanceReviewDecide', missionId: record.missionId as string, revision: record.revision as number, digest: record.digest, decision: record.decision };
     default:
-      return null;
+      return parseLocalSourceMessage(record);
   }
 }
 
@@ -171,6 +172,8 @@ export type OfferedMessages = Array<{ turn: number; role: 'user' | 'assistant' |
 
 /** What the view shows about the Meta paths, beyond the exact consult text. */
 export interface RemoteView {
+  /** External model servers (Ollama, LM Studio...) and web access. */
+  servers?: LocalSourceView | null;
   consult: {
     mode: 'advisory';
     localModel: string;
@@ -229,6 +232,7 @@ export const EMPTY_REMOTE_VIEW: RemoteView = {
   localIssue: null,
   disclosure: null,
   sharing: null,
+  servers: null,
 };
 
 const LOCAL_RUNTIME_STATES: ReadonlyArray<RemoteView['runtime']['local']> = ['running', 'starting', 'connected', 'configured', 'stopped', 'not-configured'];
@@ -291,6 +295,7 @@ export function sanitizeRemoteView(value: unknown): RemoteView {
   const runtime = object(record.runtime);
   const disclosure = object(record.disclosure);
   return {
+    servers: sanitizeLocalSourceView(record.servers),
     disclosure:
       disclosure === null || typeof disclosure.digest !== 'string' || !DIGEST.test(disclosure.digest)
         ? null

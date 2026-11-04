@@ -56,7 +56,7 @@ test('profile descriptions state boundaries honestly', () => {
   assert.match(AGENT_BOUNDARIES_TEXT, /without/);
   assert.match(AGENT_BOUNDARIES_TEXT, /prompting/);
   assert.match(AGENT_BOUNDARIES_TEXT, /high risk/);
-  assert.match(AGENT_BOUNDARIES_TEXT, /no arbitrary shell tool/);
+  assert.match(AGENT_BOUNDARIES_TEXT, /arbitrary commands run only through the optional terminal tool \(OFF by default\), each shown first/);
   assert.match(AGENT_BOUNDARIES_TEXT, /never switches providers silently/);
   assert.match(WORKSPACE_FULL_WARNING, /Select Ask/);
   assert.doesNotMatch(AGENT_BOUNDARIES_TEXT, /unrestricted/i);

@@ -52,7 +52,7 @@ import type { CloudModelInfo } from './metaCatalog.js';
 import type { OpenWorkspaceFolder } from './workspaceSelect.js';
 import type { MissionPlan } from './types.js';
 import type { MissionViewRuntime } from './missionViews.js';
-import type { LocalRuntimeStatus } from './localRuntime.js';
+import type { LocalRuntimeStatus, nextLocalRuntimeStatus } from './localRuntime.js';
 
 /**
  * Generation parameters fixed when a run starts.
@@ -189,6 +189,8 @@ export interface ProviderHost {
   isBoundRootStillOpen(root: string): boolean;
   heldWorkspaceRoot(): { ok: true; root: string } | { ok: false; error: string };
   localStatus(): { owned: boolean; endpoint: string | null };
+  /** Apply one local-runtime status transition (an external endpoint selected or cleared). */
+  localTransition(event: Parameters<typeof nextLocalRuntimeStatus>[1]): void;
 
   // ----- VS Code / process-specific operations -----
   resolveAgentRunRoot(): Promise<

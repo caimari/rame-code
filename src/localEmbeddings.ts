@@ -78,7 +78,7 @@ export async function retrieveLocalSemanticScores(options: {
   const started = Date.now();
   try {
     const { response, raw } = await withBoundedRequest(options.signal, options.timeoutMs ?? 5_000, 'Local semantic retrieval timed out.', async (signal) => {
-      const response = await (options.fetchImpl ?? fetch)(`${endpoint}/v1/embeddings`, {
+      const response = await (options.fetchImpl ?? fetch)(`${endpoint}/v1/embeddings`, { redirect: 'manual',
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
         body: JSON.stringify({ model, input: [options.query.slice(0, 2_000), ...candidates.map((entry) => entry.text)], encoding_format: 'float' }),
       });

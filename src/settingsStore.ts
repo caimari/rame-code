@@ -112,8 +112,14 @@ export interface RameSettings {
   /** Whether the last catalog load came from the live API or fallback. */
   cloudCatalogSource: 'live' | 'fallback';
   local: LocalRuntimeSettings;
-  /** Optional separately-running loopback endpoint RAME does not own. */
+  /** Optional separately-running model server RAME does not own (Ollama, LM Studio, llama-server). */
   externalLocalEndpoint: string;
+  /** The model chosen on that server, and what the server said about it. */
+  externalLocal: ExternalLocalChoice;
+  /** Read-only web access for Agent (web_search, web_fetch). Default OFF. */
+  web: WebSettings;
+  /** Terminal commands for Agent (run_command). Default OFF. */
+  shell: { enabled: boolean };
   /**
    * Cloud escalation preference. Default OFF. Escalation is only ever a
    * pending user-visible choice; silent fallback is not implemented.
@@ -128,6 +134,48 @@ export interface RameSettings {
 }
 
 export type ViewLanguage = 'en' | 'es';
+
+export interface ExternalLocalChoice {
+  /** '' = send the configured local model id. */
+  model: string;
+  kind: 'ollama' | 'lmstudio' | 'llama-server' | 'openai-compatible' | '';
+  /** Tool calls: what the server said; null when it did not say. */
+  tools: boolean | null;
+  context: number | null;
+  /** The user confirmed sending local work to this server on another computer of the private network. */
+  lan: boolean;
+}
+
+export interface WebSettings {
+  enabled: boolean;
+  search: 'duckduckgo' | 'searxng';
+  /** Base URL of the user's SearXNG instance (JSON API enabled). */
+  searxngUrl: string;
+}
+
+export const EMPTY_EXTERNAL_LOCAL: ExternalLocalChoice = { model: '', kind: '', tools: null, context: null, lan: false };
+export const DEFAULT_WEB: WebSettings = { enabled: false, search: 'duckduckgo', searxngUrl: '' };
+
+function parseExternalLocal(raw: unknown): ExternalLocalChoice {
+  const v = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  const kinds = ['ollama', 'lmstudio', 'llama-server', 'openai-compatible'];
+  return {
+    model: typeof v.model === 'string' && /^[\w.:@/+-]{0,200}$/.test(v.model) ? v.model : '',
+    kind: typeof v.kind === 'string' && kinds.includes(v.kind) ? (v.kind as ExternalLocalChoice['kind']) : '',
+    tools: typeof v.tools === 'boolean' ? v.tools : null,
+    context: typeof v.context === 'number' && Number.isInteger(v.context) && v.context > 0 && v.context <= 10_000_000 ? v.context : null,
+    lan: v.lan === true,
+  };
+}
+
+function parseWeb(raw: unknown): WebSettings {
+  const v = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  return {
+    enabled: v.enabled === true,
+    search: v.search === 'searxng' ? 'searxng' : 'duckduckgo',
+    searxngUrl: typeof v.searxngUrl === 'string' && v.searxngUrl.length <= 512 ? v.searxngUrl : '',
+  };
+}
 
 export function isViewLanguage(value: unknown): value is ViewLanguage {
   return value === 'en' || value === 'es';
@@ -157,6 +205,9 @@ export function defaultSettings(): RameSettings {
     cloudCatalogSource: 'fallback',
     local: defaultLocal(),
     externalLocalEndpoint: '',
+    externalLocal: { ...EMPTY_EXTERNAL_LOCAL },
+    web: { ...DEFAULT_WEB },
+    shell: { enabled: false },
     allowCloudEscalation: false,
     agentProfile: DEFAULT_AGENT_PROFILE,
     generation: defaultGenerationSettings(),
@@ -282,6 +333,9 @@ export function validateSettings(value: unknown): RameSettings {
     cloudCatalogSource,
     local,
     externalLocalEndpoint,
+    externalLocal: parseExternalLocal(value.externalLocal),
+    web: parseWeb(value.web),
+    shell: { enabled: typeof value.shell === 'object' && value.shell !== null && (value.shell as Record<string, unknown>).enabled === true },
     allowCloudEscalation: value.allowCloudEscalation === true,
     agentProfile: parseAgentProfile(value.agentProfile),
     generation: validateGenerationSettings(value.generation),

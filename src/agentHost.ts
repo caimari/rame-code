@@ -7,6 +7,7 @@
  * Direct APIs/spawn only; nothing is ever interpolated into a shell.
  */
 
+import { commandNotes } from './commandNotes.js';
 import * as vm from 'node:vm';
 
 import {
@@ -156,6 +157,15 @@ export function describeAgentCall(call: ValidatedToolCall): {
     }
     case 'filesystem_usage':
       return { targets: ['selected workspace filesystem'], body, preconditions: {} };
+    case 'web_search':
+      return { targets: [`web search: ${String((call.args as Record<string, unknown>).query ?? '').slice(0, 200)}`], body, preconditions: {} };
+    case 'web_fetch':
+      return { targets: [`web page: ${String((call.args as Record<string, unknown>).url ?? '').slice(0, 300)}`], body, preconditions: {} };
+    case 'run_command': {
+      const command = String((call.args as Record<string, unknown>).command ?? '');
+      const notes = commandNotes(command);
+      return { targets: [`terminal command in the project folder: ${command.slice(0, 600)}`, ...(notes.length > 0 ? [`Note: this line ${notes.join('; ')}. Approve only if you know what it does.`] : [])], body, preconditions: {} };
+    }
     case 'search_text': {
       const dir = typeof (call.args as Record<string, unknown>).dir === 'string'
         ? ((call.args as Record<string, unknown>).dir as string)

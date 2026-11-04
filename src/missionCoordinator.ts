@@ -16,6 +16,7 @@ import {
 import { currentFileHash } from './agentController.js';
 import type { AcceptanceManifest } from './acceptanceManifest.js';
 import { runAcceptance } from './acceptanceRun.js';
+import { externalToolsRefusal } from './localSourceState.js';
 import { protectAcceptanceScope } from './acceptanceScopeHost.js';
 import { CASES_FILE, parseCasesSpec } from './hostCases.js';
 import { memoryScopeForUi } from './memoryController.js';
@@ -230,6 +231,13 @@ export async function startMission(
   trustedProject = false,
   acceptance: { commandId: string; files: string[] } | null = null,
 ): Promise<void> {
+  // A local model the server says cannot call tools never starts a Mission run: nothing is sent.
+  const noTools = externalToolsRefusal(host);
+  if (noTools !== null) {
+    host.status = noTools;
+    await host.postState();
+    return;
+  }
   const mission = host.missions.get(missionId);
   const scope = await memoryScopeForUi(host);
   if (mission === null || !scope.ok || mission.scopeId !== scope.scopeId) {
@@ -411,6 +419,13 @@ export async function resumeMission(
   missionId: string,
   expectedRevision: number,
 ): Promise<void> {
+  // A local model the server says cannot call tools never starts a Mission run: nothing is sent.
+  const noTools = externalToolsRefusal(host);
+  if (noTools !== null) {
+    host.status = noTools;
+    await host.postState();
+    return;
+  }
   const mission = host.missions.get(missionId);
   if (mission !== null && mission.grant === null) {
     host.status = 'Authorize the Mission before running it.';

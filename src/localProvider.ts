@@ -1,11 +1,12 @@
 /**
- * Local OpenAI-compatible chat calls against a loopback `llama-server`.
+ * Local OpenAI-compatible chat calls against RAME's own `llama-server`, or
+ * a separately running server the user selected (Ollama, LM Studio, another
+ * llama-server) that RAME does not own.
  *
  * Free of the `vscode` API so it can be unit tested with plain `node:test`.
- * Ollama is not required: any OpenAI-compatible loopback server works, and
- * a separately running compatible server may be selected without RAME
- * owning its lifecycle. The endpoint must remain loopback (see
- * {@link isLoopbackUrl}); this module refuses anything else.
+ * The endpoint must be on this computer or on the private network (see
+ * `localServers.ts`); a private-network server is used only after the user
+ * confirmed it. A public address is refused.
  */
 
 import { isAbortError, withBoundedRequest } from './boundedRequest.js';
@@ -16,7 +17,7 @@ import {
   stoppedAtLength,
   type GenerationRequest,
 } from './generationSettings.js';
-import { isLoopbackUrl } from './localRuntime.js';
+import { isLocalOrPrivateUrl, refuseRedirect } from './localServers.js';
 import { validateMissionPlan } from './meta-provider.js';
 import type { MissionPlan } from './types.js';
 import { parseUsage, type ProviderUsage } from './usage.js';
@@ -51,8 +52,8 @@ export interface LocalChatResult {
 export async function createLocalChatCompletion(
   options: LocalChatOptions,
 ): Promise<LocalChatResult> {
-  if (!isLoopbackUrl(options.endpoint)) {
-    throw new Error('The local endpoint must stay on loopback.');
+  if (!isLocalOrPrivateUrl(options.endpoint)) {
+    throw new Error('The local endpoint must stay on this computer or the private network.');
   }
   const model = options.model.trim();
   if (model.length === 0) {
@@ -72,6 +73,7 @@ export async function createLocalChatCompletion(
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal,
+          redirect: 'manual',
           body: JSON.stringify({
             model,
             messages: options.messages,
@@ -85,6 +87,7 @@ export async function createLocalChatCompletion(
         }
         throw new Error('The local runtime is unreachable.');
       }
+      refuseRedirect(response);
       let payload: Record<string, unknown>;
       try {
         payload = (await response.json()) as Record<string, unknown>;
@@ -158,8 +161,8 @@ export interface LocalMissionPlanResult {
 export async function createLocalMissionPlan(
   options: LocalChatOptions & { planSchema: unknown },
 ): Promise<LocalMissionPlanResult> {
-  if (!isLoopbackUrl(options.endpoint)) {
-    throw new Error('The local endpoint must stay on loopback.');
+  if (!isLocalOrPrivateUrl(options.endpoint)) {
+    throw new Error('The local endpoint must stay on this computer or the private network.');
   }
   const model = options.model.trim();
   if (model.length === 0) {
@@ -178,6 +181,7 @@ export async function createLocalMissionPlan(
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal,
+          redirect: 'manual',
           body: JSON.stringify({
             model,
             messages: [
@@ -196,6 +200,7 @@ export async function createLocalMissionPlan(
         }
         throw new Error('The local runtime is unreachable.');
       }
+      refuseRedirect(response);
       let payload: Record<string, unknown>;
       try {
         payload = (await response.json()) as Record<string, unknown>;

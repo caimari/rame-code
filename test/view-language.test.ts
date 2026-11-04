@@ -27,6 +27,7 @@ function loadI18n(): I18n {
   // Feature modules add their own Spanish entries, as in the real view.
   vm.runInNewContext(readFileSync('media/remoteUx.js', 'utf8'), context);
   vm.runInNewContext(readFileSync('media/evidenceUx.js', 'utf8'), context);
+  vm.runInNewContext(readFileSync('media/localServersUx.js', 'utf8'), context);
   assert.ok(context.window.RAME_I18N);
   return context.window.RAME_I18N;
 }
@@ -50,7 +51,9 @@ test('every interface string of the script and the markup has a Spanish entry', 
   const withoutTable = remoteUx.slice(0, remoteUx.indexOf('var ES = {')) + remoteUx.slice(remoteUx.indexOf('\n  };', remoteUx.indexOf('var ES = {')));
   const evidenceUx = readFileSync('media/evidenceUx.js', 'utf8');
   const evidenceCode = evidenceUx.slice(0, evidenceUx.indexOf('var ES = {')) + evidenceUx.slice(evidenceUx.indexOf('\n  };', evidenceUx.indexOf('var ES = {')));
-  const script = [readFileSync('media/main.js', 'utf8'), withoutTable, evidenceCode].join('\n');
+  const serversUx = readFileSync('media/localServersUx.js', 'utf8');
+  const serversCode = serversUx.slice(0, serversUx.indexOf('var ES = {')) + serversUx.slice(serversUx.indexOf('\n  };', serversUx.indexOf('var ES = {')));
+  const script = [readFileSync('media/main.js', 'utf8'), withoutTable, evidenceCode, serversCode].join('\n');
   const used = new Set<string>();
   for (const match of script.matchAll(/\bt\('((?:[^'\\]|\\.)*)'\)/g)) {
     used.add(unescapeLiteral(match[1] as string));

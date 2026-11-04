@@ -75,7 +75,6 @@ import {
   type LocalServerProps,
 } from './generationSettings.js';
 import {
-  isLoopbackUrl,
   nextLocalRuntimeStatus,
   validateLocalSettings,
   type LocalRuntimeStatus,
@@ -166,6 +165,9 @@ import * as agentCtrl from './agentController.js';
 import * as missionCoord from './missionCoordinator.js';
 import * as remote from './remoteController.js';
 import * as acceptanceReview from './missionAcceptanceReviewHost.js';
+import * as localSource from './localSource.js';
+import { endpointUsable } from './localServers.js';
+import { externalToolsRefusal } from './localSourceState.js';
 import { CLOUD_DISCLOSURE_KEY, loadDisclosure, type CloudDisclosureOffer, type CloudRun, type DisclosureState } from './cloudDisclosure.js';
 import { cloudGate, cloudMemoryText, credentialChanged, decideDisclosure, stopSharing } from './cloudDisclosureHost.js';
 import { loadCredentialRevision, rotateCredentialRevision } from './metaRecipient.js';
@@ -185,9 +187,6 @@ export const RAME_ACTIVE_RUN_KEY = 'rameCode.activeRun.v1';
 
 const INTERRUPTED_RUN_NOTE =
   'This run was interrupted because VS Code reloaded or closed before it finished. Its outcome was not recorded; check the workspace before retrying.';
-
-/** How many characters of the approval card body the webview previews. */
-const APPROVAL_PREVIEW_CHARS = 2000;
 
 // ---------------------------------------------------------------------------
 // Class
@@ -285,6 +284,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   }
 
   private set local(status: LocalRuntimeStatus) {
+    if (status.endpoint !== this.local.endpoint) agentCtrl.invalidatePendingApproval(this, 'the model server changed');
     this.localRuntime.replaceStatus(status);
   }
 
@@ -381,6 +381,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         .toString(),
       remoteUxUri: view.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'remoteUx.js')).toString(),
       evidenceUxUri: view.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'evidenceUx.js')).toString(),
+      localServersUxUri: view.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'localServersUx.js')).toString(),
       nonce,
     });
     const messageHandler = view.webview.onDidReceiveMessage((raw: unknown) => {
@@ -421,7 +422,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       return this.local.endpoint;
     }
     const external = this.settings.externalLocalEndpoint.trim();
-    if (external.length > 0 && isLoopbackUrl(external)) {
+    if (external.length > 0 && endpointUsable(external, this.settings.externalLocal.lan)) {
       return external;
     }
     return null;
@@ -728,6 +729,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   }
 
   async newThread(): Promise<void> {
+    agentCtrl.invalidatePendingApproval(this, 'the active thread changed');
     this.activeThreadId = null;
     this.agentRunWorkspace = null;
     if (!this.running) {
@@ -746,6 +748,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       this.status = 'That thread is no longer stored.';
       await this.postState();
       return;
+    }
+    if (this.activeThreadId !== thread.id) {
+      agentCtrl.invalidatePendingApproval(this, 'the active thread changed');
     }
     this.activeThreadId = thread.id;
     // Settings follows the folder already bound to the opened thread. This
@@ -777,6 +782,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   }
 
   async backToList(): Promise<void> {
+    agentCtrl.invalidatePendingApproval(this, 'the active thread changed');
     this.activeThreadId = null;
     this.agentRunWorkspace = null;
     if (!this.running) {
@@ -846,7 +852,13 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         this.local.lifecycle === 'running' && this.local.endpoint !== null;
       const externalReady =
         this.settings.externalLocalEndpoint.trim().length > 0 &&
-        isLoopbackUrl(this.settings.externalLocalEndpoint);
+        endpointUsable(this.settings.externalLocalEndpoint, this.settings.externalLocal.lan);
+      const noTools = rawMode !== 'chat' ? externalToolsRefusal(this) : null;
+      if (noTools !== null) {
+        this.status = noTools;
+        await this.postState();
+        return;
+      }
       if (!ownedReady && !externalReady) {
         this.connection = 'error';
         this.status =
@@ -1249,6 +1261,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     }
     const provider = runtimeToProvider(checkedRuntime);
     const model = runtimeToModel(checkedRuntime, this.selectedCloudModel());
+    if (provider !== this.settings.provider || model !== this.settings.model) agentCtrl.invalidatePendingApproval(this, 'the runtime or model changed');
     this.settings = {
       ...this.settings,
       provider,
@@ -1383,34 +1396,8 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     await this.postState();
   }
 
-  async selectExternalEndpoint(rawEndpoint: string): Promise<void> {
-    const endpoint = rawEndpoint.trim().replace(/\/+$/, '');
-    if (!isLoopbackUrl(endpoint)) {
-      this.status = 'The external endpoint must stay on loopback.';
-      await this.postState();
-      return;
-    }
-    this.settings = { ...this.settings, externalLocalEndpoint: endpoint };
-    this.persistSettings();
-    this.local = nextLocalRuntimeStatus(this.local, {
-      kind: 'external-selected',
-      endpoint,
-    });
-    this.status = `External endpoint selected: ${endpoint}. RAME does not own its lifecycle.`;
-    await genCtrl.probeLocalProps(this, endpoint);
-    await this.postState();
-  }
-
-  async clearExternalEndpoint(): Promise<void> {
-    this.settings = { ...this.settings, externalLocalEndpoint: '' };
-    this.persistSettings();
-    if (!this.local.owned) {
-      this.local = nextLocalRuntimeStatus(this.local, {
-        kind: 'external-cleared',
-      });
-    }
-    this.status = 'External endpoint cleared.';
-    await this.postState();
+  localTransition(event: Parameters<typeof nextLocalRuntimeStatus>[1]): void {
+    this.local = nextLocalRuntimeStatus(this.local, event);
   }
 
   // ----- Shell: local runtime lifecycle -----
@@ -1574,10 +1561,12 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         await this.stopLocalRuntime();
         return;
       case 'selectExternalEndpoint':
-        await this.selectExternalEndpoint(message.endpoint);
-        return;
       case 'clearExternalEndpoint':
-        await this.clearExternalEndpoint();
+      case 'localServerScan':
+      case 'localServerUse':
+      case 'webAccessSet':
+      case 'shellAccessSet':
+        await localSource.handleLocalSourceMessage(this, message);
         return;
       case 'escalateApprove':
         await this.approveEscalation(message.digest);
@@ -1728,9 +1717,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
               provider: pending.provider,
               workspaceId: pending.workspaceId,
               threadId: pending.threadId,
-              bodyPreview: pending.body.length > APPROVAL_PREVIEW_CHARS
-                ? `${pending.body.slice(0, APPROVAL_PREVIEW_CHARS)}\n…[${pending.body.length - APPROVAL_PREVIEW_CHARS} more characters not shown. Reject if you need to see the whole action first.]`
-                : pending.body,
+              bodyPreview: agentCtrl.approvalBodyPreview(pending),
             }
           : null,
         agentLog: inRunThread ? this.agentLogView.map((entry) => ({ ...entry })) : [],

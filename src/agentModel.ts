@@ -14,7 +14,7 @@ import {
   localContextRefusal,
   type GenerationRequest,
 } from './generationSettings.js';
-import { isLoopbackUrl } from './localRuntime.js';
+import { isLocalOrPrivateUrl, refuseRedirect } from './localServers.js';
 import { META_API_ENDPOINT } from './meta-provider.js';
 import { parseUsage, type ProviderUsage } from './usage.js';
 import {
@@ -306,8 +306,8 @@ export async function createLocalAgentCompletion(options: {
   timeoutMs?: number;
   toolChoice?: AgentToolChoice;
 }): Promise<AgentCompletion> {
-  if (!isLoopbackUrl(options.endpoint)) {
-    throw new Error('The local endpoint must stay on loopback.');
+  if (!isLocalOrPrivateUrl(options.endpoint)) {
+    throw new Error('The local endpoint must stay on this computer or the private network.');
   }
   assertAgentModelForProvider('local', options.model);
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -324,6 +324,7 @@ export async function createLocalAgentCompletion(options: {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal,
+          redirect: 'manual',
           body: JSON.stringify(
             buildAgentRequestBody(options.model, options.messages, options.generation, options.toolChoice ?? 'auto', options.tools),
           ),
@@ -334,6 +335,7 @@ export async function createLocalAgentCompletion(options: {
         }
         throw new Error('The local runtime is unreachable.');
       }
+      refuseRedirect(response);
       return { response, payload: await readPayload(response) };
     },
   );

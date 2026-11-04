@@ -26,7 +26,7 @@ import type {
   ModelGenerationProfile,
 } from './generationSettings.js';
 import { createLocalChatCompletion, createLocalMissionPlan } from './localProvider.js';
-import { isLoopbackUrl } from './localRuntime.js';
+import { isLocalOrPrivateUrl } from './localServers.js';
 import { createChatCompletion, missionPlanSchema, validateMissionPlan } from './meta-provider.js';
 import { decisionsForThread, threadForRun, withheldForRun } from './cloudDisclosureHost.js';
 import { logPacket } from './continuityLogHost.js';
@@ -109,6 +109,11 @@ export function generationModel(
   if (provider === 'cloud') {
     return host.selectedCloudModel();
   }
+  // A model chosen on an external server (Ollama, LM Studio) while RAME runs none of its own.
+  const external = host.settings.externalLocal.model;
+  if (external.length > 0 && host.settings.externalLocalEndpoint.trim().length > 0 && host.localEndpoint() === host.settings.externalLocalEndpoint.trim()) {
+    return external;
+  }
   return host.settings.local.modelId.trim().length > 0
     ? host.settings.local.modelId.trim()
     : 'local-glimmer';
@@ -124,7 +129,7 @@ export async function probeLocalProps(
   endpoint: string,
 ): Promise<LocalServerProps> {
   let props: LocalServerProps = { ...UNKNOWN_LOCAL_PROPS };
-  if (isLoopbackUrl(endpoint)) {
+  if (isLocalOrPrivateUrl(endpoint)) {
     try {
       const payload = await withBoundedRequest(
         undefined,
@@ -133,7 +138,7 @@ export async function probeLocalProps(
         async (signal) => {
           const response = await fetch(
             `${endpoint.replace(/\/+$/, '')}/props`,
-            { method: 'GET', signal },
+            { method: 'GET', signal, redirect: 'manual' },
           );
           return response.ok ? ((await response.json()) as unknown) : null;
         },

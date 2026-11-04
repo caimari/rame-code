@@ -18,6 +18,7 @@ import type { ChosenAdvisoryLimits } from './missionAdvisoryLimits.js';
 import { sanitizeEvidenceView, type ModelEvidenceView } from './modelEvidence.js';
 import { sanitizeContinuityLogView, type ContinuityLogView } from './continuityLog.js';
 import { sanitizeMissionAcceptanceReviewView, type MissionAcceptanceReviewView } from './missionAcceptanceReviewView.js';
+import { isLocalOrPrivateUrl } from './localServers.js';
 import { parseRemoteMessage, sanitizeMissionRemote, sanitizeRemoteView, type MissionRemoteView, type RemoteMessage, type RemoteView } from './remoteViews.js';
 import { isAgentProfileId } from './agentProfiles.js';
 import { isReasoningChoice, REASONING_LEVELS } from './generationSettings.js';
@@ -834,7 +835,7 @@ export const CHAT_SCOPE_NOTICE =
 export const MISSION_SCOPE_NOTICE =
   'Mission sends only your new message to Meta Model API. Earlier thread content is never sent as context.';
 export const AGENT_SCOPE_NOTICE =
-  'Agent runs a bounded tool loop with the selected provider only (local Glimmer or the selected Meta cloud model, never switched silently). It inspects and changes only the active workspace under the selected permission profile. There is no arbitrary shell or terminal emulation tool, but allowlisted test scripts run with your OS permissions and may access files, network including arbitrary internet, or shells; there is no OS sandbox for them. No computer-wide control or memory safety beyond what is implemented is claimed.';
+  'Agent runs a bounded tool loop with the selected provider only (local Glimmer or the selected Meta cloud model, never switched silently). It inspects and changes only the active workspace under the selected permission profile. Arbitrary shell commands run only through the optional terminal tool, OFF by default, each shown before it runs; allowlisted test scripts run with your OS permissions and may access files, network including arbitrary internet, or shells; there is no OS sandbox for them. No computer-wide control or memory safety beyond what is implemented is claimed.';
 
 /** Agent notice naming the exact selected cloud model (or local Glimmer). */
 export function agentScopeNotice(cloudModel: string): string {
@@ -846,7 +847,7 @@ export function agentScopeNotice(cloudModel: string): string {
       : 'muse-spark-1.3';
   return (
     `Agent runs a bounded tool loop with the selected provider only (local Glimmer or Meta ${safe}, never switched silently). ` +
-    'It inspects and changes only the active workspace under the selected permission profile. There is no arbitrary shell or terminal emulation tool, but allowlisted test scripts run with your OS permissions and may access files, network including arbitrary internet, or shells; there is no OS sandbox for them. No computer-wide control or memory safety beyond what is implemented is claimed.'
+    'It inspects and changes only the active workspace under the selected permission profile. Arbitrary shell commands run only through the optional terminal tool, OFF by default, each shown before it runs; allowlisted test scripts run with your OS permissions and may access files, network including arbitrary internet, or shells; there is no OS sandbox for them. No computer-wide control or memory safety beyond what is implemented is claimed.'
   );
 }
 
@@ -1645,14 +1646,8 @@ function sanitizeLoopbackEndpoint(value: unknown): string {
   } catch {
     return 'http://127.0.0.1:8775';
   }
-  const host = url.hostname.toLowerCase();
-  if (
-    (url.protocol === 'http:' || url.protocol === 'https:') &&
-    (host === '127.0.0.1' || host === 'localhost' || host === '::1')
-  ) {
-    return trimmed.slice(0, 128);
-  }
-  return 'http://127.0.0.1:8775';
+  // This computer or a private-network server the user chose (see localServers.ts).
+  return isLocalOrPrivateUrl(url.toString()) ? trimmed.slice(0, 128) : 'http://127.0.0.1:8775';
 }
 
 /**

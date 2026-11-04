@@ -79,7 +79,8 @@ test('cloud agent completion returns text plus usage', async () => {
   assert.equal(result.usage.totalTokens, 10);
 });
 
-test('local agent completion enforces loopback and parses tool calls', async () => {
+test('local agent completion refuses public endpoints and parses tool calls', async () => {
+  // This computer or the private network only (a private server needs the user's confirmation, checked by the host).
   await assert.rejects(
     createLocalAgentCompletion({
       endpoint: 'https://example.com',
@@ -87,7 +88,7 @@ test('local agent completion enforces loopback and parses tool calls', async () 
       messages: [{ role: 'user', content: 'hi' }],
       generation: LOCAL_GEN,
     }),
-    /loopback/,
+    /must stay on this computer or the private network/,
   );
   let capturedUrl = '';
   const result = await createLocalAgentCompletion({

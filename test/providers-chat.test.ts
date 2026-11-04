@@ -108,16 +108,19 @@ test('local chat uses the OpenAI-compatible loopback endpoint', async () => {
   assert.equal(capturedUrl, 'http://127.0.0.1:8775/v1/chat/completions');
 });
 
-test('local chat refuses non-loopback endpoints and empty replies', async () => {
-  await assert.rejects(
-    createLocalChatCompletion({
-      endpoint: 'http://192.168.1.10:8775',
-      model: 'local-glimmer',
-      messages: [{ role: 'user', content: 'Hi there.' }],
-      generation: LOCAL_GEN,
-    }),
-    /loopback/,
-  );
+test('local chat refuses public endpoints and empty replies', async () => {
+  for (const endpoint of ['http://8.8.8.8:8775', 'https://example.com', 'http://172.32.0.1:1234']) {
+    await assert.rejects(
+      createLocalChatCompletion({
+        endpoint,
+        model: 'local-glimmer',
+        messages: [{ role: 'user', content: 'Hi there.' }],
+        generation: LOCAL_GEN,
+      }),
+      /must stay on this computer or the private network/,
+      endpoint,
+    );
+  }
   await assert.rejects(
     createLocalChatCompletion({
       endpoint: 'http://127.0.0.1:8775',

@@ -42,6 +42,7 @@ import { sharingView } from './cloudDisclosureHost.js';
 import { isContributorClass, processingClass } from './metaRecipient.js';
 import { agentSentText } from './agentHistoryText.js';
 import type { OfferedMessage } from './cloudDisclosure.js';
+import { localSourceView } from './localSourceState.js';
 
 function record(host: ProviderHost, threadId: string, text: string, lines: string[]): void {
   const current = host.store.get(threadId);
@@ -523,6 +524,7 @@ export function remoteView(host: ProviderHost, threadId: string | null, lifecycl
   const delegation = host.delegationOffer !== null && host.delegationOffer.threadId === threadId ? host.delegationOffer : null;
   const failure = host.delegationFailure !== null && host.delegationFailure.threadId === threadId ? host.delegationFailure : null;
   return {
+    servers: localSourceView(host),
     consult:
       offer === null
         ? null

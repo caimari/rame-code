@@ -1014,10 +1014,10 @@
     if (pending) {
       setText(pendingToolEl, tf('Tool: {0}', String(pending.tool || '')));
       setText(pendingTargetsEl, tf('Targets: {0}', Array.isArray(pending.targets) ? pending.targets.join(', ') : ''));
-      // The host already bounds the preview and appends an explicit
-      // truncation marker; keep that marker visible. The exact action is
-      // never translated: it is what the approval is bound to.
-      setText(pendingBodyEl, tf('Exact action: {0}', String(pending.bodyPreview || '').slice(0, 2200)));
+      // The host bounds ordinary previews and sends run_command in full.
+      // Keep the complete host-provided value visible: a terminal approval
+      // must never hide the tail of the command it authorizes.
+      setText(pendingBodyEl, tf('Exact action: {0}', String(pending.bodyPreview || '')));
       setText(
         pendingMetaEl,
         tf(

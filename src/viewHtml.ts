@@ -8,6 +8,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import { localSectionHtml, webAccessHtml } from './localSectionHtml.js';
 import { missionAcceptanceReviewHtml } from './missionAcceptanceReviewHtml.js';
 
 export interface ViewHtmlOptions {
@@ -25,6 +26,7 @@ export interface ViewHtmlOptions {
   remoteUxUri?: string;
   /** Model evidence inside Run details (loaded after i18n, before the main script). */
   evidenceUxUri?: string;
+  localServersUxUri?: string;
 }
 
 /** Create a fresh CSP nonce for one webview load. */
@@ -58,6 +60,7 @@ export function buildViewHtml(options: ViewHtmlOptions): string {
   const composerUxScript = options.composerUxUri ? `<script nonce="${nonce}" src="${escapeAttr(options.composerUxUri)}"></script>\n` : '';
   const remoteUxScript = options.remoteUxUri ? `<script nonce="${nonce}" src="${escapeAttr(options.remoteUxUri)}"></script>\n` : '';
   const evidenceUxScript = options.evidenceUxUri ? `<script nonce="${nonce}" src="${escapeAttr(options.evidenceUxUri)}"></script>\n` : '';
+  const serversUxScript = options.localServersUxUri ? `<script nonce="${nonce}" src="${escapeAttr(options.localServersUxUri)}"></script>\n` : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -541,7 +544,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
           <span id="runtimeNoticeText"></span>
           <button id="runtimeNoticeSettings" type="button">Open Settings</button>
         </div>
-        <p id="permissionWarning" class="hint" role="alert" hidden>Workspace-full is high risk: patches and allowlisted tests run without prompts.</p>
+        <p id="permissionWarning" class="hint" role="alert" hidden>Workspace-full is high risk: patches and allowlisted tests run without prompts. Terminal commands, if you turn them on, still ask before each one, even here: a single command line can change files outside the project, install software or reach the internet.</p>
         <div id="composerToolbar" role="toolbar" aria-label="Composer controls">
           <button id="attachBtn" class="icon-btn" type="button" title="Add context (coming later)" aria-label="Add context (coming later)" disabled>+</button>
           <button id="permissionBtn" class="icon-btn" type="button" title="Agent permission" aria-label="Agent permission" aria-haspopup="menu" aria-expanded="false"><span id="permissionChip" class="chip">Ask</span></button>
@@ -574,9 +577,9 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
         <p id="profileDesc" class="hint" hidden></p>
         <details class="agent-details" id="agentBoundariesDetails" hidden>
           <summary>Security / boundaries</summary>
-          <p id="agentBoundaries" class="hint">Agent works only inside the active workspace. Symlink and path escapes are blocked; .git, .env files, credential and key material, secret stores, auth files, and repository control files are protected. Tests run only from an exact derived allowlist with shell:false and no arbitrary shell tool; allowlisted package scripts still execute with your OS permissions and may access files, network, or shells. Ask and Safe-auto require approval before they run, while Workspace-full may run them without prompting and is high risk. Cloud work needs your existing escalation consent and never switches providers silently. Tamper resistance is not claimed.</p>
+          <p id="agentBoundaries" class="hint">Agent works only inside the active workspace. Symlink and path escapes are blocked; .git, .env files, credential and key material, secret stores, auth files, and repository control files are protected. Tests run only from an exact derived allowlist with shell:false; arbitrary commands run only through the optional terminal tool (OFF by default), each shown first; allowlisted package scripts still execute with your OS permissions and may access files, network, or shells. Ask and Safe-auto require approval before they run, while Workspace-full may run them without prompting and is high risk. Cloud work needs your existing escalation consent and never switches providers silently. Tamper resistance is not claimed.</p>
         </details>
-        <p id="agentWarning" role="alert" hidden>Workspace-full is high risk: patches and allowlisted tests run without prompts. First Agent coding validation must target a disposable copy or test fixture, not the live RAME Code repository.</p>
+        <p id="agentWarning" role="alert" hidden>Workspace-full is high risk: patches and allowlisted tests run without prompts. First Agent coding validation must target a disposable copy or test fixture, not the live RAME Code repository. Terminal commands, if you turn them on, still ask before each one, even here: a single command line can change files outside the project, install software or reach the internet.</p>
       </div>
     </footer>
   </div>
@@ -658,40 +661,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
     <details class="settings-card" id="cardRuntime" hidden>
       <summary><span class="card-title">Runtime</span> <span class="card-summary" id="summaryRuntime"></span></summary>
       <div class="card-body">
-      <section class="settings-block" id="localSection" aria-labelledby="local-heading">
-        <h3 id="local-heading">Local runtime</h3>
-        <p id="localStatus" role="status">Local runtime is stopped.</p>
-        <label for="exePath">llama-server executable path</label>
-        <input id="exePath" type="text" autocomplete="off" spellcheck="false" placeholder="/path/to/llama-server">
-        <label for="modelPath">Model path (GGUF)</label>
-        <input id="modelPath" type="text" autocomplete="off" spellcheck="false" placeholder="/path/to/model.gguf">
-        <label for="projectorPath">Multimodal projector path (optional)</label>
-        <input id="projectorPath" type="text" autocomplete="off" spellcheck="false" placeholder="/path/to/mmproj.gguf">
-        <label for="draftPath">DFlash / draft-model path (optional)</label>
-        <input id="draftPath" type="text" autocomplete="off" spellcheck="false" placeholder="/path/to/draft.gguf">
-        <label for="localModelId">Model / display ID</label>
-        <input id="localModelId" type="text" autocomplete="off" spellcheck="false" placeholder="local-glimmer">
-        <label for="contextSize">Context size</label>
-        <input id="contextSize" type="number" min="1024" max="262144" step="1024" value="32768">
-        <label for="localPort">Port (loopback only)</label>
-        <input id="localPort" type="number" min="1" max="65535" step="1" value="8775">
-        <label for="idleTimeout">Idle timeout (minutes, 0 disables)</label>
-        <input id="idleTimeout" type="number" min="0" max="1440" step="1" value="15">
-        <label for="externalEndpoint">External loopback endpoint (optional, not owned)</label>
-        <input id="externalEndpoint" type="text" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8775">
-        <div class="row">
-          <button id="useSuggestions" type="button">Use detected settings</button>
-          <button id="saveLocal" type="button">Save</button>
-          <button id="startLocal" type="button">Start Muse Glimmer</button>
-          <button id="stopLocal" type="button">Stop</button>
-        </div>
-        <div class="row">
-          <button id="selectExternal" type="button">Use external endpoint</button>
-          <button id="clearExternal" type="button">Clear external endpoint</button>
-        </div>
-        <p class="hint">Bound to 127.0.0.1 and launched without a shell. Closing a terminal does not stop it. Timeout 0 keeps it running while VS Code stays open; reloading or closing VS Code stops RAME Code's server.</p>
-      </section>
-      </div>
+${localSectionHtml}      </div>
     </details>
     <details class="settings-card" id="cardMission" hidden>
       <summary><span class="card-title">Mission</span> <span class="card-summary" id="summaryMission"></span></summary>
@@ -779,7 +749,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
         <label><input id="allowEscalation" type="checkbox"> Allow cloud escalation</label>
         <p class="hint">Default OFF. There is no silent fallback: when local work fails, the Chat screen offers a visible choice and only your explicit approval sends the current request to Meta.</p>
       </section>
-      <section class="settings-block" aria-labelledby="privacy-heading">
+${webAccessHtml}      <section class="settings-block" aria-labelledby="privacy-heading">
         <h3 id="privacy-heading">Privacy / Security</h3>
         <p class="hint">The API key stays in VS Code SecretStorage and this view receives only true/false. Agent and Chat send recent active-thread history and may recover a bounded set of relevant older excerpts. Other threads are never sent. When moving from local to Meta, extra older excerpts and host records stay local. Mission planning sends only your new message. Agent may read and change active-workspace files and run allowlisted tests only under the selected permission profile and policy boundary. Meta Billing/Usage is authoritative for cost; token counts below are observed usage, and any dollar figure is an estimate.</p>
       </section>
@@ -818,7 +788,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
     </details>
   </div>
 </main>
-${i18nScript}${settingsTabsScript}${composerUxScript}${remoteUxScript}${evidenceUxScript}<script nonce="${nonce}" src="${scriptUri}"></script>
+${i18nScript}${settingsTabsScript}${composerUxScript}${remoteUxScript}${evidenceUxScript}${serversUxScript}<script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
 }

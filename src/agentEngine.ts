@@ -46,6 +46,8 @@ import {
 import { hashContent } from './agentPatch.js';
 import { checkAgentRelPath, MAX_AGENT_STEPS } from './agentPolicy.js';
 import { agentToolFs, frozenTarget } from './missionToolGuards.js';
+import { externalToolsRefusal } from './localSourceState.js';
+import { executeExtraTool, extraToolDefinitions } from './agentExtraTools.js';
 import {
   DEFAULT_AGENT_PROFILE,
   isAutoAllowed,
@@ -370,6 +372,10 @@ async function executeAgentTool(
       return executeSearchText(fs, call, canonicalRoot ?? null);
     case 'read_file':
       return executeReadFile(fs, call, canonicalRoot ?? null);
+    case 'web_search':
+    case 'web_fetch':
+    case 'run_command':
+      return executeExtraTool(host, call.tool, call.args as Record<string, unknown>, provider, workspaceId, signal);
     case 'create_directory':
       return executeCreateDirectory(fs, call, canonicalRoot ?? null);
     case 'move_file':
@@ -713,6 +719,10 @@ export async function sendAgent(
     if (!endpoint) {
       throw new Error('The local runtime is not running and no external endpoint is selected.');
     }
+    const noTools = externalToolsRefusal(host);
+    if (noTools !== null) {
+      throw new Error(noTools);
+    }
   }
   const thread = threadForRun(host, threadId, provider, text);
   const history: AgentChatMessage[] = [];
@@ -768,7 +778,7 @@ export async function sendAgent(
   const extra: AgentChatMessage[] = [];
   const memoryScope = { scopeId: scopeIdForRoot(heldCanonicalRoot), label: path.basename(target.root) };
   const continuity = agentContinuity(host, { threadId, thread, text, provider, model, contextWindow: generation.profile.contextWindow, recentIndexes, scopeId: memoryScope.scopeId, label: memoryScope.label });
-  const runTools = [...buildAgentToolDefinitions(), ...buildMemoryToolDefinitions()];
+  const runTools = [...buildAgentToolDefinitions(), ...buildMemoryToolDefinitions(), ...extraToolDefinitions(host, provider)];
   // Before the history and the request, like the recovered context.
   const lead: AgentChatMessage[] = [...continuity.promptMessages, { role: 'system', content: `${MEMORY_RULES_TEXT}\n${await host.memorySnapshotText(memoryScope, fs)}` }];
   let workspaceWrites = 0;

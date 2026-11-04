@@ -6,9 +6,9 @@
  * - `ask`: every tool action pauses for a visible approve/reject decision.
  * - `safe-auto`: low-risk workspace reads run automatically after policy
  *   validation; writes and test commands still require approval.
- * - `workspace-full`: policy-valid reads, patch applications, and
- *   allowlisted test commands can run without per-action prompts. Still
- *   confined to the active workspace with no arbitrary shell or network.
+ * - `workspace-full`: policy-valid reads, patch applications, allowlisted
+ *   tests and enabled read-only web calls may run without per-action prompts.
+ *   The optional terminal remains separately gated and always needs approval.
  *
  * Only the profile id is persisted; transient approvals are never stored.
  * Unknown or corrupt persisted state falls back to `ask`.
@@ -60,7 +60,13 @@ export type MemoryToolName = (typeof MEMORY_TOOL_NAMES)[number];
 /** Memory tools that only a user approval can complete. */
 export const USER_APPROVAL_ONLY_TOOLS: readonly MemoryToolName[] = ['propose_decision', 'bind_artifact'];
 
-export type AgentToolName = AgentWorkspaceToolName | MemoryToolName;
+/** Optional tools beyond the workspace, each offered only when the user enabled it: read-only web (webTools.ts) and terminal commands (shellTool.ts). */
+export const WEB_TOOL_NAMES = ['web_search', 'web_fetch', 'run_command'] as const;
+export type WebToolName = (typeof WEB_TOOL_NAMES)[number];
+export function isWebToolName(value: unknown): value is WebToolName {
+  return (WEB_TOOL_NAMES as readonly unknown[]).includes(value);
+}
+export type AgentToolName = AgentWorkspaceToolName | MemoryToolName | WebToolName;
 
 export function isMemoryToolName(value: unknown): value is MemoryToolName {
   return (MEMORY_TOOL_NAMES as readonly unknown[]).includes(value);
@@ -125,8 +131,8 @@ export const AGENT_BOUNDARIES_TEXT =
   'Agent works only inside the active workspace. ' +
   'Symlink and path escapes are blocked; .git, .env files, credential and key ' +
   'material, secret stores, auth files, and repository control files are protected. ' +
-  'Tests run only from an exact derived allowlist with shell:false and no ' +
-  'arbitrary shell tool; allowlisted package scripts still execute with your ' +
+  'Tests run only from an exact derived allowlist with shell:false; arbitrary ' +
+  'commands run only through the optional terminal tool (OFF by default), each shown first; allowlisted package scripts still execute with your ' +
   'OS permissions and may access files, network, or shells. Ask and Safe-auto ' +
   'require approval before they run, while Workspace-full may run them without ' +
   'prompting and is high risk. Cloud work needs your existing escalation ' +
@@ -180,8 +186,8 @@ export function isAutoAllowed(
   profile: AgentProfileId,
   tool: AgentToolName,
 ): boolean {
-  if ((USER_APPROVAL_ONLY_TOOLS as readonly string[]).includes(tool)) {
-    // Memory changes are never automatic, whatever the profile.
+  if ((USER_APPROVAL_ONLY_TOOLS as readonly string[]).includes(tool) || tool === 'run_command') {
+    // Memory changes and terminal commands are never automatic, whatever the profile.
     return false;
   }
   if (profile === ASK_PROFILE_ID) {
@@ -192,5 +198,6 @@ export function isAutoAllowed(
   }
   // workspace-full: every allowlisted tool may run without a prompt once
   // policy, patch preconditions, and the test allowlist all pass.
-  return (AGENT_TOOL_NAMES as readonly string[]).includes(tool) || tool === 'read_decisions';
+  // Web tools too, once enabled: each call is still shown in the action log and host record (terminal commands never: above).
+  return (AGENT_TOOL_NAMES as readonly string[]).includes(tool) || tool === 'read_decisions' || isWebToolName(tool);
 }

@@ -79,9 +79,7 @@ const SETTINGS_MEMORY_THREAD = 'settings';
 const WORKSPACE_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'apply_patch', 'replace_in_file', 'create_directory', 'move_file', 'delete_file', 'set_executable',
 ]);
-/** How many characters of the approval card body the webview previews. */
 const APPROVAL_PREVIEW_CHARS = 2000;
-
 // ---------------------------------------------------------------------------
 // 1. Free functions (no `this`)
 // ---------------------------------------------------------------------------
@@ -123,9 +121,35 @@ export async function setAgentProfile(host: ProviderHost, rawProfile: string): P
         ? 'Workspace-full selected (high risk). Policy-checked patches and allowlisted tests can run without prompts. Tests run with your OS permissions and may access files, network, or shells. Select Ask to return instantly.'
         : `Permission profile: ${describeAgentProfile(next)}.`;
   }
+  if (next !== host.settings.agentProfile) {
+    invalidatePendingApproval(host, 'the permission profile changed');
+  }
   host.settings = { ...host.settings, agentProfile: next };
   host.persistSettings();
   await host.postState();
+}
+
+/**
+ * A pending approval is bound to the exact action, project and thread (its
+ * digest) and to the context it was shown in: if the permission profile,
+ * the runtime, the model or the model server changes while it waits, it is
+ * void and the action does not run.
+ */
+export function invalidatePendingApproval(host: ProviderHost, reason: string): void {
+  const waiter = host.agentWaiter;
+  if (host.agentPending === null || waiter === null) {
+    return;
+  }
+  host.agentGeneration += 1;
+  host.agentPending = null;
+  host.agentWaiter = null;
+  waiter.resolve({ kind: 'stale', reason });
+}
+
+/** Terminal approval is always complete; large patches keep an explicit bounded preview. */
+export function approvalBodyPreview(pending: PendingAgentAction): string {
+  if (pending.tool === 'run_command' || pending.body.length <= APPROVAL_PREVIEW_CHARS) return pending.body;
+  return `${pending.body.slice(0, APPROVAL_PREVIEW_CHARS)}\n…[${pending.body.length - APPROVAL_PREVIEW_CHARS} more characters not shown. Reject if you need to see the whole action first.]`;
 }
 
 /** Approve one pending Agent action (one approval authorizes one action). */
@@ -269,8 +293,9 @@ export async function liveApprovalContext(host: ProviderHost, pending: PendingAg
   }
   return {
     workspaceId,
-    // The run's own thread, never the thread currently on screen.
-    threadId: host.runThreadId ?? '',
+    // Approval is valid only while the user is still looking at the run's
+    // thread. A hidden/replayed card from a thread that was left cannot run.
+    threadId: host.activeThreadId === pending.threadId ? (host.runThreadId ?? '') : '',
     provider: host.settings.provider,
     generation: host.agentGeneration,
     currentHashes,

@@ -1,59 +1,60 @@
 # RAME Code
 
-**A local-first VS Code coding agent born at the Meta Global AI Developer Hackathon, powered by Meta Muse models and built around explicit permissions and host-verified evidence.**
+**A local-first coding agent with governed memory and verifiable Missions.**
 
-[Official website](https://ramecode.com/) · [**For judges: claims and evidence**](docs/JUDGES.md) · [English user guide](docs/USER_GUIDE.md) · [How to verify it](docs/VERIFICATION.md) · [Public evidence](evidence/README.md) · [Versión en español](README.es.md) · [Changelog](CHANGELOG.md) · [License](LICENSE)
+**Local AI coding. Decisions you control. Results the host verifies.**
+
+> What if your coding agent ran locally, remembered only the decisions you approved, and could not declare a checked task finished without passing your authorized checks?
+
+[Installation](#install-the-vsix-manually) · [User guide](docs/USER_GUIDE.md) · [**For judges**](docs/JUDGES.md) · [Evidence](evidence/README.md) · [Verification](docs/VERIFICATION.md) · [Latest release](https://github.com/caimari/rame-code/releases/latest) · [Website](https://ramecode.com/) · [Español](README.es.md)
 
 RAME Code is an independent open-source project started from scratch during the [Meta Global AI Developer Hackathon 2026](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details). It runs as a VS Code extension and supports both a local Muse Glimmer runtime and Meta Model API cloud models.
 
-Version `0.1.0` is the latest release. This branch contains the `0.2.0` preview candidate documented below. It is suitable for controlled evaluation on disposable projects, but it is not yet a production security boundary.
+Version `0.1.0` is the latest published release. This branch is focused on the much broader `0.2.0` preview candidate documented below. It is suitable for controlled evaluation on disposable projects, but it is not yet a production security boundary.
 
-## Six things to see first
+## Understand RAME in 20 seconds
 
 | Capability | What RAME does |
 | --- | --- |
-| Governed memory | Only the user can authorize a durable project decision; versions and provenance remain visible, and linked verified files can become stale when a decision changes. |
-| Verifiable Missions | The host—not the model—runs frozen acceptance and decides whether a Mission completed. |
-| Exact authority | One-use approvals bind the exact action, thread, provider, workspace and relevant file preconditions. |
-| Local Muse runtime | The extension can launch and stop its own loopback `llama-server`; Ollama is optional, not required. |
-| Controlled Meta disclosure | Before eligible local context goes to Meta, RAME shows the bounded payload and binds the decision to its recipient conditions. |
-| Honest evidence | REAL, SIMULATED and RECORDED results are separated, with explicit statements of what each result does not prove. |
+| Native VS Code agent | Chat, Agent and Mission run inside a graphical VS Code extension with RAME's own tools, permissions, memory and execution host. It is not only a front end for another coding agent. |
+| Local Muse Glimmer | RAME can launch and stop its own loopback `llama-server`; Ollama is not required. Model weights remain on infrastructure chosen by the user. |
+| Governed memory | Only the user can authorize a durable project decision. Versions and provenance remain visible, and remembered text never grants tool authority. |
+| Causal invalidation | When an approved decision changes, verified artifacts linked to the earlier version can become **STALE** until they are checked again. |
+| Verifiable Missions | For Missions with authorized acceptance, the host runs the frozen checks and decides completion; a model's claim is not evidence of success. |
+| Exact authority and disclosure | One-use approvals bind the action and its preconditions. Before eligible local context goes to Meta, RAME shows the bounded material and recipient conditions. |
 
-Start with [the claims-to-evidence table](docs/JUDGES.md). It links one supervised local-Glimmer Mission, the reproducible simulated sabotage battery and the current limitations.
+For example, if the approved decision “target Node.js 20” becomes “target Node.js 24”, an installer verified against the earlier decision can be marked **STALE**. RAME preserves the history; it does not silently treat the old evidence as current.
 
-## Follow the build
+Start with [the claims-to-evidence table](docs/JUDGES.md). It links one supervised local-Glimmer Mission, the reproducible simulated sabotage battery, exact reproduction commands and the limits of every claim. A green check proves only what that check actually covers.
 
-This repository is also a public build journal for people interested in how a coding agent is created from the ground up. The first implementation was bootstrapped by directing **Muse Code CLI** through explicit prompts, then checking the resulting code with automated tests and host-side evidence.
+## The 0.2.0 preview
 
-Download the latest [release](https://github.com/caimari/rame-code/releases), install the VSIX and try it on a disposable project. As development advances, new releases will make each verified stage available for testing instead of presenting only a finished demo.
+For the hackathon, development has deliberately prioritised working functionality, explicit authority and reproducible evidence over visual polish. The current interface and logo are provisional. Later releases will refine the information architecture, accessibility, onboarding and visual identity after the core behavior has completed independent and human validation.
 
-The next important milestone is intentionally recursive: RAME Code should use its own Agent mode and Meta Muse models to inspect, test and improve RAME Code itself. When a release contains a verified improvement produced through RAME Code rather than only through the original Muse Code CLI bootstrap, it will be identified explicitly in the changelog and evidence.
+Compared with the first public baseline, the 0.2.0 candidate adds governed project memory, restartable and host-verified Missions, stronger acceptance integrity, model evidence, Ollama and LM Studio connectivity, optional read-only web access, and an experimental local-Agent terminal. Read the complete, auditable list in the [Changelog](CHANGELOG.md#020---unreleased).
 
-## What works in v0.1.0
+## The 0.1.0 baseline
 
-- **Agent, Mission and Chat modes** in a single VS Code Activity Bar view.
-- **Muse Glimmer locally** through a loopback-only OpenAI-compatible `llama-server` endpoint.
-- **Muse Spark and Muse Wonder through Meta Model API**, using a user-supplied API key stored in VS Code SecretStorage.
-- Bounded Agent tool loop for workspace inspection, file operations, patches, executable permissions and allowlisted test commands.
-- Three permission profiles: Ask, Safe auto and Workspace full.
-- One-use, digest-bound approvals tied to the exact action, thread, provider, workspace and file preconditions.
-- Protection against absolute paths, traversal, symlink escapes and selected secret/control paths.
-- A host-authored action record kept separate from model text.
-- Persistent local threads, cancellation, usage accounting and explicit local-to-cloud escalation consent.
-- Configurable reasoning and output budgets, validated per provider and model.
-- Linux and Windows path/process handling covered by the automated test suite.
+The first release records what was built in the opening days of the project. It established:
 
-## What is not implemented yet
+- a VS Code extension with Chat, Agent and Mission modes;
+- local text inference through a managed `llama-server` and optional Meta Model API access;
+- bounded workspace tools, permission profiles and exact one-use approvals;
+- persistent threads, cancellation and host-authored action records.
 
-In the public v0.1.0 release, two items below were still missing; the 0.2.0 candidate implements them (see [Project memory](#project-memory-saved-threads-and-model-context) and [Bootstrap and verified Missions](#bootstrap-and-verified-missions-020-candidate-unreleased)):
+It is a historical research baseline, not the best description of the current candidate. Its complete capabilities, security work and limitations remain in the [0.1.0 Changelog](CHANGELOG.md#010---2026-11-02).
 
-- Persistent, versioned project decisions and stale-artifact detection (v0.1.0; implemented in the 0.2.0 candidate).
-- Resumable missions across a full extension restart (v0.1.0; implemented in the 0.2.0 candidate).
-- Automatic local-to-cloud escalation and verified return to the local model.
-- An operating-system sandbox or unrestricted terminal/computer control.
-- A claim that local execution, approvals or the audit log are tamper-proof.
+## Important work still pending
 
-Repository content, tool output and model output are treated as untrusted inputs. A model cannot grant itself additional authority, but allowlisted project test scripts still run with the operating-system permissions of VS Code and may themselves access files, networks or shells.
+- **Vision in RAME:** Muse Glimmer and its `mmproj` can support images, but the extension does not yet attach images or send multimodal requests to either local Glimmer or Meta cloud models.
+- **Meta validation:** the Meta Model API integration exists, but the candidate's newest privacy, Mission and handoff paths still require a final explicitly authorized real-API validation with fictitious data.
+- **Causal model return:** automatic escalation and a verifier-governed return to the local model remain research work, not a shipped claim.
+- **Terminal review:** `run_command` has no operating-system sandbox and must complete its separate security audit and human validation before public distribution.
+- **Distribution:** no 0.2 release has been published yet. The candidate is being validated as an installable VSIX in an isolated VS Code profile; Marketplace publication comes later.
+- **Platforms and interface:** real Windows validation remains pending. The current interface and logo are functional prototypes that will be redesigned and polished in later releases.
+- **Security boundary:** local execution, approvals and evidence are not claimed to be tamper-proof; approved commands and project scripts run with the VS Code user's operating-system permissions.
+
+Repository content, tool output and model output are treated as untrusted inputs. A model cannot grant itself additional authority. See the [user guide](docs/USER_GUIDE.md) for safe use and the [Changelog](CHANGELOG.md#known-limitations) for the detailed limits.
 
 ## Install the VSIX manually
 
@@ -100,7 +101,13 @@ RAME Code can start `llama-server` directly; Ollama is not required.
 3. Optionally configure a multimodal projector or DFlash draft model for the local server.
 4. Choose **Save**, then **Start Muse Glimmer**.
 
-The managed server binds to `127.0.0.1`. RAME Code stops only the process it started. You may also select an existing loopback OpenAI-compatible endpoint.
+The managed server binds to `127.0.0.1`. RAME Code stops only the process it started.
+
+**Model servers (0.2.0 candidate).** RAME can also connect to a server you run yourself: Ollama, LM Studio, another `llama-server` or any OpenAI-compatible server. **Find models** tells them apart, lists their chat models with tool, vision and context information, and a model the server says cannot call tools is limited to Chat. A server on another computer of your private network (a numeric private IP) is used only after you confirm that local work will be sent there; public addresses and host names are refused, and redirects are never followed. "Vision" in the list is the model's capability; RAME does not send images yet. Tested for real with Muse Glimmer 30B on LM Studio (RTX 3090 Ti, over the private network) and with Ollama 0.32.5.
+
+**Web access for Agent (0.2.0 candidate, default OFF).** `web_search` and `web_fetch`, read-only, with a local model only and never in Mission runs; each call is shown for approval except in Workspace full, private addresses are refused after DNS and on every redirect, and queries with keys or paths are not sent.
+
+**Terminal commands for Agent (0.2.0 candidate, default OFF).** `run_command` runs one shell command line in the project folder with your permissions (no sandbox), local model only and never in Mission runs; each command is shown in full and approved in every profile, Workspace full included, with a time limit and bounded output. **Stop** signals the command and its normal process group, but a deliberately detached process may survive. See the [user guide](docs/USER_GUIDE.md).
 
 In the public `v0.1.0` extension, local operation means that RAME Code sends text requests to a `llama-server` running on the user's own machine. The model files are read from user-configured disk paths and are not included in the extension or this repository. The alternative cloud runtime sends requests to Meta Model API using the user's own API key.
 
@@ -137,7 +144,7 @@ llama-server \
 | **Safe auto** | Policy-checked reads run automatically; writes and tests still require approval. |
 | **Workspace full** | Allowed workspace actions may run without prompting. Policy checks remain, but this mode is high risk. |
 
-Agent work is restricted to one explicitly selected VS Code workspace folder. RAME Code has no arbitrary shell tool. Test execution is limited to commands derived from an allowlist and uses `shell: false`, but the selected package script may still execute arbitrary project code.
+Agent work is restricted to one explicitly selected VS Code workspace folder. The optional `run_command` terminal is a separate, high-risk capability: it is off by default, local-Agent only, excluded from Mission, and always requires approval of the complete command. Test execution through `run_tests` remains limited to commands derived from an allowlist and uses `shell: false`, although the selected package script may still execute arbitrary project code.
 
 ## Bootstrap and verified Missions (0.2.0 candidate, unreleased)
 
@@ -304,7 +311,7 @@ Later construction and review combined existing access to **OpenAI Codex** and *
 
 ## Roadmap
 
-The next milestone adds the feature that distinguishes RAME Code from a generic coding agent: user-authorized, versioned project decisions whose dependencies can become visibly stale after a decision changes, and whose state can be recovered after a restart.
+The immediate priorities are to complete the independent audit and human validation of the 0.2 candidate, prove clean VSIX installation, finish real Windows and explicitly authorized Meta API checks, and publish a reproducible preview. Subsequent releases will add image input for Glimmer, refine the provisional interface and logo, prepare Visual Studio Marketplace distribution, broaden verified project adapters and continue research into verifier-governed model handoffs.
 
 ## License
 

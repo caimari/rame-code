@@ -51,7 +51,17 @@ RAME Code can start a compatible `llama-server` bound to `127.0.0.1`, or use an 
 
 “Local” does not mean sandboxed: files and approved tests still use the permissions of VS Code. An external endpoint is shown as **identity not verified**, because RAME cannot prove which weights it serves.
 
-RAME does not need Ollama for its managed local path: it starts the configured `llama-server` executable directly and loads the Glimmer GGUF from disk. It can also point to an already-running Ollama instance when that instance exposes an OpenAI-compatible loopback API, but RAME does not install Ollama, download its models, query its native catalogue, or start and stop its daemon. Adding that native integration would be a product change; it is different from the basic endpoint compatibility that already exists.
+RAME does not need Ollama for its managed local path: it starts the configured `llama-server` executable directly and loads the Glimmer GGUF from disk.
+
+### Model servers: Ollama, LM Studio, llama-server
+
+RAME can also use a model server you run yourself. Open **Settings › Runtime › Model servers**, choose **Ollama (11434)** or **LM Studio (1234)** (or type another address) and press **Find models**. RAME reads only metadata: it tells Ollama, LM Studio and llama-server apart, lists their chat models and shows, for each one, whether it supports tool calls, whether it has vision and the context it is loaded with. Choose one and press **Use this model**: Chat, Agent and Mission then send that model id to that server. RAME never starts, stops or installs the server.
+
+- A model the server says cannot call tools can be used in Chat only; Agent and Mission stop with that reason.
+- Agent needs about 16,384 tokens of context. Ollama loads models with its own context length (often 4,096) unless it is started with `OLLAMA_CONTEXT_LENGTH`; in LM Studio, load the model with a larger context.
+- A server on another computer of your private network is used only after you tick that prompts, history and project content will be sent there. Write it as a numeric private address (10.x, 172.16–31.x, 192.168.x): host names other than `localhost` are refused, because a name could point to a public address. A public address is always refused. RAME never follows a redirect from a model server. Plain `http` on your network is not encrypted.
+- Muse Glimmer: we have not found or tested a Glimmer model for Ollama on Linux or Windows (another project reports an MLX build for Apple silicon only). LM Studio and llama-server serve the Glimmer GGUF; that is what was tested.
+- "vision" in the model list means the model can read images. RAME does not send images to models yet: that capability is not used.
 
 ### Meta Model API — Cloud
 
@@ -90,6 +100,17 @@ Explain how src/calculator.js works. Do not modify anything.
 Fix the failing calculator test, change only src/calculator.js, run npm:test,
 and report the real result.
 ```
+
+**Web access (optional, default OFF).** In **Settings › Escalation › Web access** you can let Agent search the web (`web_search`, with DuckDuckGo or your own SearXNG) and read public pages (`web_fetch`), read-only. It works only with a local model and never in Mission runs. Each call is shown and, except in Workspace full, waits for your approval. Local and private addresses are refused (also after DNS and on every redirect), a query or URL that contains a key or a file path is not sent, and pages are limited to 2 MiB and 15 s. Page text reaches the model labelled as untrusted data, never as instructions, and cannot write project memory.
+
+```text
+Look up how to build a Windows installer with electron-builder in the current
+documentation, cite the pages you used, and do not change any file.
+```
+
+**Terminal commands (optional, default OFF).** In **Settings › Escalation › Terminal commands** you can let Agent run a shell command line in the project folder (`run_command`: bash or sh, PowerShell on Windows), for example to install a dependency, build, run a script or use git. This is the most powerful tool and the least bounded one: the command runs with your permissions and can change any file, use the network or install software; there is no sandbox. So it works only with a local model and never in Mission runs, you see each command in full before it runs and approve it in every profile (Workspace full included; the card also warns when a line chains commands, runs a script you cannot see, uses sudo or the network, or installs software, but a command line never shows all its effects), and it has a time limit (120 s by default, at most 600 s) and bounded output. **Stop** signals the command and its normal process group, but a deliberately detached process may survive. A few commands that can only destroy (wiping the root or home folder, formatting a disk, a fork bomb, shutting down) are refused. The other tools stay the safer choice: `run_tests` runs only scripts of `package.json` derived exactly, without a shell, and the file tools check every path.
+
+> **Warning about Workspace full and the terminal.** Workspace full lets patches and allowlisted tests run without asking, but it never does that for terminal commands: each `run_command` still waits for your approval. No change of profile or model authorizes a command silently: turning the terminal on is a separate setting, and it only applies to a local model. A single command line can change files outside the project, install software or reach the internet. Chained commands (`&&`, `;`, pipes), `$(...)`, scripts (`./setup.sh`, `npm run …`, `python tool.py`) and installers can do much more than the line shows: the card warns about them, but read the line and approve only what you understand.
 
 ### Mission
 

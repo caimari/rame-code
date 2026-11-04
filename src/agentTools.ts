@@ -14,7 +14,7 @@ import {
   MAX_TOOL_CALLS_PER_TURN,
   MAX_TOOL_OUTPUT_BYTES,
 } from './agentPolicy.js';
-import { MEMORY_TOOL_NAMES, type AgentToolName } from './agentProfiles.js';
+import { MEMORY_TOOL_NAMES, WEB_TOOL_NAMES, type AgentToolName } from './agentProfiles.js';
 import type { ProviderUsage } from './usage.js';
 
 export const AGENT_TOOL_LIST: readonly AgentToolName[] = [
@@ -463,6 +463,31 @@ export function validateToolArgs(tool: string, raw: unknown): Record<string, unk
       return validateProposeDecisionArgs(raw) as unknown as Record<string, unknown>;
     case 'bind_artifact':
       return validateBindArtifactArgs(raw) as unknown as Record<string, unknown>;
+    case 'web_search': {
+      const args = requireExactArgs(tool, raw, ['query']);
+      if (typeof args.query !== 'string' || args.query.trim().length === 0 || args.query.length > 300) {
+        failArgs(tool, 'query must be 1 to 300 characters');
+      }
+      return { query: args.query.trim() };
+    }
+    case 'run_command': {
+      const keys = isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, 'timeoutSec') ? ['command', 'timeoutSec'] : ['command'];
+      const args = requireExactArgs(tool, raw, keys);
+      if (typeof args.command !== 'string' || args.command.trim().length === 0 || args.command.length > 4000 || /[\u0000]/.test(args.command)) {
+        failArgs(tool, 'command must be 1 to 4000 characters');
+      }
+      if (args.timeoutSec !== undefined && (typeof args.timeoutSec !== 'number' || !Number.isInteger(args.timeoutSec) || args.timeoutSec < 1 || args.timeoutSec > 600)) {
+        failArgs(tool, 'timeoutSec must be an integer from 1 to 600');
+      }
+      return args.timeoutSec === undefined ? { command: args.command } : { command: args.command, timeoutSec: args.timeoutSec };
+    }
+    case 'web_fetch': {
+      const args = requireExactArgs(tool, raw, ['url']);
+      if (typeof args.url !== 'string' || !/^https?:\/\//i.test(args.url) || args.url.length > 2048) {
+        failArgs(tool, 'url must be an http(s) URL of at most 2048 characters');
+      }
+      return { url: args.url };
+    }
     default:
       fail('Unknown tool.');
   }
@@ -491,7 +516,8 @@ function parseArgumentsField(value: unknown): unknown {
  * may be a JSON string or an object; extra fields at any level are rejected.
  */
 export function validateOneToolCall(raw: unknown): ValidatedToolCall {
-  if (!isRecord(raw) || !hasExactKeys(raw, ['id', 'type', 'function'])) {
+  // Ollama adds a numeric `index` to each call; nothing else extra is accepted.
+  if (!isRecord(raw) || !(hasExactKeys(raw, ['id', 'type', 'function']) || (hasExactKeys(raw, ['id', 'index', 'type', 'function']) && Number.isInteger(raw.index)))) {
     fail('Invalid tool call.');
   }
   if (typeof raw.id !== 'string' || raw.id.length === 0 || raw.id.length > 128) {
@@ -506,7 +532,7 @@ export function validateOneToolCall(raw: unknown): ValidatedToolCall {
   }
   if (
     typeof fn.name !== 'string' ||
-    (!(AGENT_TOOL_LIST as readonly string[]).includes(fn.name) && !(MEMORY_TOOL_NAMES as readonly string[]).includes(fn.name))
+    (!(AGENT_TOOL_LIST as readonly string[]).includes(fn.name) && !(MEMORY_TOOL_NAMES as readonly string[]).includes(fn.name) && !(WEB_TOOL_NAMES as readonly string[]).includes(fn.name))
   ) {
     fail('Unknown tool.');
   }
@@ -561,7 +587,8 @@ export function parseAssistantToolCalls(payload: unknown): ValidatedToolCall[] |
     return null;
   }
   const toolCalls = (message as Record<string, unknown>).tool_calls;
-  if (toolCalls === undefined || toolCalls === null) {
+  // LM Studio sends an empty list with a plain answer: no calls, like null.
+  if (toolCalls === undefined || toolCalls === null || (Array.isArray(toolCalls) && toolCalls.length === 0)) {
     return null;
   }
   return validateToolCallList(toolCalls);

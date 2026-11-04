@@ -212,6 +212,11 @@ export class FakeModelServer {
    */
   props: unknown = null;
   propsRequests = 0;
+  /**
+   * Optional metadata routes (Ollama's /api/..., LM Studio's /api/v0/models):
+   * an answer here is sent as JSON and never consumes a scripted chat reply.
+   */
+  metadata: ((method: string, url: string, body: string) => unknown) | null = null;
 
   enqueue(...replies: ModelReply[]): void {
     this.replies.push(...replies);
@@ -231,6 +236,12 @@ export class FakeModelServer {
         raw += chunk.toString('utf8');
       });
       req.on('end', () => {
+        const meta = this.metadata?.(req.method ?? 'GET', req.url ?? '/', raw);
+        if (meta !== undefined) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(meta));
+          return;
+        }
         try {
           this.requests.push(JSON.parse(raw) as Record<string, unknown>);
         } catch {

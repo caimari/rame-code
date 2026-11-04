@@ -51,7 +51,17 @@ RAME Code puede iniciar un `llama-server` compatible enlazado a `127.0.0.1` o us
 
 «Local» no significa aislado: los archivos y pruebas autorizadas siguen usando los permisos de VS Code. Un endpoint externo aparece como **identidad no verificada**, porque RAME no puede demostrar qué pesos sirve.
 
-RAME no necesita Ollama para su recorrido local administrado: inicia directamente el ejecutable `llama-server` que hayas configurado y carga el GGUF de Glimmer desde disco. También puede apuntar a un Ollama ya iniciado si este expone una API OpenAI-compatible en loopback, pero RAME no instala Ollama, no descarga sus modelos, no consulta su catálogo nativo y no inicia ni detiene su daemon. Añadir esa integración nativa sería una modificación del producto; no debe confundirse con la compatibilidad básica de endpoint que ya existe.
+RAME no necesita Ollama para su recorrido local administrado: inicia directamente el ejecutable `llama-server` que hayas configurado y carga el GGUF de Glimmer desde disco.
+
+### Servidores de modelos: Ollama, LM Studio, llama-server
+
+RAME también puede usar un servidor de modelos que ejecutas tú. Abre **Settings › Runtime › Servidores de modelos**, elige **Ollama (11434)** o **LM Studio (1234)** (o escribe otra dirección) y pulsa **Buscar modelos**. RAME solo lee metadatos: distingue Ollama, LM Studio y llama-server, lista sus modelos de chat y muestra de cada uno si admite llamadas a herramientas, si tiene visión y con qué contexto está cargado. Elige uno y pulsa **Usar este modelo**: Chat, Agente y Misión enviarán ese identificador de modelo a ese servidor. RAME nunca arranca, para ni instala el servidor.
+
+- Un modelo que, según el servidor, no puede llamar herramientas solo sirve para Chat; Agente y Misión se detienen con ese motivo.
+- El Agente necesita unos 16.384 tokens de contexto. Ollama carga los modelos con su propio contexto (a menudo 4.096) salvo que se arranque con `OLLAMA_CONTEXT_LENGTH`; en LM Studio, carga el modelo con un contexto mayor.
+- Un servidor en otro ordenador de tu red privada solo se usa después de que marques que se le enviarán las peticiones, el historial y el contenido del proyecto. Escríbelo como dirección privada numérica (10.x, 172.16–31.x, 192.168.x): se rechazan los nombres de equipo salvo `localhost`, porque un nombre podría apuntar a una dirección pública. Una dirección pública se rechaza siempre. RAME nunca sigue una redirección de un servidor de modelos. El `http` de tu red no va cifrado.
+- Muse Glimmer: no hemos encontrado ni probado un modelo Glimmer para Ollama en Linux o Windows (otro proyecto menciona una versión MLX solo para Apple silicon). LM Studio y llama-server sirven el GGUF de Glimmer, y es lo que se ha probado.
+- «visión» en la lista de modelos significa que el modelo puede leer imágenes. RAME todavía no envía imágenes a los modelos: esa capacidad no se usa.
 
 ### Meta Model API — Nube
 
@@ -92,6 +102,17 @@ Explícame cómo funciona src/calculator.js. No modifiques nada.
 Corrige la prueba que falla en calculator, modifica solo src/calculator.js,
 ejecuta npm:test e informa del resultado real.
 ```
+
+**Acceso web (opcional, desactivado por defecto).** En **Settings › Escalada › Acceso web** puedes permitir que el Agente busque en la web (`web_search`, con DuckDuckGo o tu propio SearXNG) y lea páginas públicas (`web_fetch`), solo lectura. Funciona solo con un modelo local y nunca en las ejecuciones de una Misión. Cada llamada se muestra y, salvo en Workspace full, espera tu aprobación. Se rechazan las direcciones locales y privadas (también después del DNS y en cada redirección), no se envía una consulta o URL que contenga una clave o una ruta de fichero, y las páginas tienen un límite de 2 MiB y 15 s. El texto de las páginas llega al modelo marcado como dato no confiable, nunca como instrucciones, y no puede escribir en la memoria del proyecto.
+
+```text
+Busca en la documentación actual cómo crear un instalador de Windows con
+electron-builder, cita las páginas que uses y no cambies ningún archivo.
+```
+
+**Comandos de terminal (opcional, desactivado por defecto).** En **Settings › Escalada › Comandos de terminal** puedes permitir que el Agente ejecute una línea de órdenes en la carpeta del proyecto (`run_command`: bash o sh, PowerShell en Windows), por ejemplo para instalar una dependencia, compilar, ejecutar un script o usar git. Es la herramienta más potente y la menos acotada: el comando se ejecuta con tus permisos y puede cambiar cualquier fichero, usar la red o instalar programas; no hay sandbox. Por eso solo funciona con un modelo local y nunca en las ejecuciones de una Misión, ves cada comando completo antes de que se ejecute y lo apruebas en todos los perfiles (también en Workspace full; la tarjeta avisa además cuando una línea encadena comandos, ejecuta un script que no ves, usa sudo o la red, o instala programas, pero una línea de comandos nunca muestra todos sus efectos), y tiene un límite de tiempo (120 s por defecto, como máximo 600 s) y una salida acotada. **Detener** señala el comando y su grupo normal de procesos, pero un proceso desacoplado deliberadamente puede sobrevivir. Se rechazan unos pocos comandos que solo pueden destruir (borrar la raíz o la carpeta personal, formatear un disco, una fork bomb, apagar el equipo). Las demás herramientas siguen siendo la opción más segura: `run_tests` solo ejecuta scripts de `package.json` derivados de forma exacta y sin shell, y las herramientas de ficheros comprueban cada ruta.
+
+> **Advertencia sobre Workspace full y la terminal.** Workspace full deja que los parches y las pruebas permitidas se ejecuten sin preguntar, pero nunca lo hace con los comandos de terminal: cada `run_command` sigue esperando tu aprobación. Ningún cambio de perfil ni de modelo autoriza un comando en silencio: activar la terminal es un ajuste aparte y solo se aplica con un modelo local. Una sola línea de comandos puede cambiar archivos fuera del proyecto, instalar programas o conectarse a Internet. Los comandos encadenados (`&&`, `;`, tuberías), `$(...)`, los scripts (`./setup.sh`, `npm run …`, `python tool.py`) y los instaladores pueden hacer mucho más de lo que muestra la línea: la tarjeta avisa de ellos, pero lee la línea y aprueba solo lo que entiendas.
 
 ### Misión
 

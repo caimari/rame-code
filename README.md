@@ -1,16 +1,26 @@
 # RAME Code
 
-**A local-first coding agent with governed memory and verifiable Missions.**
+### Local-First AI Coding Agent for Visual Studio Code
 
-**Local AI coding. Decisions you control. Results the host verifies.**
+**Muse Glimmer · llama-server · Ollama · LM Studio · Meta Model API**
 
-> What if your coding agent ran locally, remembered only the decisions you approved, and could not declare a checked task finished without passing your authorized checks?
+Build software inside VS Code with local-first inference, user-governed memory, scoped permissions and autonomous Missions whose authorized acceptance is checked by the host.
 
-[Installation](#install-the-vsix-manually) · [User guide](docs/USER_GUIDE.md) · [**For judges**](docs/JUDGES.md) · [Evidence](evidence/README.md) · [Verification](docs/VERIFICATION.md) · [Latest release](https://github.com/caimari/rame-code/releases/latest) · [Website](https://ramecode.com/) · [Español](README.es.md)
+[Installation](#installation) · [User guide](docs/USER_GUIDE.md) · [**For judges**](docs/JUDGES.md) · [Evidence](evidence/README.md) · [Verification](docs/VERIFICATION.md) · [Public VSIX](https://github.com/caimari/rame-code/releases/latest) · [Website](https://ramecode.com/) · [Español](README.es.md)
 
-RAME Code is an independent open-source project started from scratch during the [Meta Global AI Developer Hackathon 2026](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details). It runs as a VS Code extension and supports both a local Muse Glimmer runtime and Meta Model API cloud models.
+Run Meta Muse Glimmer through RAME's managed loopback `llama-server`, or connect to compatible chat models served by Ollama, LM Studio, another `llama-server` or an OpenAI-compatible server. A server on another computer of the private network requires explicit authorization. The executable and model weights are installed separately; RAME does not bundle them.
 
-Version `0.1.0` is the latest published release. This branch is focused on the much broader `0.2.0` preview candidate documented below. It is suitable for controlled evaluation on disposable projects, but it is not yet a production security boundary.
+Use Meta Model API for direct cloud Chat and Agent with models whose advertised capabilities fit the selected mode. During an authorized local Mission, RAME can request optional, budget-limited advice from Meta Muse Spark after an eligible capability stop while the local model retains tool control. This Advisory route is implemented and covered with a simulated Meta API; only direct Spark Chat has a recorded real-API validation so far.
+
+**Local inference first. Cloud assistance when authorized. Explicit budgets, persistent decisions and evidence-backed verification.**
+
+> **Version status — 0.2.0 preview candidate.** Commit [`e383ea4`](https://github.com/caimari/rame-code/commit/e383ea4281aaf25a85d66b5955d71707508a9af0) was built and installed as an isolated VSIX during human validation. It is the current candidate described here, but no public 0.2.0 VSIX or release has been published yet. The latest downloadable public release remains [`v0.1.0`](https://github.com/caimari/rame-code/releases/tag/v0.1.0). Use disposable projects; this preview is not a production security boundary.
+
+| Local-first | Meta Model API | Verified Missions | Governed memory |
+| --- | --- | --- | --- |
+| Managed `llama-server` or an existing Ollama/LM Studio-compatible server | Direct cloud Chat and Agent; bounded optional Mission advice | Autonomous continuation with host-run authorized acceptance | User-approved, versioned decisions and traceable stale evidence |
+
+RAME Code is an independent open-source project started from scratch during the [Meta Global AI Developer Hackathon 2026](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details).
 
 ## Understand RAME in 20 seconds
 
@@ -56,7 +66,23 @@ It is a historical research baseline, not the best description of the current ca
 
 Repository content, tool output and model output are treated as untrusted inputs. A model cannot grant itself additional authority. See the [user guide](docs/USER_GUIDE.md) for safe use and the [Changelog](CHANGELOG.md#known-limitations) for the detailed limits.
 
-## Install the VSIX manually
+## Installation
+
+### Build the current 0.2.0 candidate from GitHub
+
+The current source builds an installable `rame-code-0.2.0.vsix`; the candidate is not a published release yet.
+
+```bash
+git clone https://github.com/caimari/rame-code.git
+cd rame-code
+npm ci
+npm run package
+code --install-extension rame-code-0.2.0.vsix
+```
+
+Use Node.js 20 or 24. Review the source commit and generated VSIX before installing; packaging runs the complete automated suite.
+
+### Install the latest published VSIX
 
 Download `rame-code-0.1.0.vsix` from the [v0.1.0 release](https://github.com/caimari/rame-code/releases/tag/v0.1.0).
 

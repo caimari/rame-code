@@ -10,7 +10,7 @@ Its central rule is simple: **the model proposes; RAME Code's host controls perm
 
 ## Start here
 
-1. Install the VSIX using the [README instructions](../README.md#install-the-vsix-manually).
+1. Install the VSIX using the [README instructions](../README.md#installation).
 2. Open one folder you are willing to test with. Use a disposable project while RAME Code is a preview.
 3. Select the **R** icon in the VS Code Activity Bar.
 4. Open **Settings** and choose a runtime under **Models**:

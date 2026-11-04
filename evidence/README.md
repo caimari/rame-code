@@ -5,6 +5,7 @@ This directory contains narrowly scoped evidence, not a quality score or a gener
 | Evidence | Label | Reproduce | Scope |
 | --- | --- | --- | --- |
 | [`real-mission-supervised/`](real-mission-supervised/) | REAL run, public RECORDED extraction | Inspect the fixture and `SHA256SUMS`; run the before and after checks as documented | One historical supervised local-Glimmer Mission on a disposable project |
+| [`meta-spark-real-chat/`](meta-spark-real-chat/) | REAL inference, RECORDED human-validation note | Inspect the build identity and limits; verify with `cd evidence/meta-spark-real-chat && sha256sum -c SHA256SUMS` | Two real Chat-only responses from `muse-spark-1.3`; no tools, Agent or Mission claim |
 | [`sabotage/mission-sabotage.SIMULATED.json`](sabotage/mission-sabotage.SIMULATED.json) | SIMULATED | `npm run demo:sabotage` | Scripted adversarial actions against the candidate's real host logic |
 
 Definitions and the complete claims matrix are in [For judges](../docs/JUDGES.md) and [How to verify it](../docs/VERIFICATION.md).

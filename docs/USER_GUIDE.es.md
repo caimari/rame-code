@@ -10,7 +10,7 @@ Su regla central es sencilla: **el modelo propone; el host de RAME Code controla
 
 ## Empieza aquí
 
-1. Instala el VSIX siguiendo las [instrucciones del README](../README.es.md#instalar-manualmente-el-vsix).
+1. Instala el VSIX siguiendo las [instrucciones del README](../README.es.md#instalación).
 2. Abre una carpeta con la que estés dispuesto a hacer pruebas. Mientras RAME Code sea una preview, utiliza un proyecto desechable.
 3. Abre RAME Code desde el icono **R** de la barra de actividad.
 4. Abre **Ajustes** y elige un motor en **Modelos**:

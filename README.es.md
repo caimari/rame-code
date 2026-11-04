@@ -1,16 +1,26 @@
 # RAME Code
 
-**Un agente de programación local con memoria gobernada y Missions verificables.**
+### Agente de programación con IA local para Visual Studio Code
 
-**Programación con IA local. Decisiones bajo tu control. Resultados verificados por el host.**
+**Muse Glimmer · llama-server · Ollama · LM Studio · Meta Model API**
 
-> ¿Y si tu agente de programación funcionara localmente, recordara solo las decisiones que autorizas y no pudiera declarar terminada una tarea comprobada sin superar tus verificaciones autorizadas?
+Desarrolla software dentro de VS Code con inferencia local-first, memoria gobernada por el usuario, permisos acotados y Missions autónomas cuya aceptación autorizada comprueba el host.
 
-[Instalación](#instalar-manualmente-el-vsix) · [Guía de usuario](docs/USER_GUIDE.es.md) · [**Para el jurado**](docs/JUDGES.es.md) · [Evidencias](evidence/README.md) · [Verificación](docs/VERIFICATION.es.md) · [Última release](https://github.com/caimari/rame-code/releases/latest) · [Web](https://ramecode.com/) · [English](README.md)
+[Instalación](#instalación) · [Guía de usuario](docs/USER_GUIDE.es.md) · [**Para el jurado**](docs/JUDGES.es.md) · [Evidencias](evidence/README.md) · [Verificación](docs/VERIFICATION.es.md) · [VSIX público](https://github.com/caimari/rame-code/releases/latest) · [Web](https://ramecode.com/) · [English](README.md)
 
-RAME Code es un proyecto independiente de código abierto iniciado desde cero durante el [Meta Global AI Developer Hackathon 2026](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details). Funciona como extensión de VS Code y admite tanto Muse Glimmer local como modelos en la nube mediante Meta Model API.
+Ejecuta Meta Muse Glimmer mediante el `llama-server` loopback gestionado por RAME, o conecta modelos de chat compatibles servidos por Ollama, LM Studio, otro `llama-server` o un servidor compatible con OpenAI. Un servidor situado en otro equipo de la red privada requiere autorización explícita. El ejecutable y los pesos del modelo se instalan por separado; RAME no los incluye.
 
-La versión `0.1.0` es la última release publicada. Esta rama está centrada en el candidato preview `0.2.0`, mucho más amplio y documentado a continuación. Es adecuado para una evaluación controlada en proyectos desechables, pero todavía no constituye una frontera de seguridad para producción.
+Utiliza Meta Model API para Chat y Agent cloud directos con modelos cuyas capacidades anunciadas sean adecuadas para el modo elegido. Durante una Mission local autorizada, RAME puede solicitar asesoramiento opcional y limitado por presupuesto a Meta Muse Spark tras una parada de capacidad elegible, mientras el modelo local conserva las herramientas. Esta vía Advisory está implementada y cubierta con una API Meta simulada; por ahora solo Chat directo con Spark tiene una validación registrada contra la API real.
+
+**Inferencia local primero. Asistencia cloud cuando se autoriza. Presupuestos explícitos, decisiones persistentes y verificación respaldada por evidencias.**
+
+> **Estado de versión — candidato preview 0.2.0.** El commit [`e383ea4`](https://github.com/caimari/rame-code/commit/e383ea4281aaf25a85d66b5955d71707508a9af0) se construyó e instaló como VSIX aislado durante la validación humana. Es el candidato actual descrito aquí, pero todavía no se ha publicado un VSIX ni una release pública 0.2.0. La última release pública descargable sigue siendo [`v0.1.0`](https://github.com/caimari/rame-code/releases/tag/v0.1.0). Utiliza proyectos desechables; esta preview no es una frontera de seguridad para producción.
+
+| Local-first | Meta Model API | Missions verificadas | Memoria gobernada |
+| --- | --- | --- | --- |
+| `llama-server` gestionado o un servidor compatible Ollama/LM Studio existente | Chat y Agent cloud directos; asesoramiento opcional acotado para Mission | Continuación autónoma con aceptación autorizada ejecutada por el host | Decisiones versionadas aprobadas por el usuario y evidencias obsoletas trazables |
+
+RAME Code es un proyecto independiente de código abierto iniciado desde cero durante el [Meta Global AI Developer Hackathon 2026](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details).
 
 ## Comprende RAME en 20 segundos
 
@@ -56,7 +66,23 @@ Es una base histórica de investigación, no la mejor descripción del candidato
 
 El contenido del repositorio, las salidas de herramientas y las respuestas del modelo se consideran datos no confiables. Un modelo no puede concederse autoridad adicional. Consulta la [guía de usuario](docs/USER_GUIDE.es.md) para utilizarlo con seguridad y el [Changelog](CHANGELOG.md#known-limitations) para conocer los límites detallados.
 
-## Instalar manualmente el VSIX
+## Instalación
+
+### Construir el candidato 0.2.0 actual desde GitHub
+
+El código actual genera un `rame-code-0.2.0.vsix` instalable; el candidato todavía no es una release publicada.
+
+```bash
+git clone https://github.com/caimari/rame-code.git
+cd rame-code
+npm ci
+npm run package
+code --install-extension rame-code-0.2.0.vsix
+```
+
+Utiliza Node.js 20 o 24. Revisa el commit fuente y el VSIX generado antes de instalarlo; el empaquetado ejecuta toda la suite automatizada.
+
+### Instalar el último VSIX publicado
 
 Descarga `rame-code-0.1.0.vsix` desde la [release v0.1.0](https://github.com/caimari/rame-code/releases/tag/v0.1.0).
 

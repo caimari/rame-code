@@ -142,7 +142,7 @@ A Mission is verified at one of three levels, and the level is written in its ho
 
 When RAME cannot show that the authorized conditions held, the result is **not verifiable**: never a pass, the Mission is blocked with the reason and the authorized acceptance stays unchanged.
 
-These guarantees are exercised by a **SIMULATED** sabotage battery (`npm run demo:sabotage`): 43 attempts to complete a Mission without the work, including the reproductions from an independent audit. 3 still succeed and are documented as limits:
+These guarantees are exercised by a **SIMULATED** sabotage battery (`npm run demo:sabotage`): 44 attempts to complete a Mission without the work, including the reproductions from independent audits. 3 still succeed and are documented as limits:
 
 - a weak check satisfied by constants;
 - a helper the user confirmed as writable;

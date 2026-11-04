@@ -142,7 +142,7 @@ Una Mission se verifica en uno de tres niveles, y el nivel queda escrito en sus 
 
 Cuando RAME no puede demostrar que se cumplieron las condiciones autorizadas, el resultado es **no verificable**: nunca es un aprobado, la Mission se bloquea con el motivo y la aceptación autorizada no cambia.
 
-Estas garantías se ponen a prueba con una batería de sabotaje **SIMULATED** (`npm run demo:sabotage`): 43 intentos de completar una Mission sin hacer el trabajo, incluidas las reproducciones de una auditoría independiente. 3 todavía funcionan y se documentan como límites:
+Estas garantías se ponen a prueba con una batería de sabotaje **SIMULATED** (`npm run demo:sabotage`): 44 intentos de completar una Mission sin hacer el trabajo, incluidas las reproducciones de auditorías independientes. 3 todavía funcionan y se documentan como límites:
 
 - una comprobación débil superada con constantes;
 - un auxiliar que el usuario confirmó como modificable;

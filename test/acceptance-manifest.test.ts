@@ -108,7 +108,6 @@ test('AUD-02: changes since authorization are judged by the host, whatever the t
     MANIFEST,
     ['acceptance/accept.test.js'],
     new Set(),
-    new Set(['lib/helper.js']),
   );
   assert.deepEqual(judged.blocking, [
     { path: 'acceptance/new.test.js', reason: 'it is in the acceptance folder acceptance' },
@@ -120,13 +119,31 @@ test('AUD-02: changes since authorization are judged by the host, whatever the t
   ]);
   assert.deepEqual(
     judged.review.map((entry) => entry.path),
-    ['lib/util.js', 'own.test.js', 'test/sum.test.js', 'docs/notes.txt'],
-    'existing code and new non-code or test files need the user; writable code, outputs and new code are allowed',
+    ['lib/helper.js', 'lib/util.js', 'own.test.js', 'test/sum.test.js', 'docs/notes.txt'],
+    'every new file and existing code outside the authorized scope needs the user; writable code and declared outputs are allowed',
   );
   assert.deepEqual(judgeChanges([change('lib/other.js')], MANIFEST, ['acceptance/accept.test.js'], new Set(['lib/other.js'])).blocking, [{ path: 'lib/other.js', reason: 'the check itself uses it' }], 'used in this run');
-  // A new code file whose role the run does not establish (nothing in the code under test loads it) is reviewed, never silently allowed.
+  // A new code file is reviewed even if the untrusted trace says the code under test loaded it.
   assert.deepEqual(judgeChanges([change('lib/orphan.js', 'added')], MANIFEST, ['acceptance/accept.test.js'], new Set()).review, [{ path: 'lib/orphan.js', change: 'added' }]);
-  assert.deepEqual(judgeChanges([change('lib/orphan.js', 'added')], MANIFEST, ['acceptance/accept.test.js'], new Set(), new Set(['lib/orphan.js'])).review, []);
+});
+
+test('case-distinct POSIX paths never inherit another file\'s writable authorization', () => {
+  const change = { path: 'lib/Subject.js', change: 'changed' as const };
+  const manifest = {
+    ...MANIFEST,
+    writable: ['lib/subject.js'],
+    observed: ['lib/subject.js', 'lib/Subject.js'],
+  };
+  assert.deepEqual(
+    judgeChanges([change], manifest, [], new Set(), 'linux').blocking,
+    [{ path: 'lib/Subject.js', reason: 'the check itself uses it' }],
+    'Linux treats the two files as distinct; permission for one cannot authorize the other',
+  );
+  assert.deepEqual(
+    judgeChanges([change], manifest, [], new Set(), 'win32'),
+    { blocking: [], review: [] },
+    'on Windows both spellings name the same file',
+  );
 });
 
 test('AUD-03: the agent\'s file system cannot read the hidden cases; everything else is unchanged', async () => {

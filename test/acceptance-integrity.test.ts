@@ -97,7 +97,7 @@ test('the same, with the dependency filtered out of the trace: the new file stil
   });
 });
 
-test('a new code file whose role the run does not establish is shown for review; one the code under test loads is not', async () => {
+test('every new code file needs scope review, including one the untrusted trace says the code under test loaded', async () => {
   await withProject({ 'acceptance/accept.test.js': SIMPLE }, async (h, mission) => {
     h.model.enqueue(
       write('w', 'lib/sum.js', "module.exports = require('./impl.js');\n"),
@@ -110,9 +110,9 @@ test('a new code file whose role the run does not establish is shown for review;
     assert.equal(reviews().length, 1, `${stored(h).status}\n${notes(h)}`);
     const detail = reviews()[0]?.detail ?? '';
     assert.match(detail, /lib\/orphan\.js \(added\)/);
-    assert.doesNotMatch(detail, /lib\/impl\.js/, 'loaded by the code under test: its role is established');
+    assert.match(detail, /lib\/impl\.js \(added\)/, 'the trace discovers the load but cannot authorize the file');
     assert.equal(stored(h).status, 'completed', notes(h));
-    assert.match(notes(h), /scope review: the user approved lib\/orphan\.js as writable/);
+    assert.match(notes(h), /scope review: the user approved lib\/impl\.js, lib\/orphan\.js as writable/);
   });
 });
 

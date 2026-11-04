@@ -18,11 +18,9 @@
  *     the check (at authorization or in this run), or an existing file that
  *     is not code (data, documents, configuration: RAME cannot tell whether
  *     the check reads it): not verifiable, whatever the trace says;
- *   - a new code file outside test locations that the run shows the code
- *     under test loading: code under test, allowed;
- *   - any other new file, or an existing code file: its role is not
- *     established, so the user is asked (scope review), and until they
- *     approve it the run is not counted.
+ *   - any new file, or an existing code file: its role was not authorized,
+ *     so the user is asked (scope review), and until they approve it the run
+ *     is not counted. A trace is never authority to admit a new file.
  *
  * The fingerprints come from `projectSnapshot.ts`: the SHA-256 of every
  * file's bytes, never its size alone. A file that cannot be read is not
@@ -32,7 +30,6 @@
 
 import * as path from 'node:path';
 
-import { isTestSupport } from './acceptanceDependencies.js';
 import type { AgentFs } from './agentHost.js';
 import { insideFolder, MAX_OBSERVED_PATHS, MAX_SEALED_FOLDERS } from './acceptanceTrace.js';
 import { ACCEPTANCE_ENVIRONMENT_FILES } from './projectAdapters/npmProjectAdapter.js';
@@ -153,36 +150,34 @@ export function judgeChanges(
   manifest: AcceptanceManifest,
   frozen: readonly string[],
   usedNow: ReadonlySet<string>,
-  /** Files the run showed the code under test loading (not the check): their role is established. */
-  loadedByCode: ReadonlySet<string> = new Set(),
+  /** Test seam: Windows paths are case-insensitive; other hosts fail closed on a different spelling. */
+  platform: NodeJS.Platform = process.platform,
 ): ChangeJudgement {
-  const lower = (list: readonly string[]) => new Set(list.map((entry) => entry.toLowerCase()));
-  const frozenSet = lower(frozen);
-  const allowed = lower([...manifest.writable, ...manifest.outputs]);
-  const used = lower([...manifest.observed, ...manifest.entries, ...usedNow]);
+  const key = (entry: string) => (platform === 'win32' ? entry.toLowerCase() : entry);
+  const keys = (list: readonly string[]) => new Set(list.map(key));
+  const frozenSet = keys(frozen);
+  const allowed = keys([...manifest.writable, ...manifest.outputs]);
+  const used = keys([...manifest.observed, ...manifest.entries, ...usedNow]);
   const acceptanceDirs = [...new Set(frozen.filter((file) => CODE_FILE.test(file)).map((file) => path.posix.dirname(file)).filter((dir) => dir !== '.'))];
-  const environment = lower(ACCEPTANCE_ENVIRONMENT_FILES as readonly string[]);
+  const environment = keys(ACCEPTANCE_ENVIRONMENT_FILES as readonly string[]);
   const blocking: ChangeJudgement['blocking'] = [];
   const review: ProjectChange[] = [];
   for (const entry of changes) {
-    const key = entry.path.toLowerCase();
-    if (allowed.has(key)) {
+    const pathKey = key(entry.path);
+    if (allowed.has(pathKey)) {
       continue;
     }
     const folder = [...manifest.sealed, ...acceptanceDirs].find((dir) => insideFolder(entry.path, dir));
-    if (frozenSet.has(key) || key === 'package.json') {
+    if (frozenSet.has(pathKey) || pathKey === key('package.json')) {
       blocking.push({ path: entry.path, reason: 'it is frozen with the check' });
-    } else if (environment.has(key)) {
+    } else if (environment.has(pathKey)) {
       blocking.push({ path: entry.path, reason: 'it decides how the check runs' });
     } else if (folder !== undefined) {
       blocking.push({ path: entry.path, reason: `it is in the acceptance folder ${folder}` });
-    } else if (used.has(key)) {
+    } else if (used.has(pathKey)) {
       blocking.push({ path: entry.path, reason: 'the check itself uses it' });
     } else if (entry.change !== 'added' && !CODE_FILE.test(entry.path)) {
       blocking.push({ path: entry.path, reason: 'it existed when you authorized the check and is not code; RAME cannot tell whether the check reads it' });
-    } else if (entry.change === 'added' && CODE_FILE.test(entry.path) && !isTestSupport(entry.path, acceptanceDirs) && loadedByCode.has(entry.path)) {
-      // New code outside test locations that the code under test loads: the code under test growing.
-      continue;
     } else {
       review.push(entry);
     }

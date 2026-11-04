@@ -46,6 +46,17 @@ test('every file outside node_modules and .git gets a SHA-256 of its bytes; fold
   });
 });
 
+test('case-distinct folders are not mistaken for .git or node_modules on POSIX', { skip: process.platform === 'win32' ? 'the file system aliases letter case' : false }, async () => {
+  await withRoot(async (root) => {
+    mkdirSync(path.join(root, '.GIT'));
+    mkdirSync(path.join(root, 'NODE_MODULES'));
+    writeFileSync(path.join(root, '.GIT', 'evidence.txt'), 'a');
+    writeFileSync(path.join(root, 'NODE_MODULES', 'evidence.txt'), 'b');
+    const snapshot = ok(await snapshotProject(root));
+    assert.deepEqual([...snapshot.files.keys()], ['.GIT/evidence.txt', 'NODE_MODULES/evidence.txt']);
+  });
+});
+
 test('two different contents of the same size never share a print, also above 8 MiB (no size-only fingerprint)', async () => {
   await withRoot(async (root) => {
     const size = 9 * 1024 * 1024;

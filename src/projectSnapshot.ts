@@ -34,6 +34,9 @@ export const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024;
 const BLOCK_BYTES = 1024 * 1024;
 const SKIPPED_FOLDERS = new Set(['node_modules', '.git']);
 
+const skippedFolder = (name: string, platform: NodeJS.Platform = process.platform): boolean =>
+  SKIPPED_FOLDERS.has(platform === 'win32' ? name.toLowerCase() : name);
+
 export interface FileState {
   /** `sha256:<hex>:<size>`, `symlink:<sha256 of the target>`, `other`, or `unreadable`. */
   print: string;
@@ -138,7 +141,7 @@ export async function snapshotProject(
           continue;
         }
         if (st.isDirectory()) {
-          if (!SKIPPED_FOLDERS.has(entry.name.toLowerCase())) {
+          if (!skippedFolder(entry.name)) {
             queue.push(rel);
           }
           continue;

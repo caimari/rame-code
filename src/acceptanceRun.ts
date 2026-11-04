@@ -144,8 +144,7 @@ async function runAcceptanceWith(host: ProviderHost, mission: MissionRecord, roo
     return unverifiable(`${list(violations)}. Authorize the check again with its real scope`, run.output);
   }
   const used = usedByCheck(run.trace, frozen, manifest.entries);
-  const loadedByCode = new Set(run.trace.edges.filter((edge) => edge.kind === 'module' && edge.by !== null && !frozen.includes(edge.by) && !manifest.entries.includes(edge.by)).map((edge) => edge.path));
-  let judged = judgeRecords(baseline, [before, mid], manifest, frozen, used, loadedByCode);
+  let judged = judgeRecords(baseline, [before, mid], manifest, frozen, used);
   if (judged.blocking.length > 0) {
     return unverifiable(`files changed outside the scope you authorized: ${list(judged.blocking)}`, run.output);
   }
@@ -168,7 +167,7 @@ async function runAcceptanceWith(host: ProviderHost, mission: MissionRecord, roo
     if (recordAfter.snapshot === null) {
       return recordAfter.stopped ? stopped(id) : unverifiable(recordAfter.problem, run.output);
     }
-    judged = judgeRecords(baseline, [before, mid, recordAfter.snapshot], manifest, frozen, used, loadedByCode);
+    judged = judgeRecords(baseline, [before, mid, recordAfter.snapshot], manifest, frozen, used);
     if (judged.blocking.length > 0) {
       return unverifiable(`files changed outside the scope you authorized: ${list(judged.blocking)}`, run.output);
     }
@@ -223,7 +222,6 @@ function judgeRecords(
   manifest: AcceptanceManifest,
   frozen: readonly string[],
   used: ReadonlySet<string>,
-  loadedByCode: ReadonlySet<string>,
 ): { blocking: string[]; review: ProjectChange[]; duringObserved: boolean } {
   const lists = records.map((record) => diffBaseline(baseline, printsOf(record)));
   const duringObserved = changeTimesTrusted();
@@ -246,7 +244,7 @@ function judgeRecords(
       }
     }
   }
-  const judged = judgeChanges(mergeChanges(...lists), manifest, frozen, used, loadedByCode);
+  const judged = judgeChanges(mergeChanges(...lists), manifest, frozen, used);
   const blocking = [
     ...judged.blocking.map((entry) => `${entry.path} (${entry.reason}${restored.has(entry.path) ? '; changed during the check, then restored' : ''})`),
     ...new Set(folderNotes),

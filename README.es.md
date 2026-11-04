@@ -14,6 +14,8 @@ Ejecuta Meta Muse Glimmer mediante el `llama-server` loopback gestionado por RAM
 
 Utiliza Meta Model API para Chat y Agent cloud directos con modelos cuyas capacidades anunciadas sean adecuadas para el modo elegido. Durante una Mission local autorizada, RAME puede solicitar asesoramiento opcional y limitado por presupuesto a Meta Muse Spark tras una parada de capacidad elegible, mientras el modelo local conserva las herramientas. Esta vía Advisory está implementada y cubierta con una API Meta simulada; por ahora solo Chat directo con Spark tiene una validación registrada contra la API real.
 
+> **Escalado cloud controlado — desactivado por defecto.** Activa **Ajustes › Seguridad › Escalada › Permitir escalado a la nube** para que la asistencia cloud esté disponible; no existe fallback silencioso. Tras una parada elegible de Agent local, RAME ofrece una elección visible y solo envía la petición actual a Meta después de una aprobación explícita. Para una Mission local, autorizas por separado **entre 0 y 5 consultas a Meta** al iniciarla y puedes limitar los bytes por petición, los bytes totales, los tokens de salida de cada respuesta y los tokens remotos totales. Una consulta solo aporta consejo acotado: Glimmer conserva el control de las herramientas y el verificador original de la Mission debe pasar antes de considerar recuperado el bloqueo.
+
 **Inferencia local primero. Asistencia cloud cuando se autoriza. Presupuestos explícitos, decisiones persistentes y verificación respaldada por evidencias.**
 
 > **La IA debería recordar lo que importa, respetar lo que decides y demostrar lo que realmente ha conseguido.**

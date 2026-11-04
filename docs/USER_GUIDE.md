@@ -83,6 +83,15 @@ There are two different cloud paths:
 
 RAME never silently changes provider. Mission never turns Advisory permission into Delegated execution.
 
+### Controlled escalation from local work
+
+Open **Settings › Security › Escalation** and enable **Allow cloud escalation** to make these paths available. The switch is **OFF by default** and never authorizes a request by itself.
+
+- **Local Agent:** after an eligible capability stop, the Chat screen offers a visible choice. RAME sends the current request to Meta only if you explicitly approve the delegated run; Spark may propose tools for that one request, but the existing Agent permission profile still governs them.
+- **Local Mission:** when you authorize the Mission, independently choose an allowance of **0–5 Meta Advisory consultations**. Zero keeps it entirely local. You may also cap bytes per request, total bytes, output tokens per answer and total remote tokens. Within that fixed grant, RAME may ask Spark for bounded advice only after an open, reproducible blocker; Glimmer keeps tool control and the host must rerun the original verifier successfully before normal Mission work resumes.
+
+The global switch therefore makes escalation available; the visible delegated approval or the Mission-specific grant decides whether a particular request may actually be sent. RAME does not raise a Mission budget, retry a failed consultation automatically or silently replace Glimmer with Spark.
+
 ## Choose the right mode
 
 | Mode | Best for | File access and tools | Typical interaction |

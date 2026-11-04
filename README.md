@@ -14,6 +14,8 @@ Run Meta Muse Glimmer through RAME's managed loopback `llama-server`, or connect
 
 Use Meta Model API for direct cloud Chat and Agent with models whose advertised capabilities fit the selected mode. During an authorized local Mission, RAME can request optional, budget-limited advice from Meta Muse Spark after an eligible capability stop while the local model retains tool control. This Advisory route is implemented and covered with a simulated Meta API; only direct Spark Chat has a recorded real-API validation so far.
 
+> **Controlled cloud escalation — default OFF.** Enable **Settings › Security › Escalation › Allow cloud escalation** to make cloud assistance available; there is no silent fallback. After an eligible local Agent stop, RAME offers a visible choice and sends the current request to Meta only after explicit approval. For a local Mission, you separately authorize **0–5 Meta consultations** when starting it and may cap request bytes, total bytes, output tokens per answer and total remote tokens. A consultation supplies bounded advice only: Glimmer keeps tool control, and the Mission's original verifier must pass before the blocker is considered recovered.
+
 **Local inference first. Cloud assistance when authorized. Explicit budgets, persistent decisions and evidence-backed verification.**
 
 > **AI should remember what matters, respect what you decide, and prove what it actually accomplished.**

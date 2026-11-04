@@ -83,6 +83,15 @@ Existen dos vías cloud distintas:
 
 RAME nunca cambia de proveedor silenciosamente. Una Misión nunca convierte un permiso de asesoramiento en ejecución delegada.
 
+### Escalado controlado desde el trabajo local
+
+Abre **Ajustes › Seguridad › Escalada** y activa **Permitir escalado a la nube** para que estas vías estén disponibles. El interruptor está **desactivado por defecto** y no autoriza por sí solo ninguna petición.
+
+- **Agent local:** después de una parada de capacidad elegible, la pantalla de Chat ofrece una elección visible. RAME solo envía la petición actual a Meta si apruebas expresamente la ejecución delegada; Spark puede proponer herramientas para esa única petición, pero siguen gobernadas por el perfil de permisos existente de Agent.
+- **Mission local:** al autorizar la Mission, eliges de forma independiente un máximo de **0 a 5 consultas Meta Advisory**. Con cero permanece completamente local. También puedes limitar los bytes por petición, los bytes totales, los tokens de salida de cada respuesta y los tokens remotos totales. Dentro de ese permiso fijo, RAME solo puede pedir consejo acotado a Spark cuando existe un bloqueo abierto y reproducible; Glimmer conserva el control de las herramientas y el host debe repetir con éxito el verificador original antes de reanudar el trabajo normal de la Mission.
+
+Por tanto, el interruptor global hace disponible el escalado; la aprobación delegada visible o el permiso específico de la Mission decide si puede enviarse una petición concreta. RAME no aumenta el presupuesto de una Mission, no reintenta automáticamente una consulta fallida ni sustituye silenciosamente Glimmer por Spark.
+
 ## Elige el modo adecuado
 
 | Modo | Adecuado para | Acceso a archivos y herramientas | Interacción habitual |

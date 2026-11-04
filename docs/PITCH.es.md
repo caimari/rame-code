@@ -46,7 +46,7 @@ RAME distingue entre lo que afirmó un modelo y lo que el host permitió, ejecut
 
 ## Historia recomendada para el vídeo de tres minutos
 
-1. **Identidad — 15 segundos.** Muestra el candidato `0.2.0` instalado y presenta la historia en una frase.
+1. **Identidad — 15 segundos.** Muestra la release preview `0.2.0` instalada y presenta la historia en una frase.
 2. **Modelo local — 25 segundos.** Muestra una respuesta de Glimmer y abre Model evidence para acreditar una respuesta local observada, no solo un modelo seleccionado.
 3. **Memoria gobernada — 35 segundos.** Aprueba una decisión duradera, muéstrala en otro hilo, cámbiala y enseña cómo la evidencia dependiente queda **STALE**.
 4. **Mission verificada — 75 segundos.** Inicia una Mission pequeña en un proyecto desechable, muestra su permiso acotado y aceptación congelada y termina con la comprobación del host y su evidencia.
@@ -55,7 +55,7 @@ RAME distingue entre lo que afirmó un modelo y lo que el host permitió, ejecut
 
 ## Afirmaciones que deben permanecer acotadas
 
-- Dos inferencias directas de Chat puro con `muse-spark-1.3` tienen validación humana registrada contra la API real. No validan resultados de herramientas de Agent cloud, Delegated ni Mission Advisory.
+- Tres inferencias directas de Chat puro con `muse-spark-1.3` tienen validación humana registrada contra la API real. No validan resultados de herramientas de Agent cloud, Delegated ni Mission Advisory.
 - Mission Advisory está implementado y probado con un grabador Meta simulado; todavía no tiene una ejecución registrada con el proveedor real.
 - RAME prioriza la inferencia local y aplica presupuestos remotos; no se afirma un ahorro concreto sin mediciones comparativas.
 - La compatibilidad con modelos Meta depende de sus capacidades anunciadas. RAME no afirma que todos los modelos admitan todos los modos.

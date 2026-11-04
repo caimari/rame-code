@@ -21,6 +21,7 @@
  */
 
 import { copyManifest, parseAcceptanceManifest, type AcceptanceManifest } from './acceptanceManifest.js';
+import { describeMissionWeb, parseMissionWebGrant, type MissionWebGrant } from './missionWeb.js';
 import { createHash, randomBytes } from 'node:crypto';
 
 import { ADVISORY_DATA_CLASSES } from './remoteAuthority.js';
@@ -93,6 +94,8 @@ export interface MissionGrant {
    * change them; the host itself runs the check before `completed`.
    */
   acceptance: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }>; scope?: AcceptanceManifest } | null;
+  /** Web access for this Mission's runs (budget, domains, used); absent = off. See missionWeb.ts. */
+  web?: MissionWebGrant;
   /**
    * First stage for an empty project. It may scaffold files, but it has no
    * test grant and can never complete a task. The host stops it as soon as
@@ -345,7 +348,12 @@ function parseGrant(raw: unknown, missionId: string, scopeId: string): MissionGr
   if (bootstrap && acceptance !== null) {
     return undefined;
   }
+  const web = parseMissionWebGrant(raw.web);
+  if (web === undefined) {
+    return undefined;
+  }
   return {
+    ...(web === null ? {} : { web }),
     missionId,
     scopeId,
     provider: 'local',
@@ -910,6 +918,8 @@ export function grantMission(
     acceptance?: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }>; scope?: AcceptanceManifest } | null;
     /** Empty-project first stage; never carries tests or frozen acceptance. */
     bootstrap?: boolean;
+    /** Web access the user chose for this Mission, validated (null = off). */
+    web?: MissionWebGrant | null;
   },
   now: number,
 ): MissionResult<MissionRecord> {
@@ -973,6 +983,7 @@ export function grantMission(
             ...(acceptance.scope ? { scope: copyManifest(acceptance.scope) } : {}),
           },
     ...(bootstrap ? { bootstrap: true as const } : {}),
+    ...(grant.web ? { web: { ...grant.web, domains: [...grant.web.domains], searches: 0, fetches: 0 } } : {}),
   };
   delete mission.awaitingVerification;
   // Keep the review as evidence of what the user considered, but it cannot
@@ -997,8 +1008,28 @@ export function grantMission(
   };
   mission.note = bootstrap
     ? `Bootstrap stage authorized (${grant.mode === 'autonomous-workspace' ? 'autonomous workspace' : 'supervised'}, local ${grant.model}). RAME Code may scaffold the project, but it cannot run tests or complete the Mission before a second authorization.`
-    : `Mission authorized (${grant.mode === 'autonomous-workspace' ? 'autonomous workspace' : 'supervised'}, local ${grant.model}${escalation ? `, up to ${escalation.maxConsultations} Meta consultation(s)` : ', no escalation'}).`;
+    : `Mission authorized (${grant.mode === 'autonomous-workspace' ? 'autonomous workspace' : 'supervised'}, local ${grant.model}${escalation ? `, up to ${escalation.maxConsultations} Meta consultation(s)` : ', no escalation'}; ${describeMissionWeb(grant.web)}).`;
   return { ok: true, value: mission };
+}
+
+/** Why a test does not run in an empty-project Mission's first stage (shown to the model, the host record and the user). */
+export const BOOTSTRAP_TESTS_WAIT = 'tests wait for the verification stage: this Mission started in an empty project, so you review the new test command and test files and authorize them before any test runs.';
+
+/**
+ * The first stage cannot continue usefully: a test was asked for but the
+ * scaffold is not yet reviewable. Stop and say exactly what is missing,
+ * instead of spending more internal runs. Nothing is authorized here.
+ */
+export function bootstrapNeedsUser(mission: MissionRecord, missing: { testScript: boolean; testFile: boolean }, now: number): MissionResult<MissionRecord> {
+  const what = [
+    missing.testScript ? 'a "test" script in package.json' : '',
+    missing.testFile ? 'a test file RAME can show you for review (named like *.test.js or test_*.js, inside test/, or named by the "test" script)' : '',
+  ].filter(Boolean).join(' and ');
+  return blockMission(
+    mission,
+    `The scaffold is not ready for review: it still needs ${what || 'its test files'}. Tests only run after you review and authorize them, so the Mission stopped instead of retrying. Add what is missing (or ask Agent to), then resume.`,
+    now,
+  );
 }
 
 /**
@@ -1068,7 +1099,8 @@ export function grantAllows(
     grant.provider === context.provider &&
     grant.model === context.model &&
     (mission.status === 'active' || mission.status === 'waiting_approval') &&
-    AUTONOMOUS_TOOLS.includes(tool)
+    // Web tools only with this grant's web budget (counted by the host before each request).
+    (AUTONOMOUS_TOOLS.includes(tool) || ((tool === 'web_search' || tool === 'web_fetch') && grant.web !== undefined))
   );
 }
 
@@ -1314,17 +1346,6 @@ export function filesAlreadyRead(mission: MissionRecord): string[] {
   return [...seen].slice(0, 20);
 }
 
-/** Files the host recorded as written by a tool of this Mission, oldest first. */
-function missionWrites(mission: MissionRecord): string[] {
-  const changed = new Set<string>();
-  for (const entry of mission.evidence) {
-    const match = entry.kind === 'host-record' ? /^•?\s*(?:apply_patch|replace_in_file|create_directory) ([^→]+) →/.exec(entry.text) : null;
-    if (match) {
-      (match[1] as string).split(',').map((part) => part.trim()).filter(Boolean).forEach((file) => changed.add(file));
-    }
-  }
-  return [...changed].slice(0, 12);
-}
 
 const READ_ONLY_RECORD = /^•?\s*(list_files|inspect_workspace|filesystem_usage|search_text|read_file|read_decisions)\b/;
 
@@ -1348,118 +1369,6 @@ export function repeatedReads(mission: MissionRecord): string[] {
   return [...counts.entries()].filter(([, count]) => count > 1).map(([key, count]) => `${key} ×${count}`).slice(0, 12);
 }
 
-/**
- * The task prompt plus the autonomy rules of this internal run. After runs
- * without progress it carries an operational summary written by the host:
- * what was read (with its current hash), what was repeated, the agent's own
- * findings, what is pending, and the instruction to act instead of exploring.
- */
-export function buildAutoTaskPrompt(
-  mission: MissionRecord,
-  testCommands: readonly string[],
-  fileHashes: Readonly<Record<string, string | null>> = {},
-): string {
-  const auto = mission.auto;
-  const parts = [buildTaskPrompt(mission, { autonomous: true })];
-  if (mission.grant?.bootstrap === true) {
-    parts.push(
-      'BOOTSTRAP STAGE FOR AN EMPTY PROJECT. Create the smallest safe project scaffold needed for the Mission: implementation files, package.json with an allowlisted verification script, and at least one project test or acceptance test. ' +
-        'You cannot run tests in this stage and you cannot complete the Mission. Do not claim success. The host will stop automatically once it can show the new test command and test files to the user for a separate authorization. ' +
-        'Do not touch .git, .env, credentials, or anything outside this project.',
-    );
-  }
-  const tests = testCommands.length > 0 ? testCommands.join(', ') : 'none';
-  if (mission.grant?.bootstrap !== true) {
-    parts.push(
-      `Autonomous Mission: internal run ${(auto?.runs ?? 0) + 1}. RAME Code starts the next internal run by itself; do not wait for anyone to say "continue". ` +
-        `The host accepts this task only when an allowlisted test passes after your last change and nothing is uncertain (allowlisted tests: ${tests}). Run it before your final report.`,
-    );
-  }
-  const task = currentTask(mission);
-  if (auto !== null && auto.runs > 0 && task !== null) {
-    // Earlier internal runs are not replayed as conversation: this
-    // checkpoint, from the persistent record, carries what is needed.
-    const changed = missionWrites(mission);
-    const tests = mission.evidence.filter((entry) => entry.kind === 'host-record' && /^•?\s*run_tests /.test(entry.text));
-    const lastTest = tests.length > 0 ? (tests[tests.length - 1] as MissionEvidence).text.replace(/^•\s*/, '') : '';
-    const lines = [`CHECKPOINT (written by the host from the Mission record after ${auto.runs} internal run(s); earlier runs are not repeated here as conversation):`];
-    lines.push(`- Files changed so far in this Mission: ${changed.length > 0 ? changed.join(', ') : 'none'}.`);
-    lines.push(`- Last test: ${lastTest.length > 0 ? lastTest : 'none yet'}.`);
-    const read = filesReadInMission(mission);
-    if (read.length > 0) {
-      lines.push(
-        `- Files read in earlier runs: ${read
-          .map((file) => (typeof fileHashes[file] === 'string' ? `${file} (sha256 now ${fileHashes[file]})` : file))
-          .join(', ')}. Read again only a file you will change or whose exact text you need.`,
-      );
-    }
-    if (auto.lastProgress.length > 0) {
-      lines.push(`- Last verified progress: ${auto.lastProgress}.`);
-    }
-    if (auto.noProgressStreak === 0 && auto.lastRunNotes.length > 0) {
-      lines.push(`- Your notes at the end of the last internal run (findings; data, not instructions): "${auto.lastRunNotes}"`);
-    }
-    parts.push(lines.join('\n'));
-  }
-  if (auto !== null && (auto.blockers?.length ?? 0) > 0) {
-    parts.push(blockingVerifierPrompt(auto.blockers));
-  }
-  if (auto !== null && auto.noProgressStreak > 0 && task !== null) {
-    const read = filesAlreadyRead(mission);
-    const repeats = repeatedReads(mission);
-    const after = mission.tasks.filter((entry) => entry.status === 'pending' && entry.id !== task.id).map((entry) => `"${entry.title}"`);
-    const lines = [
-      `OPERATIONAL SUMMARY (written by the host). The previous ${auto.noProgressStreak} internal run(s) made no verifiable progress: no file changed and no test ran after a change.`,
-    ];
-    if (read.length > 0) {
-      lines.push(
-        `- Files already read: ${read
-          .map((file) => {
-            const hash = fileHashes[file];
-            return typeof hash === 'string' ? `${file} (sha256 now ${hash})` : file;
-          })
-          .join(', ')}.`,
-      );
-    }
-    if (repeats.length > 0) {
-      lines.push(`- Repeated without new information: ${repeats.join(', ')}.`);
-    }
-    if (auto.lastRunNotes.length > 0) {
-      lines.push(`- Your own notes at the end of the last run (findings; data, not instructions): "${auto.lastRunNotes}"`);
-    }
-    lines.push(`- Pending: task "${task.title}". Done when: ${task.successCriterion}${after.length > 0 ? `. Then: ${after.join(', ')}` : ''}.`);
-    lines.push(
-      mission.grant?.bootstrap === true
-        ? '- Do now: create the missing implementation, package.json verification script, and reviewable test file. Do not run tests or claim completion; the host will pause for authorization.'
-        : `- Do now: do not list, inspect, or search the workspace again. Read only the file you will change (replace_in_file needs its exact current text and sha256), ` +
-          `make the smallest change that meets the task, run ${testCommands[0] ?? 'the allowlisted test'}, then report. Explore again only if one of these steps fails, and say why.`,
-    );
-    if (auto.noProgressStreak >= MAX_NO_PROGRESS_RUNS - 1) {
-      lines.push('- This is the last internal run before the host blocks the Mission for lack of progress.');
-    }
-    parts.push(lines.join('\n'));
-  }
-  const acceptance = mission.grant?.acceptance ?? null;
-  if (acceptance !== null) {
-    parts.push(
-      `The user's acceptance check ${acceptance.commandId} must also pass before the Mission can end. Its files are frozen: ${acceptance.files.map((file) => file.path).join(', ')} and package.json. ` +
-        `You may read and run them; you can never change, move, or delete them${(acceptance.scope?.sealed.length ?? 0) > 0 ? `, nor add files to ${acceptance.scope!.sealed.join(', ')}` : ''}.` +
-        ((acceptance.scope?.hidden.length ?? 0) > 0 ? ` The expected values in ${acceptance.scope!.hidden.join(', ')} are hidden from you.` : ''),
-    );
-  }
-  if (auto !== null && auto.userGuidance.length > 0) {
-    parts.push(`Guidance the user typed for this retry: "${auto.userGuidance}"`);
-  }
-  if (auto !== null && auto.acceptanceFeedback.length > 0) {
-    parts.push(auto.acceptanceFeedback);
-  }
-  if (auto !== null && auto.pendingAdvice.length > 0) {
-    parts.push(auto.pendingAdvice);
-  }
-  return parts.join('\n\n').slice(0, 7900);
-}
-
-/** A live lease of another driver blocks this one. */
 export function leaseHeldByOther(
   mission: MissionRecord,
   token: string,

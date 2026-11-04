@@ -21,6 +21,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import { AgentAuditLog } from './agentAudit.js';
+import { chooseRunFolder, NO_PROJECT_TARGET, resolveRunRoot, type RunRoot } from './agentFolder.js';
 import type { PendingAgentAction } from './agentApproval.js';
 import {
   buildTestSpawnSpec,
@@ -90,12 +91,9 @@ import {
 import { MissionRunner } from './missionRunner.js';
 import { DEFAULT_CHAT_MODE, isSupportedMode } from './modes.js';
 import {
-  buildWorkspacePickItems,
   normalizeOpenFolders,
   NO_WORKSPACE_MESSAGE,
   validateChosenWorkspace,
-  workspaceDisplayLabel,
-  WORKSPACE_PICK_CANCELLED,
   type OpenWorkspaceFolder,
 } from './workspaceSelect.js';
 import {
@@ -166,6 +164,7 @@ import * as missionCoord from './missionCoordinator.js';
 import * as remote from './remoteController.js';
 import * as acceptanceReview from './missionAcceptanceReviewHost.js';
 import * as localSource from './localSource.js';
+import { idleConnectionOf } from './connectionState.js';
 import { endpointUsable } from './localServers.js';
 import { externalToolsRefusal } from './localSourceState.js';
 import { CLOUD_DISCLOSURE_KEY, loadDisclosure, type CloudDisclosureOffer, type CloudRun, type DisclosureState } from './cloudDisclosure.js';
@@ -471,60 +470,8 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     return { owned: this.local.owned, endpoint: this.local.endpoint };
   }
 
-  async resolveAgentRunRoot(preferredRoot?: string | null): Promise<
-    { ok: true; root: string; label: string } | { ok: false; cancelled: boolean; error: string }
-  > {
-    const open = this.listOpenWorkspaceFolders();
-    if (open.length === 0) {
-      return { ok: false, cancelled: false, error: NO_WORKSPACE_MESSAGE };
-    }
-    if (this.pinnedRunRoot !== null) {
-      const pinned = open.find((folder) => folder.path === validateChosenWorkspace(this.pinnedRunRoot, open));
-      return pinned
-        ? { ok: true, root: pinned.path, label: workspaceDisplayLabel(pinned) ?? pinned.path }
-        : { ok: false, cancelled: false, error: 'The project folder of this run is no longer open.' };
-    }
-    if (preferredRoot) {
-      const validated = validateChosenWorkspace(preferredRoot, open);
-      if (validated !== null) {
-        const preferred = open.find((folder) => folder.path === validated) as OpenWorkspaceFolder;
-        return {
-          ok: true,
-          root: validated,
-          label: workspaceDisplayLabel(preferred) ?? validated,
-        };
-      }
-    }
-    if (open.length === 1) {
-      const only = open[0] as OpenWorkspaceFolder;
-      return {
-        ok: true,
-        root: only.path,
-        label: workspaceDisplayLabel(only) ?? only.path,
-      };
-    }
-    const items = buildWorkspacePickItems(open).map((item) => ({
-      label: item.label,
-      description: item.description,
-      detail: item.detail,
-    }));
-    const picked = await vscode.window.showQuickPick(items, {
-      placeHolder: 'Select workspace folder for this Agent run',
-      ignoreFocusOut: true,
-    });
-    if (!picked) {
-      return { ok: false, cancelled: true, error: WORKSPACE_PICK_CANCELLED };
-    }
-    const validated = validateChosenWorkspace(picked.description, open);
-    if (validated === null) {
-      return { ok: false, cancelled: true, error: WORKSPACE_PICK_CANCELLED };
-    }
-    const folder = open.find((entry) => entry.path === validated) as OpenWorkspaceFolder;
-    return {
-      ok: true,
-      root: validated,
-      label: workspaceDisplayLabel(folder) ?? validated,
-    };
+  async resolveAgentRunRoot(preferredRoot?: string | null): Promise<RunRoot> {
+    return resolveRunRoot(this, preferredRoot);
   }
 
   async offerOpenFolderAction(): Promise<void> {
@@ -583,10 +530,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   confirmAcceptanceScopeChange = confirmAcceptanceScopeChangeDialog;
 
   recordUsage(provider: 'cloud' | 'local', usage: ProviderUsage): void {
-    // Only a real answer confirms a connection.
-    if (provider === 'cloud') {
-      this.cloudConfirmed = true;
-    } else {
+    if (provider === 'local') {
       this.localConfirmed = this.localEndpoint();
     }
     this.usageLast = usage;
@@ -705,11 +649,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     this.usage = validateUsageTotals(this.extensionState.get(RAME_USAGE_KEY));
     const stored = await this.secrets.get(API_KEY_SECRET);
     this.hasKey = stored !== undefined;
-    this.connection = this.running
-      ? 'working'
-      : this.hasKey || this.local.endpoint !== null
-        ? 'ready'
-        : 'missing-key';
+    this.connection = idleConnectionOf(this);
     this.ensureActiveThreadStillExists();
     const endpoint = this.settings.provider === 'local' && !this.running ? this.localEndpoint() : null;
     if (endpoint !== null) {
@@ -722,9 +662,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   async refreshHasKey(): Promise<void> {
     const stored = await this.secrets.get(API_KEY_SECRET);
     this.hasKey = stored !== undefined;
-    if (!this.running) {
-      this.connection = this.hasKey ? 'ready' : 'missing-key';
-    }
+    this.connection = idleConnectionOf(this);
     await this.postState();
   }
 
@@ -749,7 +687,8 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       await this.postState();
       return;
     }
-    if (this.activeThreadId !== thread.id) {
+    // Leaving a card's thread voids it; opening the thread a card waits in never does (that looped and left the run stuck).
+    if (this.agentPending !== null && this.agentPending.threadId !== thread.id) {
       agentCtrl.invalidatePendingApproval(this, 'the active thread changed');
     }
     this.activeThreadId = thread.id;
@@ -891,11 +830,12 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       this.connection = 'working';
       this.status = `Selecting the project for this ${rawMode === 'mission' ? 'Mission' : 'Agent'} thread…`;
       await this.postState();
-      const target = await this.resolveAgentRunRoot(thread?.workspaceRoot ?? null);
+      // Agent without a folder runs without a project (web only); see agentFolder.ts.
+      const target = await chooseRunFolder(this, thread, rawMode, provider);
       if (!this.running) {
         return;
       }
-      if (!target.ok) {
+      if (target.kind === 'failed') {
         this.running = false;
         this.connection = target.cancelled ? 'cancelled' : 'error';
         this.status = target.error;
@@ -905,8 +845,8 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         }
         return;
       }
-      agentTarget = { root: target.root, label: target.label };
-      if (rawMode === 'mission') {
+      agentTarget = target.kind === 'bound' ? { root: target.root, label: target.label } : { ...NO_PROJECT_TARGET };
+      if (rawMode === 'mission' && target.kind === 'bound') {
         // Planning itself reads no project files, but the saved Mission must
         // belong to the same user-selected project as its thread.
         this.memoryRoot = target.root;
@@ -922,12 +862,13 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     this.persistSettings();
 
     // Chat joins the open project when that is unambiguous: no tools, only its decisions.
-    const project = agentTarget?.root ?? (rawMode === 'chat' && !thread?.workspaceRoot ? this.chatProjectRoot() : undefined);
+    const project = agentTarget?.root || (rawMode === 'chat' && !thread?.workspaceRoot ? this.chatProjectRoot() : undefined);
     if (!thread) {
       thread = this.store.create(text, rawMode, project);
       this.activeThreadId = thread.id;
     } else {
-      thread = appendUserTurn(thread, text, undefined, { host: this.hostPromptText === text, mode: rawMode });
+      // An internal Mission run is a Mission message (it runs through Agent's engine with the Mission's own permissions).
+      thread = appendUserTurn(thread, text, undefined, { host: this.hostPromptText === text, mode: this.hostPromptText === text && this.activeMission !== null ? 'mission' : rawMode });
       if (project !== undefined && thread.workspaceRoot !== project) {
         thread = bindThreadWorkspace(thread, project);
       }
@@ -1271,6 +1212,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     };
     this.persistSettings();
     this.status = 'Settings saved.';
+    this.connection = idleConnectionOf(this);
     const endpoint = provider === 'local' && !this.running ? this.localEndpoint() : null;
     if (endpoint !== null) {
       await genCtrl.probeLocalProps(this, endpoint);
@@ -1566,6 +1508,8 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       case 'localServerUse':
       case 'webAccessSet':
       case 'shellAccessSet':
+      case 'missionWebSet':
+      case 'localIdentity':
         await localSource.handleLocalSourceMessage(this, message);
         return;
       case 'escalateApprove':
@@ -1703,11 +1647,10 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         allowCloudEscalation: this.settings.allowCloudEscalation,
         externalLocalEndpoint: this.settings.externalLocalEndpoint,
         agentProfile: this.settings.agentProfile,
-        agentWorkspace: this.agentRunWorkspace !== null
-          ? this.agentRunWorkspace.label
-          : this.heldWorkspaceRoot().ok
-            ? (this.heldWorkspaceRoot() as { ok: true; root: string }).root
-            : null,
+        // The run's folder, else the open thread's own folder, else the only open folder; null = no project.
+        agentWorkspace: this.agentRunWorkspace?.label
+          ?? (active?.workspaceRoot && this.isBoundRootStillOpen(active.workspaceRoot) ? active.workspaceRoot
+          : this.heldWorkspaceRoot().ok ? (this.heldWorkspaceRoot() as { ok: true; root: string }).root : null),
         agentPending: pending
           ? {
               actionId: pending.actionId,

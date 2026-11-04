@@ -116,9 +116,9 @@ export function isLocalOrPrivateUrl(value: string): boolean {
   return classifyEndpoint(value).ok;
 }
 
-type FetchLike = (input: string, init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal; redirect?: 'manual' }) => Promise<{ ok: boolean; status: number; text(): Promise<string>; body?: unknown }>;
+export type FetchLike = (input: string, init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal; redirect?: 'manual' }) => Promise<{ ok: boolean; status: number; text(): Promise<string>; body?: unknown }>;
 
-async function getJson(fetchImpl: FetchLike, url: string, timeoutMs: number, body?: unknown): Promise<unknown> {
+export async function getJson(fetchImpl: FetchLike, url: string, timeoutMs: number, body?: unknown): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {

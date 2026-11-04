@@ -247,6 +247,7 @@
       'El modelo local no está en marcha. Inicia Muse Glimmer, elige Meta Model API o configura un servidor loopback externo compatible con OpenAI.',
     'human': 'aprobada por ti',
     'profile-auto': 'automática por perfil',
+    'mission-grant': 'permitida por la Misión',
     'rejected': 'rechazada',
     'policy': 'bloqueada por la política',
 

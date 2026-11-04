@@ -218,7 +218,7 @@ export async function rejectAgentAction(host: ProviderHost, actionId: string, di
 export function recordAgentAudit(
   host: ProviderHost,
   pending: PendingAgentAction,
-  decision: 'human' | 'profile-auto' | 'rejected' | 'policy',
+  decision: 'human' | 'profile-auto' | 'mission-grant' | 'rejected' | 'policy',
   result: string,
 ): void {
   const entry = host.audit.append({
@@ -932,9 +932,17 @@ export async function prepareModelArtifact(
   });
 }
 
-/** Approval card content: the exact change, bound to the store's digest and versions. */
+/**
+ * Approval card content: the exact change, bound to the store's digest and
+ * versions, then what approving does: proposing or confirming a value
+ * saves nothing; only approving this exact card does.
+ */
+export const MEMORY_CARD_DECISION = "Approving saves this decision in the project's persistent memory. Proposing it saved nothing.";
+export const MEMORY_CARD_ARTIFACT = "Approving records this verification in the project's persistent memory. Proposing it recorded nothing.";
+
 export function describeMemoryProposal(proposal: MemoryProposal): { targets: string[]; body: string; preconditions: Record<string, string> } {
-  const body = `${describeProposal(proposal)}\nProposal ${proposal.proposalId}, digest ${proposal.digest}.`;
+  const lead = proposal.kind === 'decision' ? MEMORY_CARD_DECISION : MEMORY_CARD_ARTIFACT;
+  const body = `${describeProposal(proposal)}\n${lead}\nProposal ${proposal.proposalId}, digest ${proposal.digest}.`;
   if (proposal.kind === 'decision') {
     return {
       targets: [`memory:${proposal.key}`],
@@ -980,11 +988,14 @@ export async function commitModelProposal(
   }
   if ('version' in result.value) {
     const entry = result.value;
-    return `committed ${entry.key} v${entry.version} = ${entry.op === 'delete' ? '(removed)' : JSON.stringify(entry.value)} (approved by you)`;
+    return `committed ${entry.key} v${entry.version} = ${entry.op === 'delete' ? '(removed)' : JSON.stringify(entry.value)} (approved by you). ${SAVED_NOTE}`;
   }
   const binding = result.value;
-  return `recorded ${binding.path} as verified against ${binding.decisionKey} v${binding.decisionVersion} (approved by you)`;
+  return `recorded ${binding.path} as verified against ${binding.decisionKey} v${binding.decisionVersion} (approved by you). ${SAVED_NOTE}`;
 }
+
+/** Told to the model with the result, so it does not ask for an approval the user already gave. */
+const SAVED_NOTE = 'Saved: already approved and saved, do not ask the user to approve it again.';
 
 // ---------------------------------------------------------------------------
 // 6. Utility

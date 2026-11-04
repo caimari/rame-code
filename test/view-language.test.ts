@@ -12,7 +12,8 @@ import vm from 'node:vm';
 import { describeProposal, type MemoryProposal } from '../src/decisionStore.js';
 import { validateSettings } from '../src/settingsStore.js';
 import { buildViewHtml } from '../src/viewHtml.js';
-import { assistantText, fakeWindow, HostHarness, type PostedState } from './helpers/hostHarness.js';
+import { assistantText,
+  toolCallReply, fakeWindow, HostHarness, type PostedState } from './helpers/hostHarness.js';
 
 interface I18n {
   has(language: string): boolean;
@@ -247,8 +248,14 @@ test('an Agent run in a chosen folder makes Settings show that folder', async ()
   try {
     const second = path.join(h.root, 'ws1');
     fakeWindow.quickPickAnswer = (items: unknown[]) => (items as Array<{ description?: string }>).find((item) => item.description === second);
-    h.model.enqueue({ kind: 'json', body: assistantText('Nothing to change.') });
+    // With several folders a new Agent thread starts without a project and asks for one (agentFolder.ts); the user picks ws1.
+    h.model.enqueue(
+      { kind: 'json', body: toolCallReply([{ id: 'f', name: 'request_project_folder', args: { reason: 'Need the project.' } }]) },
+      { kind: 'json', body: assistantText('Folder chosen.') },
+      { kind: 'json', body: assistantText('Nothing to change.') },
+    );
     await h.provider.sendMessage('Look around.', 'agent', 'local');
+    await h.provider.sendMessage('Go ahead.', 'agent', 'local');
     h.send({ type: 'navigate', screen: 'settings' });
     assert.equal(memoryOf(await h.waitFor((state) => memoryOf(state)?.selectedPath === second)).project, 'ws1');
   } finally {
@@ -263,7 +270,10 @@ test('opening a stored thread makes Settings inspect that thread folder automati
   try {
     const second = path.join(h.root, 'ws1');
     fakeWindow.quickPickAnswer = (items: unknown[]) => (items as Array<{ description?: string }>).find((item) => item.description === second);
-    h.model.enqueue({ kind: 'json', body: assistantText('Nothing to change.') });
+    h.model.enqueue(
+      { kind: 'json', body: toolCallReply([{ id: 'f', name: 'request_project_folder', args: { reason: 'Need the project.' } }]) },
+      { kind: 'json', body: assistantText('Folder chosen.') },
+    );
     await h.provider.sendMessage('Bind this thread.', 'agent', 'local');
     const threadId = h.provider.activeThreadId as string;
 

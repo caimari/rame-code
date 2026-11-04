@@ -16,6 +16,8 @@ import {
 import { currentFileHash } from './agentController.js';
 import type { AcceptanceManifest } from './acceptanceManifest.js';
 import { runAcceptance } from './acceptanceRun.js';
+import { buildAutoTaskPrompt } from './missionPrompt.js';
+import { describeMissionWeb, takeMissionWebRequest, validateMissionWebRequest } from './missionWeb.js';
 import { externalToolsRefusal } from './localSourceState.js';
 import { protectAcceptanceScope } from './acceptanceScopeHost.js';
 import { CASES_FILE, parseCasesSpec } from './hostCases.js';
@@ -24,7 +26,8 @@ import {
   assessRun,
   awaitBootstrapVerification,
   blockMission,
-  buildAutoTaskPrompt,
+  bootstrapNeedsUser,
+  BOOTSTRAP_TESTS_WAIT,
   buildTaskPrompt,
   canRunTask,
   cancelMission,
@@ -60,7 +63,7 @@ import {
   buildMissionView,
   buildPlanningMissionLiveView,
 } from './missionViews.js';
-import { ACCEPTANCE_ENVIRONMENT_FILES, listAcceptanceCandidates } from './projectAdapters/npmProjectAdapter.js';
+import { ACCEPTANCE_ENVIRONMENT_FILES, listAcceptanceCandidates, testScriptFiles } from './projectAdapters/npmProjectAdapter.js';
 import { createCascadeAdvice } from './meta-provider.js';
 import { providerToRuntime } from './settingsStore.js';
 import { appendHostNoteTurn } from './threadStore.js';
@@ -250,6 +253,15 @@ export async function startMission(
     await host.postState();
     return;
   }
+  // Web access the user chose in this authorization card, if any (off otherwise).
+  const webChoice = takeMissionWebRequest(host, missionId);
+  const webChecked = webChoice === null ? { ok: true as const, grant: null } : validateMissionWebRequest(webChoice);
+  if (!webChecked.ok) {
+    host.status = `${webChecked.error} Nothing was authorized.`;
+    await host.postState();
+    return;
+  }
+  const webGrant = webChecked.grant;
   // The test commands are bound to the exact package.json they come from now.
   const testContext = await host.testCommandContext(scope.root);
   const bootstrap = testContext.packageJsonRaw.length === 0 || testContext.allowlist.length === 0;
@@ -332,9 +344,14 @@ export async function startMission(
             : null,
         acceptance: frozen,
         bootstrap,
+        web: webGrant,
       },
       Date.now(),
     );
+    if (result.ok) {
+      // What web access this grant carries, as host evidence (the status note is overwritten later).
+      note(result.value, `authorized with ${describeMissionWeb(result.value.grant?.web)}`);
+    }
     if (result.ok && frozen !== null) {
       const task = currentTask(result.value);
       for (const text of task ? scopeNotes : []) {
@@ -626,7 +643,9 @@ export async function runMissionAutonomous(
       // The manifest the tests ran against: a blocking verifier recovers only under the same one.
       const runContext = await host.testCommandContext(scope.root);
       const conditions = runContext.packageJsonRaw.length > 0 ? hashContent(runContext.packageJsonRaw) : '';
-      const bootstrapCandidates = current?.grant?.bootstrap === true ? await listAcceptanceCandidates(scope.fs) : [];
+      const bootstrapCandidates = current?.grant?.bootstrap === true
+        ? [...new Set([...(await listAcceptanceCandidates(scope.fs)), ...(await testScriptFiles(scope.fs, runContext.packageJsonRaw))])].sort()
+        : [];
       if (!live()) {
         break;
       }
@@ -681,6 +700,12 @@ export async function runMissionAutonomous(
       }
       if (bootstrapReady) {
         ended = 'Scaffold created. Review and authorize the verification stage; nothing else ran.';
+        break;
+      }
+      // A test was asked for in the first stage but the scaffold cannot be reviewed yet: stop and say what is missing.
+      if (current?.grant?.bootstrap === true && outcome.hostRecord.some((line) => line.includes(BOOTSTRAP_TESTS_WAIT.slice(0, 40)))) {
+        await updateActiveMission(host, (draft) => bootstrapNeedsUser(draft, { testScript: runContext.allowlist.length === 0, testFile: bootstrapCandidates.length === 0 }, Date.now()));
+        ended = 'The Mission stopped: its scaffold is not ready for test review yet. See why below.';
         break;
       }
       // A blocking verifier that can no longer run can never recover: show it and stop.

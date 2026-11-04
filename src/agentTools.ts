@@ -14,7 +14,7 @@ import {
   MAX_TOOL_CALLS_PER_TURN,
   MAX_TOOL_OUTPUT_BYTES,
 } from './agentPolicy.js';
-import { MEMORY_TOOL_NAMES, WEB_TOOL_NAMES, type AgentToolName } from './agentProfiles.js';
+import { HOST_TOOL_NAMES, MEMORY_TOOL_NAMES, WEB_TOOL_NAMES, type AgentToolName } from './agentProfiles.js';
 import type { ProviderUsage } from './usage.js';
 
 export const AGENT_TOOL_LIST: readonly AgentToolName[] = [
@@ -481,6 +481,13 @@ export function validateToolArgs(tool: string, raw: unknown): Record<string, unk
       }
       return args.timeoutSec === undefined ? { command: args.command } : { command: args.command, timeoutSec: args.timeoutSec };
     }
+    case 'request_project_folder': {
+      const args = requireExactArgs(tool, raw, ['reason']);
+      if (typeof args.reason !== 'string' || args.reason.trim().length === 0 || args.reason.length > 300) {
+        failArgs(tool, 'reason must be 1 to 300 characters');
+      }
+      return { reason: args.reason.trim() };
+    }
     case 'web_fetch': {
       const args = requireExactArgs(tool, raw, ['url']);
       if (typeof args.url !== 'string' || !/^https?:\/\//i.test(args.url) || args.url.length > 2048) {
@@ -532,7 +539,7 @@ export function validateOneToolCall(raw: unknown): ValidatedToolCall {
   }
   if (
     typeof fn.name !== 'string' ||
-    (!(AGENT_TOOL_LIST as readonly string[]).includes(fn.name) && !(MEMORY_TOOL_NAMES as readonly string[]).includes(fn.name) && !(WEB_TOOL_NAMES as readonly string[]).includes(fn.name))
+    (!(AGENT_TOOL_LIST as readonly string[]).includes(fn.name) && !(MEMORY_TOOL_NAMES as readonly string[]).includes(fn.name) && !(WEB_TOOL_NAMES as readonly string[]).includes(fn.name) && !(HOST_TOOL_NAMES as readonly string[]).includes(fn.name))
   ) {
     fail('Unknown tool.');
   }

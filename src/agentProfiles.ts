@@ -66,7 +66,10 @@ export type WebToolName = (typeof WEB_TOOL_NAMES)[number];
 export function isWebToolName(value: unknown): value is WebToolName {
   return (WEB_TOOL_NAMES as readonly unknown[]).includes(value);
 }
-export type AgentToolName = AgentWorkspaceToolName | MemoryToolName | WebToolName;
+/** Host-side tools offered only by Agent without a project folder (agentNoProject.ts). */
+export const HOST_TOOL_NAMES = ['request_project_folder'] as const;
+export type HostToolName = (typeof HOST_TOOL_NAMES)[number];
+export type AgentToolName = AgentWorkspaceToolName | MemoryToolName | WebToolName | HostToolName;
 
 export function isMemoryToolName(value: unknown): value is MemoryToolName {
   return (MEMORY_TOOL_NAMES as readonly unknown[]).includes(value);

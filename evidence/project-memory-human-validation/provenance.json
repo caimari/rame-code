@@ -1,0 +1,45 @@
+{
+  "schema": "rame-evidence-provenance-v1",
+  "recordedDate": "2026-11-04",
+  "status": "recorded-interface-transcript-and-unmodified-public-screenshot",
+  "privateSources": [
+    {
+      "name": "thread-01-original.txt",
+      "sha256": "815d5e84fa252b3ea920e9af104db538671c80932c27b8b228c76fd7ad4a79e8"
+    },
+    {
+      "name": "thread-01-cleaner-source.txt",
+      "sha256": "3aac4ecfacdb20d2143bc9f541b868c01572371ab541f8af77357bed42b19deb"
+    },
+    {
+      "name": "screenshot-01.png",
+      "sha256": "88f83b56d446a9b3a5187254db817af4b28d60ed65e01f66d97aadafa431881a",
+      "public": false,
+      "reason": "contains an absolute workspace path"
+    },
+    {
+      "name": "screenshot-02.png",
+      "sha256": "2f5efd4f822188bc8419c7407c3f59bd071ac81ff1b2eff1db4be6806ad7e7e5",
+      "publicAs": "decision-approved.png"
+    },
+    {
+      "name": "screenshot-03.png",
+      "sha256": "139fb3ad50f58fc058a103ecb463ad11a1f3dac57e2ba214f9e25f1561bc48f0",
+      "public": false,
+      "reason": "contains absolute workspace paths and a server address"
+    }
+  ],
+  "candidate": {
+    "version": "0.2.0",
+    "installedRevisionAtIntake": "src.059070d384d6",
+    "revisionPresentInRecordedRun": false,
+    "candidateVsixSha256": "246a8d2d32d1112ef9860f5b0925c1ecb7f7c5927dab0df620a94c8e7941645e"
+  },
+  "sanitization": [
+    "absolute workspace paths replaced or omitted",
+    "local endpoint omitted from the public transcript",
+    "public decision keys, timestamps, usage counts and digest prefixes retained",
+    "no API key, credential or unrelated project content included"
+  ],
+  "observedDefect": "The initial request explicitly contained boolean value true, but the host rejected it as insufficiently explicit."
+}

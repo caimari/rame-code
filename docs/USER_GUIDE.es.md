@@ -2,7 +2,7 @@
 
 [Web oficial](https://ramecode.com/) · [English version](USER_GUIDE.md) · [README en español](../README.es.md) · [Cómo verificar RAME](VERIFICATION.es.md)
 
-> Guía práctica para la candidata todavía no publicada de RAME Code 0.2.0. La versión pública sigue siendo la 0.1.0, por lo que algunas pantallas descritas aquí solo están disponibles en compilaciones candidatas.
+> Guía práctica para la release preview experimental RAME Code v0.2.0. Utiliza proyectos desechables; esta versión no es una frontera de seguridad para producción.
 
 RAME Code es un asistente de programación local-first integrado en VS Code. Puede conversar sobre un proyecto, inspeccionar y modificar archivos, ejecutar pruebas compatibles, conservar decisiones aprobadas del proyecto y desarrollar objetivos más largos mediante una Misión.
 
@@ -92,6 +92,8 @@ Usa **Chat puro** cuando no quieras que el modelo lea archivos ni ejecute herram
 
 **Agente** es el modo recomendado por defecto. Puede conversar con normalidad y utilizar herramientas cuando hagan falta. Las lecturas, escrituras y pruebas siguen el perfil de permisos seleccionado. Las acciones importantes aparecen en **Actividad** y, cuando se usan herramientas, la respuesta final incluye un registro escrito por el host.
 
+**En qué carpeta trabaja el Agente.** Con una carpeta abierta, el Agente usa esa. Un hilo conserva la carpeta a la que quedó vinculado; si esa carpeta se cerró, RAME te pregunta y nunca mueve el hilo a otra carpeta por su cuenta. Un hilo nuevo de Agente con ninguna carpeta abierta, o con varias, empieza **sin proyecto** (la insignia de la cabecera dice *Sin carpeta de proyecto — solo web*): el modelo local puede responder, usar `web_search` y `web_fetch` si el acceso web está activado (cada llamada en su tarjeta, como en el Agente) y pedir una carpeta con `request_project_folder`. Eso abre el selector de carpetas de VS Code: eliges una carpeta o cancelas, y las herramientas del proyecto (ficheros, pruebas, terminal, memoria del proyecto) se aplican desde tu siguiente mensaje. Sin proyecto no hay herramientas de ficheros, pruebas, terminal, memoria ni historial, ni decisiones del proyecto en el contexto; las aprobaciones hechas sin proyecto no quedan ligadas a ninguna carpeta y nunca pasan a otra. Las Misiones, y el Agente con Meta, siempre necesitan una carpeta elegida por ti.
+
 Ejemplos:
 
 ```text
@@ -103,7 +105,21 @@ Corrige la prueba que falla en calculator, modifica solo src/calculator.js,
 ejecuta npm:test e informa del resultado real.
 ```
 
-**Acceso web (opcional, desactivado por defecto).** En **Settings › Escalada › Acceso web** puedes permitir que el Agente busque en la web (`web_search`, con DuckDuckGo o tu propio SearXNG) y lea páginas públicas (`web_fetch`), solo lectura. Funciona solo con un modelo local y nunca en las ejecuciones de una Misión. Cada llamada se muestra y, salvo en Workspace full, espera tu aprobación. Se rechazan las direcciones locales y privadas (también después del DNS y en cada redirección), no se envía una consulta o URL que contenga una clave o una ruta de fichero, y las páginas tienen un límite de 2 MiB y 15 s. El texto de las páginas llega al modelo marcado como dato no confiable, nunca como instrucciones, y no puede escribir en la memoria del proyecto.
+### Acceso web en Agent, Chat y Mission
+
+**Acceso web (opcional, desactivado por defecto).** En **Settings › Escalada › Acceso web** puedes permitir que el Agente busque en la web (`web_search`, con DuckDuckGo o tu propio SearXNG) y lea páginas públicas (`web_fetch`), solo lectura. El mismo interruptor da la web al **Chat**. Funciona solo con un modelo local; una Misión tiene su propio permiso web (más abajo). Cada llamada se muestra y espera tu aprobación en Chat y, salvo en Workspace full, en el Agente. Se rechazan las direcciones locales y privadas (también después del DNS y en cada redirección), no se envía una consulta o URL que contenga una clave o una ruta de fichero, y las páginas tienen un límite de 2 MiB y 15 s. El texto de las páginas llega al modelo marcado como dato no confiable, nunca como instrucciones, y no puede escribir en la memoria del proyecto.
+
+**Estado de validación.** El acceso web en el Agente se ha validado en una ejecución real (LM Studio en la red privada, DuckDuckGo y nodejs.org). El acceso web en el **Chat** y en las **Misiones** es experimental en esta candidata: está implementado y cubierto por pruebas solo contra servidores simulados, y todavía no se ha validado contra la web real.
+
+| | Chat | Agente | Misión |
+|---|---|---|---|
+| Herramientas web | solo `web_search` y `web_fetch` (ninguna de ficheros, pruebas, terminal ni memoria) | `web_search` y `web_fetch` además de las del workspace | `web_search` y `web_fetch` dentro del presupuesto web de la Misión |
+| Se activa en | **Settings › Acceso web** | **Settings › Acceso web** | el bloque **Acceso web para esta Misión** al autorizarla |
+| Pregunta antes de cada llamada | siempre | sí, salvo en Workspace full | supervisada: sí; autónoma: no, dentro del presupuesto |
+| Qué puede leer | cualquier página pública que apruebes | cualquier página pública que apruebes | solo URLs que devolvieron sus propias búsquedas, o solo los dominios que indiques |
+| Consultas | sin claves ni rutas de ficheros | sin claves ni rutas de ficheros | solo palabras normales: tampoco código, saltos de línea ni citas largas, como máximo 200 caracteres |
+
+En una Misión, cada búsqueda y lectura se cuenta en el punto de control de la Misión *antes* de enviarse, así que una recarga nunca le da más de lo que concediste; cuando se agota el presupuesto, la Misión sigue sin web o informa del bloqueo. El acceso web nunca añade permisos de escritura, terminal, memoria ni ficheros, el texto web se marca como dato no confiable y nunca se convierte en instrucción, no puede cambiar una comprobación de aceptación congelada, una autorización ni un presupuesto, y las búsquedas y páginas se excluyen de todo lo que se envía a Meta (también de las consultas Advisory). En Chat, el hilo guarda la respuesta y un registro del host de cada búsqueda y página con su fuente, no el texto de las páginas.
 
 ```text
 Busca en la documentación actual cómo crear un instalador de Windows con
@@ -126,7 +142,7 @@ El runtime seleccionado, no los indicadores verdes de conexión, decide qué mod
 
 `web_search`, `web_fetch` y `run_command` son herramientas exclusivas de modelos locales y no se ofrecen a Spark. Para probar web o terminal, cancela la divulgación cloud, selecciona un runtime local de Glimmer/Ollama/LM Studio, confirma que la inferencia local responde, activa explícitamente la herramienta y repite la petición de Agent. Una revisión futura de la interfaz debería explicar esta incompatibilidad entre modelo y herramienta antes de abrir una tarjeta de divulgación cloud que no corresponde a la intención del usuario.
 
-El 4 de noviembre de 2026, el build candidato `e383ea4.src.48ae3cd77018` completó dos inferencias reales de Chat puro con `muse-spark-1.3`; RAME registró el consentimiento, proveedor, modelo, respuestas observadas y uso de tokens. Esto valida únicamente la conexión directa de Chat con Meta. La matriz completa de divulgación y fallos sigue cubierta por el grabador Meta simulado, y los resultados de herramientas de Agent cloud, Delegated, planificación de Mission y Advisory todavía requieren validación independiente con el proveedor real.
+El 4 de noviembre de 2026, la validación humana registró tres inferencias reales de Chat puro con `muse-spark-1.3`; RAME registró el consentimiento, proveedor, modelo, respuestas observadas y uso de tokens. Esto valida únicamente la conexión directa de Chat con Meta. La matriz completa de divulgación y fallos sigue cubierta por el grabador Meta simulado, y los resultados de herramientas de Agent cloud, Delegated, planificación de Mission y Advisory todavía requieren validación independiente con el proveedor real.
 
 ### Misión
 
@@ -146,7 +162,7 @@ Ejecuta npm:test. El trabajo solo está terminado cuando npm:check también pase
 después del último cambio.
 ```
 
-RAME pide al modelo seleccionado un plan acotado. Ese plan todavía no concede permiso para modificar nada.
+RAME pide al modelo seleccionado un plan acotado. Antes de programar más trabajo, el planificador utiliza los puntos de control de la Misión y las evidencias observadas por el host para evitar repetir tareas cuyos criterios ya estén satisfechos. Esto reduce ejecuciones internas redundantes; no permite que el modelo declare terminado el trabajo ni sustituye las comprobaciones obligatorias del host. Ese plan todavía no concede permiso para modificar nada.
 
 ### 2. Elige Misión estándar o Misión verificada
 
@@ -160,15 +176,28 @@ Una Misión verificada aporta una meta más fuerte que comprueba el propio host,
 - **Supervisada: cada escritura y prueba pregunta:** RAME presenta tarjetas de autorización a medida que avanza.
 - **Workspace autónomo: ediciones y pruebas permitidas sin preguntar:** las ediciones y pruebas incluidas pueden ejecutarse bajo una única autorización de Misión.
 
+Agente y Misión utilizan decisiones de permisos independientes:
+
+| | Agente | Misión |
+| --- | --- | --- |
+| De dónde procede el permiso | Selector **Ask / Safe auto / Workspace full** | Tarjeta de autorización de esa Misión concreta |
+| Trabajo autónomo | **Workspace full**, dentro de la política de Agente | **Workspace autónomo**, dentro del permiso de la Misión |
+| Escrituras y pruebas | Las gobierna el perfil de Agente seleccionado | Las gobiernan el alcance y las pruebas autorizadas para la Misión |
+| Fuera del alcance autorizado | Se rechaza o se muestra para aprobación | Se rechaza, se pausa o exige una nueva autorización de Misión |
+
+Cambiar el selector de Agente no amplía, reduce ni sustituye un permiso de Misión ya concedido. Una Misión puede utilizar internamente el motor de ejecución de Agente, pero eso no la convierte en una petición de Agente: su autoridad sigue procediendo de la tarjeta de Misión mostrada antes de comenzar. La interfaz identifica esas ejecuciones internas como trabajo de Misión y mantiene visible el permiso de la Misión, en lugar de presentar el selector de Agente como su autoridad. Durante una Misión, considera como fuente de verdad el permiso que muestran su estado y sus evidencias.
+
 El workspace autónomo exige marcar **Confío en este proyecto**. La confianza se limita a esa Misión, carpeta, proveedor local y modelo. No es un sandbox del sistema operativo. Los scripts de prueba pueden acceder a archivos, red u otros procesos con tus permisos de usuario.
 
 RAME sigue protegiendo determinadas rutas y vuelve a preguntar por operaciones fuera del permiso, como borrar, mover archivos o modificar la memoria del proyecto. Si cambia `package.json`, también deja de ser válido el entorno de pruebas autorizado anteriormente.
 
-En un proyecto ya preparado, esta autorización permite dejar que la Misión continúe dentro de ese alcance sin aprobar cada escritura y prueba por separado. No es una autorización universal para el ordenador, otras carpetas, otros modelos o cualquier comando. En una carpeta vacía siguen existiendo dos autorizaciones: una para crear y revisar el andamiaje y otra para permitir la implementación y sus comprobaciones.
+En un proyecto ya preparado, esta autorización permite dejar que la Misión continúe dentro de ese alcance sin aprobar cada escritura y prueba por separado. No es una autorización universal para el ordenador, otras carpetas, otros modelos o cualquier comando. En una carpeta vacía siguen existiendo dos autorizaciones: la primera puede crear el andamiaje, los scripts del paquete y las pruebas propuestas; la segunda permite revisar esas nuevas órdenes de verificación y autorizar la implementación y las comprobaciones. Después de esa segunda autorización, el trabajo permitido dentro del alcance continúa sin pedir aprobación para cada escritura o prueba ordinaria.
 
 ### 4. Configura, si quieres, un presupuesto de asesoramiento Meta
 
 Una Misión local puede autorizar desde el principio entre **0 y 5 consultas** de asesoramiento a Meta. También puedes limitar los bytes por petición, los bytes totales enviados, los tokens máximos de cada respuesta y el presupuesto remoto total. Los límites quedan fijados en el permiso de la Misión; RAME no los aumenta por iniciativa propia.
+
+El asesoramiento Meta es opcional e independiente de los permisos de archivos y pruebas. Cada nueva autorización de Misión empieza sin heredar permisos web ni Meta; debes elegir deliberadamente el presupuesto en esa tarjeta. Con cero consultas, la Misión permanece por completo en el modelo local configurado. Con un valor superior a cero, RAME solo puede consultar al modelo Meta seleccionado dentro de los límites de destinatario, datos y presupuesto que muestra la autorización.
 
 Por ejemplo:
 
@@ -179,7 +208,7 @@ Por ejemplo:
 | Control de herramientas | Glimmer bajo el permiso de la Misión |
 | Datos y coste | Límites de bytes y tokens elegidos al autorizar |
 
-El asesoramiento solo se solicita para un bloqueo reproducible identificado por una comprobación que falla. Spark recibe un paquete acotado y devuelve consejo sin herramientas. Glimmer conserva el control de las operaciones, y la respuesta de Spark no resuelve el bloqueo por sí sola: el verificador original debe pasar bajo las mismas condiciones registradas. Una consulta cancelada antes de enviarse no consume el contador; una enviada sí cuenta aunque falle. Al agotarse cualquier límite, RAME mantiene el bloqueo y no reintenta automáticamente.
+El asesoramiento solo se solicita para un bloqueo reproducible identificado por una comprobación que falla. La revisión identifica el material acotado que puede salir del equipo; Meta recibe únicamente esa consulta autorizada, no el control del workspace. Spark no recibe herramientas, no puede escribir archivos ni declarar recuperado el bloqueo. Glimmer conserva el control de las operaciones, aplica cualquier corrección autorizada y el host debe repetir el verificador original bajo las mismas condiciones registradas antes de continuar normalmente. Una consulta cancelada antes de enviarse no consume el contador; una enviada sí cuenta aunque falle. Al agotarse cualquier límite, RAME mantiene el bloqueo, no reintenta automáticamente ni convierte silenciosamente la Misión en una ejecución cloud.
 
 ### 5. Comprende la aceptación
 
@@ -234,13 +263,17 @@ Si varias ejecuciones no producen progreso verificable, la Misión queda **bloqu
 
 ## Empezar en una carpeta vacía
 
-La candidata 0.2.0 incorpora una Misión de arranque con dos autorizaciones:
+RAME Code v0.2.0 incorpora una Misión de arranque con dos autorizaciones:
 
 1. La primera autorización puede crear el proyecto inicial, `package.json`, scripts y pruebas.
 2. No permite ejecutar esas nuevas pruebas ni completar la Misión.
 3. RAME revoca ese permiso y se detiene en **Scaffold ready**.
 4. Tú inspeccionas los scripts y pruebas generados.
 5. Una segunda autorización elige Misión estándar o verificada y, en una verificada, congela los archivos de aceptación seleccionados.
+
+Mientras una Misión espera una autorización, el aviso bajo el campo de mensaje dice qué fase es (fase 1 de 2: crear los ficheros; fase 2 de 2: ejecutar las pruebas) y **Revisar** te lleva a ella. Cada tarjeta de autorización nueva se abre con el acceso web y las consultas a Meta desactivados. Una Misión sigue su propia autorización, nunca el selector de permisos del Agente: Supervisada pregunta antes de cada escritura y prueba; Workspace autónomo ejecuta las escrituras y pruebas de su permiso y pregunta por todo lo demás.
+
+**Limitación conocida (versión posterior).** Tras la segunda autorización, Muse Glimmer sigue ejecutando las pruebas aprobadas mediante algunos pasos del modelo; el host todavía no las ejecuta directamente en cuanto apruebas. Un plan antiguo con un paso aparte de «ejecutar las pruebas e informar» cuesta un run interno más.
 6. Solo entonces puede continuar la implementación y verificación.
 
 Así se evita que un modelo cree una prueba fácil y la utilice silenciosamente como autoridad final.
@@ -403,7 +436,7 @@ Cuando el trabajo necesite varias tareas relacionadas, continuación autónoma, 
 
 ### ¿Funciona Misión en una carpeta vacía?
 
-Sí, en la candidata 0.2.0 mediante el flujo con dos autorizaciones. Revisa los scripts y pruebas en **Scaffold ready** antes de continuar.
+Sí, en v0.2.0 mediante el flujo con dos autorizaciones. Revisa los scripts y pruebas en **Scaffold ready** antes de continuar.
 
 ### ¿Tengo que crear yo las pruebas?
 

@@ -1,3 +1,4 @@
+import { MISSION_SYSTEM_PROMPT } from './missionPlanRules.js';
 import { MetaHttpError } from './metaFailures.js';
 import { withBoundedRequest } from './boundedRequest.js';
 import {
@@ -166,7 +167,7 @@ export async function createMissionPlan(
       {
         role: 'system',
         content:
-          'Create a bounded software mission plan. Do not claim to have inspected files or run tools. Return only the requested structured output.',
+          MISSION_SYSTEM_PROMPT,
       },
       {
         role: 'user',
@@ -291,7 +292,7 @@ export async function createMissionPlanWithUsage(
       {
         role: 'system',
         content:
-          'Create a bounded software mission plan. Do not claim to have inspected files or run tools. Return only the requested structured output.',
+          MISSION_SYSTEM_PROMPT,
       },
       {
         role: 'user',

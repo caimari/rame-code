@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "evidenceType": "RECORDED real human run with independent artifact rerun",
+  "date": "2026-11-04",
+  "recordedBuild": "src.be90f7717746",
+  "buildAttribution": "active extension-host inspection plus preserved build manifest; not printed by the thread",
+  "mission": {
+    "id": "mis_95ac6ed1485527cb1eb8fc62",
+    "scopeLabel": "rame-mission-final-demo",
+    "goal": "Create a minimal dependency-free JavaScript clamp utility with three Node test-runner cases.",
+    "status": "completed",
+    "permission": "autonomous-workspace",
+    "createdAt": "2026-11-04T20:58:47.643Z",
+    "updatedAt": "2026-11-04T21:04:34.186Z",
+    "taskRunsUsed": 3,
+    "tasks": [
+      {
+        "title": "Create clamp.js, package.json, and clamp.test.js",
+        "status": "completed"
+      },
+      {
+        "title": "Run tests after authorization and verify all pass",
+        "status": "completed"
+      }
+    ],
+    "bootstrapAuthorizations": 2,
+    "acceptance": null,
+    "verificationLevel": "conventional",
+    "hostCompletion": "Mission completed and verified by the host",
+    "recordedTest": {
+      "commandId": "npm:test",
+      "exitCode": 0,
+      "successfulRuns": 2,
+      "preVerificationAttempt": "blocked by host policy"
+    },
+    "metaConsultationsSent": 0,
+    "metaValidResponses": 0,
+    "webSearchesUsed": 0,
+    "webFetchesUsed": 0
+  },
+  "model": {
+    "provider": "external LM Studio server on a private network",
+    "requestedModelId": "muse-glimmer",
+    "responseObserved": true,
+    "weightsCryptographicallyVerified": false
+  },
+  "independentCheck": {
+    "node": "v20.19.0",
+    "npmTestsPassed": 3,
+    "npmTestsFailed": 0,
+    "directAssertionsPassed": 3,
+    "originalFilesModified": false
+  }
+}

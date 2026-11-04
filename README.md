@@ -18,7 +18,7 @@ Use Meta Model API for direct cloud Chat and Agent with models whose advertised 
 
 > **AI should remember what matters, respect what you decide, and prove what it actually accomplished.**
 
-> **Version status — 0.2.0 preview candidate.** Commit [`e383ea4`](https://github.com/caimari/rame-code/commit/e383ea4281aaf25a85d66b5955d71707508a9af0) was built and installed as an isolated VSIX during human validation. It is the current candidate described here, but no public 0.2.0 VSIX or release has been published yet. The latest downloadable public release remains [`v0.1.0`](https://github.com/caimari/rame-code/releases/tag/v0.1.0). Use disposable projects; this preview is not a production security boundary.
+> **Version status — v0.2.0 experimental preview release.** Download the audited VSIX from the [v0.2.0 release](https://github.com/caimari/rame-code/releases/tag/v0.2.0). This release is suitable for controlled evaluation on disposable projects; it is not a production security boundary.
 
 | Local-first | Meta Model API | Verified Missions | Governed memory |
 | --- | --- | --- | --- |
@@ -41,11 +41,11 @@ For example, if the approved decision “target Node.js 20” becomes “target 
 
 Start with [the claims-to-evidence table](docs/JUDGES.md). It links one supervised local-Glimmer Mission, the reproducible simulated sabotage battery, exact reproduction commands and the limits of every claim. A green check proves only what that check actually covers.
 
-## The 0.2.0 preview
+## The v0.2.0 preview release
 
 For the hackathon, development has deliberately prioritised working functionality, explicit authority and reproducible evidence over visual polish. The current interface and logo are provisional. Later releases will refine the information architecture, accessibility, onboarding and visual identity after the core behavior has completed independent and human validation.
 
-Compared with the first public baseline, the 0.2.0 candidate adds governed project memory, restartable and host-verified Missions, stronger acceptance integrity, model evidence, Ollama and LM Studio connectivity, optional read-only web access, and an experimental local-Agent terminal. Read the complete, auditable list in the [Changelog](CHANGELOG.md#020---unreleased).
+Compared with the first public baseline, v0.2.0 adds governed project memory, restartable and host-verified Missions, stronger acceptance integrity, model evidence, Ollama and LM Studio connectivity, optional read-only web access, and an experimental local-Agent terminal. Read the complete, auditable list in the [Changelog](CHANGELOG.md#020---2026-11-04).
 
 ## The 0.1.0 baseline
 
@@ -56,15 +56,15 @@ The first release records what was built in the opening days of the project. It 
 - bounded workspace tools, permission profiles and exact one-use approvals;
 - persistent threads, cancellation and host-authored action records.
 
-It is a historical research baseline, not the best description of the current candidate. Its complete capabilities, security work and limitations remain in the [0.1.0 Changelog](CHANGELOG.md#010---2026-11-02).
+It is a historical research baseline, not the best description of the current release. Its complete capabilities, security work and limitations remain in the [0.1.0 Changelog](CHANGELOG.md#010---2026-11-02).
 
 ## Important work still pending
 
 - **Vision in RAME:** Muse Glimmer and its `mmproj` can support images, but the extension does not yet attach images or send multimodal requests to either local Glimmer or Meta cloud models.
-- **Meta validation:** the Meta Model API integration exists, but the candidate's newest privacy, Mission and handoff paths still require a final explicitly authorized real-API validation with fictitious data.
+- **Meta validation:** three direct Chat-only inferences with Muse Spark 1.3 were validated against the real API. Cloud Agent tool results, Delegated execution, Mission planning and Mission Advisory remain validated only with a simulated Meta recorder.
 - **Causal model return:** automatic escalation and a verifier-governed return to the local model remain research work, not a shipped claim.
-- **Terminal review:** `run_command` has no operating-system sandbox and must complete its separate security audit and human validation before public distribution.
-- **Distribution:** no 0.2 release has been published yet. The candidate is being validated as an installable VSIX in an isolated VS Code profile; Marketplace publication comes later.
+- **Terminal limitation:** `run_command` is experimental, disabled by default, local-Agent only and excluded from Mission; every command requires approval even in Workspace full. It has no operating-system sandbox, and a deliberately detached process may survive Stop.
+- **Distribution:** v0.2.0 is distributed as a GitHub Release VSIX. Visual Studio Marketplace publication comes later.
 - **Platforms and interface:** real Windows validation remains pending. The current interface and logo are functional prototypes that will be redesigned and polished in later releases.
 - **Security boundary:** local execution, approvals and evidence are not claimed to be tamper-proof; approved commands and project scripts run with the VS Code user's operating-system permissions.
 
@@ -72,9 +72,9 @@ Repository content, tool output and model output are treated as untrusted inputs
 
 ## Installation
 
-### Build the current 0.2.0 candidate from GitHub
+### Build v0.2.0 from GitHub
 
-The current source builds an installable `rame-code-0.2.0.vsix`; the candidate is not a published release yet.
+The tagged source builds an installable `rame-code-0.2.0.vsix`:
 
 ```bash
 git clone https://github.com/caimari/rame-code.git
@@ -86,16 +86,16 @@ code --install-extension rame-code-0.2.0.vsix
 
 Use Node.js 20 or 24. Review the source commit and generated VSIX before installing; packaging runs the complete automated suite.
 
-### Install the latest published VSIX
+### Install the published VSIX
 
-Download `rame-code-0.1.0.vsix` from the [v0.1.0 release](https://github.com/caimari/rame-code/releases/tag/v0.1.0).
+Download `rame-code-0.2.0.vsix` from the [v0.2.0 release](https://github.com/caimari/rame-code/releases/tag/v0.2.0).
 
 ### From the VS Code interface
 
 1. Open **Extensions** (`Ctrl+Shift+X`).
 2. Open the `...` menu in the Extensions panel.
 3. Choose **Install from VSIX...**.
-4. Select `rame-code-0.1.0.vsix`.
+4. Select `rame-code-0.2.0.vsix`.
 5. Run **Developer: Reload Window** if VS Code asks you to reload.
 6. Select the **R** icon in the Activity Bar.
 
@@ -104,7 +104,7 @@ When using Remote SSH, install the extension in the remote workspace when VS Cod
 ### From a terminal
 
 ```bash
-code --install-extension rame-code-0.1.0.vsix
+code --install-extension rame-code-0.2.0.vsix
 ```
 
 If the `code` command is unavailable on a remote host, use **Install from VSIX...** in the connected VS Code window instead.
@@ -133,13 +133,13 @@ RAME Code can start `llama-server` directly; Ollama is not required.
 
 The managed server binds to `127.0.0.1`. RAME Code stops only the process it started.
 
-**Model servers (0.2.0 candidate).** RAME can also connect to a server you run yourself: Ollama, LM Studio, another `llama-server` or any OpenAI-compatible server. **Find models** tells them apart, lists their chat models with tool, vision and context information, and a model the server says cannot call tools is limited to Chat. A server on another computer of your private network (a numeric private IP) is used only after you confirm that local work will be sent there; public addresses and host names are refused, and redirects are never followed. "Vision" in the list is the model's capability; RAME does not send images yet. Tested for real with Muse Glimmer 30B on LM Studio (RTX 3090 Ti, over the private network) and with Ollama 0.32.5.
+**Model servers (v0.2.0).** RAME can also connect to a server you run yourself: Ollama, LM Studio, another `llama-server` or any OpenAI-compatible server. **Find models** tells them apart, lists their chat models with tool, vision and context information, and a model the server says cannot call tools is limited to Chat. A server on another computer of your private network (a numeric private IP) is used only after you confirm that local work will be sent there; public addresses and host names are refused, and redirects are never followed. "Vision" in the list is the model's capability; RAME does not send images yet. Tested for real with Muse Glimmer 30B on LM Studio (RTX 3090 Ti, over the private network) and with Ollama 0.32.5.
 
-**Web access for Agent (0.2.0 candidate, default OFF).** `web_search` and `web_fetch`, read-only, with a local model only and never in Mission runs; each call is shown for approval except in Workspace full, private addresses are refused after DNS and on every redirect, and queries with keys or paths are not sent.
+**Optional web access (v0.2.0, default OFF).** With a local model, Agent can use `web_search` and `web_fetch`; this path has one recorded REAL validation with LM Studio on a private LAN, DuckDuckGo and `web_fetch`. Chat web is implemented but experimental and tested only with simulated servers. Mission web is also implemented but experimental: it is authorized separately with search/read budgets and optional domains, and has only simulated-server coverage. Do not present Chat or Mission web as validated against the real internet. Private destinations are refused after DNS and on every redirect, and queries containing recognized keys or file paths are not sent. See the [user guide](docs/USER_GUIDE.md#agent-chat-and-mission-web-access).
 
-**Terminal commands for Agent (0.2.0 candidate, default OFF).** `run_command` runs one shell command line in the project folder with your permissions (no sandbox), local model only and never in Mission runs; each command is shown in full and approved in every profile, Workspace full included, with a time limit and bounded output. **Stop** signals the command and its normal process group, but a deliberately detached process may survive. See the [user guide](docs/USER_GUIDE.md).
+**Terminal commands for Agent (v0.2.0, default OFF).** `run_command` runs one shell command line in the project folder with your permissions (no sandbox), local model only and never in Mission runs; each command is shown in full and approved in every profile, Workspace full included, with a time limit and bounded output. **Stop** signals the command and its normal process group, but a deliberately detached process may survive. See the [user guide](docs/USER_GUIDE.md).
 
-In the public `v0.1.0` extension, local operation means that RAME Code sends text requests to a `llama-server` running on the user's own machine. The model files are read from user-configured disk paths and are not included in the extension or this repository. The alternative cloud runtime sends requests to Meta Model API using the user's own API key.
+Local operation sends requests only to the user-selected local server. Model files are read from user-configured locations and are not included in the extension or this repository. The alternative cloud runtime sends requests to Meta Model API using the user's own API key.
 
 ### Tested local Meta Muse stack
 
@@ -164,7 +164,7 @@ llama-server \
   --jinja
 ```
 
-**Vision is not active in the RAME Code `v0.1.0` user experience.** The local runtime can be configured to load the separately supplied `mmproj`, and that runtime has been validated independently with images and OCR, but RAME Code does not yet provide image attachment or send multimodal messages. Until that integration is implemented and verified, RAME Code uses this local stack for text-only Agent, Mission and Chat requests.
+**Vision is not active in the RAME Code v0.2.0 user experience.** The local runtime can be configured to load the separately supplied `mmproj`, and that runtime has been validated independently with images and OCR, but RAME Code does not yet provide image attachment or send multimodal messages. Until that integration is implemented and verified, RAME Code uses this local stack for text-only Agent, Mission and Chat requests.
 
 ## Permission profiles
 
@@ -176,13 +176,13 @@ llama-server \
 
 Agent work is restricted to one explicitly selected VS Code workspace folder. The optional `run_command` terminal is a separate, high-risk capability: it is off by default, local-Agent only, excluded from Mission, and always requires approval of the complete command. Test execution through `run_tests` remains limited to commands derived from an allowlist and uses `shell: false`, although the selected package script may still execute arbitrary project code.
 
-## Bootstrap and verified Missions (0.2.0 candidate, unreleased)
+## Bootstrap and verified Missions (v0.2.0)
 
 A Mission may start in an empty folder. Its first, explicit bootstrap authorization can create the project scaffold, package scripts and tests, but it cannot run those tests or complete the Mission. RAME then revokes that grant and stops at **Scaffold ready**. The user reviews the new allowlisted command and test files in a second authorization; only that second authorization can freeze acceptance and let the Mission continue.
 
 At that checkpoint, an **optional independent acceptance review** may be prepared for a documented Standard Meta model. Preparing it sends nothing: RAME shows the exact bounded text first, including the original requirement and up to three test fragments selected from the offered acceptance candidates. Sending requires a separate one-use approval bound to the Mission, folder, model, processing class, credential revision, content and byte/token limits. Spark receives no tools and cannot edit files, grant permissions, select or freeze the acceptance criteria, or complete the Mission. Its structured result is untrusted advice that the user may consider or dismiss before making the final local choice. Cancellation, budget refusal, malformed output or an API failure leaves the local two-stage flow available and never retries automatically. This path is verified with a simulated Meta API only in this candidate.
 
-## Acceptance integrity (0.2.0 candidate, unreleased)
+## Acceptance integrity (v0.2.0)
 
 A Mission is verified at one of three levels, and the level is written in its host notes and final report:
 
@@ -200,11 +200,11 @@ These guarantees are exercised by a **SIMULATED** sabotage battery (`npm run dem
 
 RAME's trace runs beside the code under test and can be forged, so it is only a discovery aid; what the host checks itself (hashes and the project fingerprint) decides. Process separation is not a sandbox. When VS Code closes or reloads during a Mission, the old window starts nothing and writes nothing more. See [How to verify it](docs/VERIFICATION.md). Results are labelled **REAL**, **SIMULATED** or **RECORDED**, and a simulation is never presented as a real Glimmer or Meta run.
 
-## Model evidence (0.2.0 candidate, unreleased)
+## Model evidence (v0.2.0)
 
 > RAME doesn't just show what an AI agent did. It shows which model proposed it, what the host allowed, and what independent checks actually passed.
 
-In the 0.2.0 candidate, **Run details → Model evidence — recorded by RAME Code** shows, for the open thread, facts written by the host and never by the model. The section starts folded. Inferences that proposed a change or a test, produced the final reply, involved Meta, or are linked to a check come first. Exploratory reads sit one level further down and are bounded.
+In v0.2.0, **Run details → Model evidence — recorded by RAME Code** shows, for the open thread, facts written by the host and never by the model. The section starts folded. Inferences that proposed a change or a test, produced the final reply, involved Meta, or are linked to a check come first. Exploratory reads sit one level further down and are bounded.
 
 Three levels are kept apart:
 
@@ -257,13 +257,13 @@ Changing runtime or cloud model affects the next request, not the stored thread.
 
 Before any Meta request leaves, RAME checks the request it actually built: it stops one that would carry a local message not approved under its conditions, or whose API key changed while it was running; it replaces the absolute paths of the open project folders and of the home folder (on Windows regardless of case, with `\`, `/` or UNC forms, without touching similar paths); and it redacts values that look like secrets (keys, tokens, private keys, JWTs, URL credentials, `*_PASSWORD=` or `*-auth=` style assignments) from the tool results it sends. Redaction and path replacement are pattern-based: they reduce, but cannot exclude, sensitive content in material you allow Meta to receive, and absolute paths other than those folders are sent as they appear. The check recognises local text of 24 characters or more; shorter local messages are kept out by how each request is built — only the approved part of the thread, no history search for Meta, only approved decisions, never RAME's own notes — which automated tests verify on every path (Chat, Agent and its tools, Delegated, Mission plan), not by detection. This is a technical disclosure control, not legal consent under data-protection law.
 
-**Candidate privacy limitations:** exhaustive request inspection and failure-path coverage still use a simulated Meta API that records each complete request. On 2026-11-04, candidate build `e383ea4.src.48ae3cd77018` also completed two real Chat-only inferences with `muse-spark-1.3`, with consent and Model evidence recorded by RAME; that validates the direct Chat connection only, not cloud Agent tool results, Delegated, Mission planning or Advisory. The processing classes come from the documented model ids listed in the code and must be reviewed when Meta's catalog or terms change. In Agent, earlier messages longer than 4,000 characters are sent shortened, and the card shows them exactly as sent, with the shortening marked; plan entries the card lists are not part of Agent history, so Agent may send less than the card shows, never more. Do not use real personal, confidential or otherwise sensitive data with Meta during candidate validation.
+**v0.2.0 privacy limitations:** exhaustive request inspection and failure-path coverage still use a simulated Meta API that records each complete request. On 2026-11-04, human validation recorded three real Chat-only inferences with `muse-spark-1.3`, with consent and Model evidence recorded by RAME; that validates the direct Chat connection only, not cloud Agent tool results, Delegated, Mission planning or Advisory. The processing classes come from the documented model ids listed in the code and must be reviewed when Meta's catalog or terms change. In Agent, earlier messages longer than 4,000 characters are sent shortened, and the card shows them exactly as sent, with the shortening marked; plan entries the card lists are not part of Agent history, so Agent may send less than the card shows, never more. Do not use real personal, confidential or otherwise sensitive data with Meta during experimental preview use.
 
 ## Privacy by Design — Privacidad desde el diseño
 
 RAME Code is designed around **governed autonomy with privacy controls**, rather than treating every remembered item as permission to disclose it or act on it. This is a technical design direction, not a statement that RAME Code or a particular deployment complies with the GDPR.
 
-Confirmed mechanisms in the v0.2.0 candidate include:
+Confirmed mechanisms in v0.2.0 include:
 
 - local text inference through a loopback-only server, without sending that request to a cloud provider;
 - separate project memory, conversation recovery, tool permissions and host evidence;
@@ -277,7 +277,7 @@ Confirmed mechanisms in the v0.2.0 candidate include:
 - historical excerpts labelled as untrusted context, never as current instructions or permissions; and
 - separate grants and limits for Mission Advisory and Delegated Agent execution.
 
-Remaining limitations: the two real Meta validations cover Chat only; the full disclosure and failure matrix remains verified against the simulated recorder. Secret redaction and path replacement are pattern-based and cannot exclude every sensitive value; once you allow Agent tool results for a session, their future contents (after redaction) cannot be previewed before the run; and the processing classes depend on the documented model ids kept in the code. Do not use real personal, confidential or otherwise sensitive data with Meta during candidate validation.
+Remaining limitations: the three real Meta inferences cover Chat only; the full disclosure and failure matrix remains verified against the simulated recorder. Secret redaction and path replacement are pattern-based and cannot exclude every sensitive value; once you allow Agent tool results for a session, their future contents (after redaction) cannot be previewed before the run; and the processing classes depend on the documented model ids kept in the code. Do not use real personal, confidential or otherwise sensitive data with Meta during experimental preview use.
 
 ### Relationship to GDPR principles
 
@@ -343,7 +343,7 @@ Later construction and review combined existing access to **OpenAI Codex** and *
 
 ## Roadmap
 
-The immediate priorities are to complete the independent audit and human validation of the 0.2 candidate, prove clean VSIX installation, finish real Windows and explicitly authorized Meta API checks, and publish a reproducible preview. Subsequent releases will add image input for Glimmer, refine the provisional interface and logo, prepare Visual Studio Marketplace distribution, broaden verified project adapters and continue research into verifier-governed model handoffs.
+After the v0.2.0 preview release, the priorities are real Windows validation, explicitly authorized validation of the remaining Meta workflows, image input for Glimmer, a refined interface and visual identity, Visual Studio Marketplace distribution, broader verified project adapters and continued research into verifier-governed model handoffs.
 
 ## License
 

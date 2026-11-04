@@ -34,7 +34,10 @@ export type LocalSourceMessage =
   | { type: 'localServerScan'; endpoint: string }
   | { type: 'localServerUse'; endpoint: string; model: string; lan: boolean }
   | { type: 'webAccessSet'; enabled: boolean; search: 'duckduckgo' | 'searxng'; searxngUrl: string }
-  | { type: 'shellAccessSet'; enabled: boolean };
+  | { type: 'shellAccessSet'; enabled: boolean }
+  | { type: 'missionWebSet'; missionId: string; enabled: boolean; maxSearches: number; maxFetches: number; domains: string[] }
+  /** Check the identity of the local server in use, or compute / cancel the SHA-256 of the managed GGUF. */
+  | { type: 'localIdentity'; action: 'check' | 'hash' | 'cancel-hash' };
 
 const KINDS: readonly string[] = ['ollama', 'lmstudio', 'llama-server', 'openai-compatible'];
 const MODEL_ID = /^[\w.:@/+-]{1,200}$/;
@@ -69,6 +72,23 @@ export function parseLocalSourceMessage(record: Record<string, unknown>): LocalS
         throw new Error('Invalid webAccessSet message.');
       }
       return { type: 'webAccessSet', enabled: record.enabled, search: record.search, searxngUrl: record.searxngUrl };
+    case 'missionWebSet': {
+      const count = (value: unknown) => typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100;
+      if (
+        !exact(record, ['type', 'missionId', 'enabled', 'maxSearches', 'maxFetches', 'domains']) ||
+        typeof record.missionId !== 'string' || !/^mis_[0-9a-f]{24}$/.test(record.missionId) ||
+        typeof record.enabled !== 'boolean' || !count(record.maxSearches) || !count(record.maxFetches) ||
+        !Array.isArray(record.domains) || record.domains.length > 20 || !record.domains.every((domain) => typeof domain === 'string' && domain.length <= 255)
+      ) {
+        throw new Error('Invalid missionWebSet message.');
+      }
+      return { type: 'missionWebSet', missionId: record.missionId, enabled: record.enabled, maxSearches: record.maxSearches as number, maxFetches: record.maxFetches as number, domains: [...(record.domains as string[])] };
+    }
+    case 'localIdentity':
+      if (!exact(record, ['type', 'action']) || (record.action !== 'check' && record.action !== 'hash' && record.action !== 'cancel-hash')) {
+        throw new Error('Invalid localIdentity message.');
+      }
+      return { type: 'localIdentity', action: record.action };
     case 'shellAccessSet':
       if (!exact(record, ['type', 'enabled']) || typeof record.enabled !== 'boolean') {
         throw new Error('Invalid shellAccessSet message.');

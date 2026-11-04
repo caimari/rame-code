@@ -1,0 +1,29 @@
+{
+  "schema": "rame-evidence-provenance-v1",
+  "recordedDate": "2026-11-04",
+  "status": "recorded-interface-transcript-no-direct-windows-state-export",
+  "source": {
+    "kind": "user-supplied-interface-transcript",
+    "privateBackup": "2026-11-04-real-agent-web-lmstudio-thread-01/thread-01-original.txt",
+    "privateSourceSha256": "018fd61e0f6e214a3b0c70b0983bc69f7f5d57f76f332dd1d334b8ff69d5048c"
+  },
+  "candidate": {
+    "version": "0.2.0",
+    "installedRevisionAtIntake": "src.059070d384d6",
+    "revisionPresentInTranscript": false,
+    "candidateVsixSha256": "246a8d2d32d1112ef9860f5b0925c1ecb7f7c5927dab0df620a94c8e7941645e"
+  },
+  "sanitization": [
+    "private LAN endpoint replaced with [PRIVATE_LAN_ENDPOINT]",
+    "workspace path replaced with [WORKSPACE]",
+    "public source URLs retained",
+    "digest prefixes retained exactly as displayed",
+    "no API key or credential included"
+  ],
+  "limitations": [
+    "no video file is included or required by this package",
+    "direct export of persisted thread, audit and model-evidence records is unavailable; the private Windows state database is not published",
+    "full action digests were not present in the supplied interface transcript",
+    "model weights were not cryptographically verified by RAME"
+  ]
+}

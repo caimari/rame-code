@@ -55,17 +55,28 @@ test('two open projects keep separate memory', async () => {
     const second = path.join(h.root, 'ws1');
     const pick = (target: string) => (items: unknown[]) => (items as Array<{ description: string }>).find((item) => item.description === target);
     // Bind the first project with a run, then store 50 for it.
+    // A new thread with two folders asks for its folder (request_project_folder); the run after it works there.
     fakeWindow.quickPickAnswer = pick(first);
-    h.model.enqueue({ kind: 'json', body: assistantText('Nothing to do. Files changed: none.') });
+    h.model.enqueue(
+      { kind: 'json', body: toolCallReply([{ id: 'f1', name: 'request_project_folder', args: { reason: 'Need the project.' } }]) },
+      { kind: 'json', body: assistantText('Folder chosen.') },
+      { kind: 'json', body: assistantText('Nothing to do. Files changed: none.') },
+    );
     await h.provider.sendMessage('Look at the first project.', 'agent', 'local');
+    await h.provider.sendMessage('Go ahead.', 'agent', 'local');
     const saved = await userSets(h, '50');
     assert.equal(memoryOf(saved).project, 'ws');
     // The second project sees nothing of it.
     fakeWindow.quickPickAnswer = pick(second);
     await h.provider.newThread();
+    h.model.enqueue(
+      { kind: 'json', body: toolCallReply([{ id: 'f2', name: 'request_project_folder', args: { reason: 'Need the project.' } }]) },
+      { kind: 'json', body: assistantText('Folder chosen.') },
+    );
+    await h.provider.sendMessage('Look at the second project.', 'agent', 'local');
     h.model.requests.length = 0;
     h.model.enqueue({ kind: 'json', body: assistantText('No decisions here. Files changed: none.') });
-    await h.provider.sendMessage('Look at the second project.', 'agent', 'local');
+    await h.provider.sendMessage('Go ahead.', 'agent', 'local');
     const memory = systemText(h.model.requests[0]);
     assert.match(memory, /AUTHORIZED MEMORY for project "ws1"/);
     assert.match(memory, /- \(no decisions yet; expectedVersion 0 for a new key\)/);

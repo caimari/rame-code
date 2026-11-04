@@ -17,6 +17,8 @@
  * rebuilt), and nothing in it is ever replayed.
  */
 
+import { isEvidenceServer, sanitizeIdentityView, type EvidenceServer, type LocalIdentityView } from './localIdentity.js';
+
 export const MODEL_EVIDENCE_KEY = 'rameCode.modelEvidence.v1';
 export const MODEL_EVIDENCE_VERSION = 1;
 export const MAX_EVIDENCE_THREADS = 30;
@@ -66,6 +68,8 @@ export interface EvidenceRuntime {
   /** Passed at launch (--mmproj / --model-draft); not a claim that they loaded. */
   projector: boolean;
   draft: boolean;
+  /** Local only: the server kind and how RAME knows it, its network scope, and the model id it wrote in its answer. Absent in older records. */
+  server?: EvidenceServer;
 }
 
 export interface EvidenceAction {
@@ -208,9 +212,14 @@ function validModel(value: unknown): value is string {
 }
 
 function validRuntime(value: unknown): value is EvidenceRuntime {
+  const keys = ['kind', 'model', 'contextConfigured', 'contextConfirmed', 'template', 'projector', 'draft'];
   return (
     isRecord(value) &&
-    exactKeys(value, ['kind', 'model', 'contextConfigured', 'contextConfirmed', 'template', 'projector', 'draft']) &&
+    (exactKeys(value, keys) ||
+      (exactKeys(value, [...keys, 'server']) &&
+        isEvidenceServer(value.server) &&
+        (value.kind === 'rame-launched') === (value.server.kind === 'rame-llama-server') &&
+        value.kind !== 'meta-api' && value.kind !== 'not-running')) &&
     oneOf(value.kind, ['rame-launched', 'external-endpoint', 'not-running', 'meta-api'] as const) &&
     validModel(value.model) &&
     countOrNull(value.contextConfigured, 16_777_216) &&
@@ -511,8 +520,11 @@ export interface EvidenceNowView {
   local: {
     /** Settings only: GGUF basename (owned server) or requested model id (external endpoint). */
     configured: { kind: 'owned' | 'external'; model: string; context: number | null; projector: boolean; draft: boolean } | null;
-    running: { kind: 'rame-launched' | 'external-endpoint'; contextConfirmed: number | null; template: EvidenceTemplate } | null;
+    /** scope: where an external endpoint is (never the address itself). */
+    running: { kind: 'rame-launched' | 'external-endpoint'; contextConfirmed: number | null; template: EvidenceTemplate; scope?: 'loopback' | 'private-network' } | null;
     observed: boolean;
+    /** What the local server says about itself, the SHA-256 of the managed GGUF, and the evidence levels reached. */
+    identity?: LocalIdentityView;
   };
   cloud: { model: string; keyStored: boolean; observed: boolean };
 }
@@ -597,9 +609,11 @@ function sanitizeNow(value: unknown): EvidenceNowView {
               kind: running.kind,
               contextConfirmed: count(running.contextConfirmed, 16_777_216) ? running.contextConfirmed : null,
               template: oneOf(running.template, ['muse-glimmer', 'other', 'unknown'] as const) ? running.template : 'unknown',
+              ...(oneOf(running.scope, ['loopback', 'private-network'] as const) ? { scope: running.scope } : {}),
             }
           : null,
       observed: value.local.observed === true,
+      ...(sanitizeIdentityView(value.local.identity) ? { identity: sanitizeIdentityView(value.local.identity) } : {}),
     },
     cloud: {
       model: typeof value.cloud.model === 'string' ? evidenceModelName(value.cloud.model) || 'unknown' : 'unknown',

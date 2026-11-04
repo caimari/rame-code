@@ -190,10 +190,11 @@ test('a local failure never reaches Meta silently and a pending escalation canno
   });
 });
 
-test('picking no folder among several workspaces leaves the transcript unchanged', async () => {
+// Mission still asks for its folder first; a new local Agent thread with several folders starts without a project (agent-without-folder.test.ts).
+test('Mission: picking no folder among several workspaces leaves the transcript unchanged', async () => {
   await withHarness({ folders: 2 }, async (h) => {
     fakeWindow.quickPickAnswer = undefined;
-    await h.provider.sendMessage('Do something in a folder.', 'agent', 'local');
+    await h.provider.sendMessage('Do something in a folder.', 'mission', 'local');
     const state = h.last();
     assert.equal(fakeWindow.quickPickCalls, 1);
     assert.equal(state.connection, 'cancelled');
@@ -202,9 +203,9 @@ test('picking no folder among several workspaces leaves the transcript unchanged
   });
 });
 
-test('with zero workspaces the Agent explains it without creating a failed conversation', async () => {
+test('Mission: with zero workspaces it explains it without creating a failed conversation', async () => {
   await withHarness({ folders: 0 }, async (h) => {
-    await h.provider.sendMessage('Do something.', 'agent', 'local');
+    await h.provider.sendMessage('Do something.', 'mission', 'local');
     const state = h.last();
     assert.match(state.status, /No workspace folder is open/);
     assert.equal((state.threads as unknown[]).length, 0);
@@ -217,11 +218,18 @@ test('the selected folder among several is the one the Agent works in', async ()
     const second = path.join(h.root, 'ws1');
     await h.writeFile('../ws1/only-here.txt', 'second');
     fakeWindow.quickPickAnswer = (items: unknown[]) => (items as Array<{ description: string }>).find((item) => item.description === second);
+    // The new thread asks for its folder (request_project_folder); the user picks the second one.
+    h.model.enqueue(
+      { kind: 'json', body: toolCallReply([{ id: 'f', name: 'request_project_folder', args: { reason: 'Need the file.' } }]) },
+      { kind: 'json', body: assistantText('Folder chosen.') },
+    );
+    await h.provider.sendMessage('Read only-here.txt.', 'agent', 'local');
+    h.model.requests.length = 0;
     h.model.enqueue(
       { kind: 'json', body: toolCallReply([readCall('c1', 'only-here.txt')]) },
       { kind: 'json', body: assistantText('ok') },
     );
-    const run = h.provider.sendMessage('Read only-here.txt.', 'agent', 'local');
+    const run = h.provider.sendMessage('Read only-here.txt now.', 'agent', 'local');
     const pendingState = await h.waitFor((s) => s.agentPending !== null);
     const pending = pendingState.agentPending as NonNullable<PostedState['agentPending']>;
     assert.equal((pending as unknown as { workspaceId: string }).workspaceId, second);
@@ -238,11 +246,14 @@ test('a thread remembers its selected open folder and does not ask again', async
     fakeWindow.quickPickAnswer = (items: unknown[]) =>
       (items as Array<{ description: string }>).find((item) => item.description === second);
     h.model.enqueue(
+      { kind: 'json', body: toolCallReply([{ id: 'f', name: 'request_project_folder', args: { reason: 'Need the project.' } }]) },
       { kind: 'json', body: assistantText('First reply.') },
       { kind: 'json', body: assistantText('Second reply.') },
+      { kind: 'json', body: assistantText('Third reply.') },
     );
     await h.provider.sendMessage('Work in the second project.', 'agent', 'local');
     await h.provider.sendMessage('Continue in the same project.', 'agent', 'local');
+    await h.provider.sendMessage('And continue again.', 'agent', 'local');
     assert.equal(fakeWindow.quickPickCalls, 1, 'the project is selected once per thread');
     const stored = h.memento.get('rameCode.threads.v1') as Array<{ workspaceRoot?: string }>;
     assert.equal(stored[0]?.workspaceRoot, second);
@@ -689,13 +700,13 @@ test('empty model replies are retried twice, then the run stops without claiming
   });
 });
 
-test('cancelling while the folder picker is open starts nothing, even if a folder is then picked', async () => {
+test('Mission: cancelling while the folder picker is open starts nothing, even if a folder is then picked', async () => {
   await withHarness({ folders: 2 }, async (h) => {
     fakeWindow.quickPickAnswer = async (items: unknown[]) => {
       h.provider.cancelRequest();
       return (items as Array<{ description: string }>)[0];
     };
-    await h.provider.sendMessage('Do something.', 'agent', 'local');
+    await h.provider.sendMessage('Do something.', 'mission', 'local');
     assert.equal(h.model.requests.length, 0);
     assert.equal((h.last().threads as unknown[]).length, 0);
     assert.equal(h.last().running, false);

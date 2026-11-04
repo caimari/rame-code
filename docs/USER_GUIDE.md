@@ -2,7 +2,7 @@
 
 [Official website](https://ramecode.com/) · [Versión en español](USER_GUIDE.es.md) · [README](../README.md) · [How to verify RAME](VERIFICATION.md)
 
-> Practical guide for the unreleased RAME Code 0.2.0 candidate. The public release is still 0.1.0, so some screens described here are available only in candidate builds.
+> Practical guide for the RAME Code v0.2.0 experimental preview release. Use disposable projects; this release is not a production security boundary.
 
 RAME Code is a local-first coding assistant inside VS Code. It can discuss a project, inspect and edit files, run supported tests, preserve approved project decisions, and carry longer goals through a Mission.
 
@@ -90,6 +90,8 @@ Use **Chat only** when you do not want the model to read files or execute tools.
 
 **Agent** is the recommended default. It can converse normally and use tools only when needed. Reads, writes and tests follow the selected permission profile. Significant actions remain visible in **Activity**, and a final reply includes a host-authored record when tools ran.
 
+**Which project folder Agent works in.** With one folder open, Agent uses it. A thread keeps the folder it was bound to; if that folder was closed, RAME asks you and never moves the thread to another folder by itself. A new Agent thread with no folder, or several, open starts **without a project** (the header badge says *No project folder — web only*): the local model can answer, use `web_search` and `web_fetch` when web access is on (each call on its card, as in Agent), and ask for a folder with `request_project_folder`. That opens VS Code's folder picker: you choose a folder or cancel, and the project tools (files, tests, terminal, project memory) apply from your next message. Without a project there is no file, test, terminal, memory or history tool and no project decision in the context; approvals made without a project are bound to no folder and never carry over. Mission, and Agent with Meta, always need a folder you choose.
+
 Example requests:
 
 ```text
@@ -101,7 +103,21 @@ Fix the failing calculator test, change only src/calculator.js, run npm:test,
 and report the real result.
 ```
 
-**Web access (optional, default OFF).** In **Settings › Escalation › Web access** you can let Agent search the web (`web_search`, with DuckDuckGo or your own SearXNG) and read public pages (`web_fetch`), read-only. It works only with a local model and never in Mission runs. Each call is shown and, except in Workspace full, waits for your approval. Local and private addresses are refused (also after DNS and on every redirect), a query or URL that contains a key or a file path is not sent, and pages are limited to 2 MiB and 15 s. Page text reaches the model labelled as untrusted data, never as instructions, and cannot write project memory.
+### Agent, Chat and Mission web access
+
+**Web access (optional, default OFF).** In **Settings › Escalation › Web access** you can let Agent search the web (`web_search`, with DuckDuckGo or your own SearXNG) and read public pages (`web_fetch`), read-only. The same switch gives the web to **Chat**. It works only with a local model; a Mission has its own web permission (below). Each call is shown and waits for your approval in Chat and, except in Workspace full, in Agent. Local and private addresses are refused (also after DNS and on every redirect), a query or URL that contains a key or a file path is not sent, and pages are limited to 2 MiB and 15 s. Page text reaches the model labelled as untrusted data, never as instructions, and cannot write project memory.
+
+**Validation status.** Web access in Agent has been validated in a real run (LM Studio on the private network, DuckDuckGo and nodejs.org). Web access in **Chat** and in **Missions** is experimental in this candidate: it is implemented and covered by tests against simulated servers only, and has not yet been validated against the real web.
+
+| | Chat | Agent | Mission |
+|---|---|---|---|
+| Web tools | `web_search`, `web_fetch` only (no file, test, terminal or memory tool) | `web_search`, `web_fetch` plus the workspace tools | `web_search`, `web_fetch` within the Mission's web budget |
+| Switched on by | **Settings › Web access** | **Settings › Web access** | the **Web access for this Mission** box when you authorize it |
+| Asks before each call | always | yes, except in Workspace full | supervised: yes; autonomous: no, within the budget |
+| What may be read | any public page you approve | any public page you approve | only URLs its own searches returned, or only the domains you list |
+| Queries | no keys or file paths | no keys or file paths | plain words only: also no code, line breaks or long quotes, at most 200 characters |
+
+In a Mission, every search and page read is counted in the Mission checkpoint *before* it is sent, so a reload never gives it more than you granted; when the budget is used up, the Mission continues without the web or reports the blocker. Web access never adds a write, terminal, memory or file permission, web text is labelled untrusted data and never becomes an instruction, it cannot change a frozen acceptance check, a grant or a budget, and searches and pages are left out of anything sent to Meta (Advisory consultations included). In Chat, the thread keeps the answer and a host record of each search and page with its source, not the page text.
 
 ```text
 Look up how to build a Windows installer with electron-builder in the current
@@ -124,7 +140,7 @@ The selected runtime, not the green connection indicators, decides which model r
 
 `web_search`, `web_fetch` and `run_command` are local-model-only tools and are not offered to Spark. To test web or terminal access, cancel the cloud disclosure, select a local Glimmer/Ollama/LM Studio runtime, confirm that local inference responds, enable the tool explicitly and repeat the Agent request. A future interface revision should explain this model/tool mismatch before opening an unrelated cloud disclosure card.
 
-On 2026-11-04, candidate build `e383ea4.src.48ae3cd77018` completed two real Chat-only inferences with `muse-spark-1.3`; RAME recorded consent, provider, model, observed responses and token usage. This validates the direct Meta Chat connection only. The complete disclosure/failure matrix remains covered by the simulated Meta recorder, and cloud Agent tool results, Delegated, Mission planning and Advisory still require separate real-provider validation.
+On 2026-11-04, human validation recorded three real Chat-only inferences with `muse-spark-1.3`; RAME recorded consent, provider, model, observed responses and token usage. This validates the direct Meta Chat connection only. The complete disclosure/failure matrix remains covered by the simulated Meta recorder, and cloud Agent tool results, Delegated, Mission planning and Advisory still require separate real-provider validation.
 
 ### Mission
 
@@ -145,7 +161,7 @@ Correct add in src/calculator.js. Do not modify package.json or test/.
 Run npm:test. The work is complete only when npm:check also passes after the last change.
 ```
 
-RAME asks the selected model for a bounded plan. A plan is not yet permission to edit anything.
+RAME asks the selected model for a bounded plan. Before scheduling more work, the planner uses the Mission checkpoints and host-observed evidence to avoid repeating tasks whose criteria are already satisfied. This reduces redundant internal runs; it does not let the model declare work complete or replace the required host checks. A plan is not yet permission to edit anything.
 
 ### 2. Choose Standard or Verified Mission
 
@@ -159,15 +175,28 @@ A Verified Mission provides a stronger finish line that the host checks itself, 
 - **Supervised: every write and test asks:** RAME presents approval cards as work progresses.
 - **Autonomous workspace: edits and allowlisted tests run without asking:** permitted edits and tests can run under one Mission grant.
 
+Agent and Mission use separate permission decisions:
+
+| | Agent | Mission |
+| --- | --- | --- |
+| Permission source | The **Ask / Safe auto / Workspace full** selector | The authorization card for that specific Mission |
+| Autonomous work | **Workspace full**, within Agent policy | **Autonomous workspace**, within the Mission grant |
+| Writes and tests | Governed by the selected Agent profile | Governed by the authorized Mission scope and test allowlist |
+| Outside the authorized scope | Refused or shown for approval | Refused, paused or shown for a new Mission authorization |
+
+Changing the Agent selector does not expand, reduce or replace an existing Mission grant. A Mission may use the Agent execution engine internally, but that does not turn it into an Agent request: its authority still comes from the Mission card shown before it started. The interface identifies these internal runs as Mission work and keeps the Mission permission visible instead of presenting the Agent selector as their authority. During a Mission, use the permission shown in its status and evidence as the source of truth.
+
 Autonomous workspace requires **I trust this project**. This trust is limited to that Mission, folder, local provider and model. It is not an operating-system sandbox. Test scripts can reach files, the network or other processes with your user permissions.
 
-For a prepared project, this can be one initial authorization covering the permitted writes and checks for that specific Mission. It is never a general authorization for other folders or operations on the computer. An empty-folder Mission still uses two authorizations: one for the scaffold and a second one, after your review, for implementation and verification.
+For a prepared project, this can be one initial authorization covering the permitted writes and checks for that specific Mission. It is never a general authorization for other folders or operations on the computer. An empty-folder Mission still uses two authorizations: the first may create the scaffold, package scripts and proposed tests; the second lets you review those new verification commands and authorize the implementation and checks. After that second authorization, allowlisted work inside the grant proceeds without an approval for every ordinary write or test.
 
 RAME still protects selected paths and asks again for operations outside the grant, such as deleting, moving files or changing project memory. A changed `package.json` also invalidates the previously allowed test setup.
 
 ### 4. Optionally configure a Meta Advisory budget
 
 A Mission can receive an explicit allowance of between 0 and 5 Meta consultations. Advanced controls also limit bytes per request, total bytes, output tokens per answer and the total remote token budget. These limits are fixed when you grant the authorization.
+
+Meta Advisory is optional and separate from the Mission's file and test permissions. Each new Mission authorization starts without inherited web or Meta authority; select the allowance deliberately on that card. If the allowance is zero, the Mission remains entirely on the configured local model. If it is greater than zero, RAME may consult the selected Meta model only within the displayed recipient, data and budget limits.
 
 For example:
 
@@ -178,7 +207,7 @@ For example:
 | Tool control | Glimmer |
 | Cost and data | Explicit byte and token limits |
 
-Mission asks for advice only for an open, reproducible blocker. Spark receives no tools and cannot declare the blocker recovered. Glimmer applies any authorized correction, and the host must rerun the original verifier under the recorded conditions before normal Mission work can continue. Cancelling before a request is sent does not consume a consultation; once sent, the attempt counts even if the remote request fails. Exhausting the allowance never triggers an automatic retry.
+Mission asks for advice only for an open, reproducible blocker. The review identifies the bounded material that may leave the computer; Meta receives only that authorized consultation, not control of the workspace. Spark receives no tools, cannot write files and cannot declare the blocker recovered. Glimmer remains the tool-controlling model, applies any authorized correction, and the host must rerun the original verifier under the recorded conditions before normal Mission work can continue. Cancelling before a request is sent does not consume a consultation; once sent, the attempt counts even if the remote request fails. Exhausting the allowance never triggers an automatic retry or silently switches the Mission to cloud execution.
 
 ### 5. Understand acceptance
 
@@ -233,13 +262,17 @@ If several runs make no verifiable progress, the Mission becomes **blocked**. Re
 
 ## Starting in an empty folder
 
-The 0.2.0 candidate supports a two-authorization bootstrap Mission:
+RAME Code v0.2.0 supports a two-authorization bootstrap Mission:
 
 1. The first authorization may create the initial project, `package.json`, scripts and tests.
 2. It cannot run those new tests or complete the Mission.
 3. RAME revokes that bootstrap grant and stops at **Scaffold ready**.
 4. You inspect the generated scripts and tests.
 5. A second authorization selects Standard or Verified Mission and, for Verified Mission, freezes the chosen acceptance files.
+
+While a Mission waits for an authorization, the box under the message field says which stage it is (stage 1 of 2: create the files; stage 2 of 2: run the tests), and **Review** takes you to it. Every new authorization card opens with web access and Meta advice off. A Mission follows its own authorization, never the Agent permission selector: Supervised asks before every write and test; Autonomous workspace runs the writes and tests of its grant and asks for anything else.
+
+**Known limitation (later version).** After the second authorization, Muse Glimmer still runs the approved tests through a few model steps; the host does not yet run them directly the moment you approve. An older plan with a separate "run the tests and report" step costs one extra internal run.
 6. Only then may implementation and verification continue.
 
 This prevents a model from creating its own easy test and silently using it as the final authority.
@@ -400,7 +433,7 @@ Use it for several related tasks, autonomous continuation, checkpoints or an exp
 
 ### Does Mission work in an empty folder?
 
-Yes, in the 0.2.0 candidate through the two-authorization bootstrap flow. Review the generated scripts and tests at **Scaffold ready** before continuing.
+Yes, in v0.2.0 through the two-authorization bootstrap flow. Review the generated scripts and tests at **Scaffold ready** before continuing.
 
 ### Must I write the tests myself?
 

@@ -38,8 +38,8 @@ export const MAX_HISTORY_CHARS = 12000;
 
 export const CHAT_SYSTEM_PROMPT =
   'You are RAME Code, a conversational coding assistant inside VS Code. Answer concisely. You cannot read files or run commands yet; say so when asked to act on the workspace.';
-export const MISSION_SYSTEM_PROMPT =
-  'Create a bounded software mission plan. Do not claim to have inspected files or run tools. Return only the requested structured output.';
+export { MISSION_SYSTEM_PROMPT } from './missionPlanRules.js';
+import { MISSION_SYSTEM_PROMPT } from './missionPlanRules.js';
 
 /**
  * Collect bounded history text from the ACTIVE thread only. Plan turns

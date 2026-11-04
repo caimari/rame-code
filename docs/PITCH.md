@@ -46,7 +46,7 @@ RAME distinguishes what a model claimed from what the host allowed, executed and
 
 ## Suggested three-minute demo story
 
-1. **Identity — 15 seconds.** Show the installed `0.2.0` candidate and state the one-line story.
+1. **Identity — 15 seconds.** Show the installed `0.2.0` preview release and state the one-line story.
 2. **Local model — 25 seconds.** Show Glimmer responding locally and open Model evidence so the audience sees an observed local response, not only a selected model.
 3. **Governed memory — 35 seconds.** Approve one durable decision, show it in another thread, change it and show dependent evidence becoming **STALE**.
 4. **Verified Mission — 75 seconds.** Start a small disposable-project Mission, show its scoped grant and frozen acceptance, then show the host-run check and completion evidence.
@@ -55,7 +55,7 @@ RAME distinguishes what a model claimed from what the host allowed, executed and
 
 ## Claims to keep bounded
 
-- Two direct Chat-only inferences with `muse-spark-1.3` have a recorded real-API human validation. This does not validate cloud Agent tool results, Delegated or Mission Advisory.
+- Three direct Chat-only inferences with `muse-spark-1.3` have a recorded real-API human validation. This does not validate cloud Agent tool results, Delegated or Mission Advisory.
 - Mission Advisory is implemented and tested with a simulated Meta recorder; it has no recorded real-provider execution yet.
 - RAME prioritizes local inference and enforces remote budgets; no specific cost saving is claimed without comparative measurements.
 - Compatible Meta models depend on their advertised capabilities. RAME does not claim that every model supports every mode.

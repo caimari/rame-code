@@ -7,7 +7,8 @@ export const ACCEPTANCE_ENVIRONMENT_FILES = ['package-lock.json', 'npm-shrinkwra
 
 const ACCEPTANCE_SKIP_DIRS = new Set(['node_modules', '.git', 'out', 'dist', 'build', 'coverage', '.vscode-test', '.rame', '.private']);
 const ACCEPTANCE_TEST_DIR = /^(test|tests|__tests__|spec|acceptance|e2e)$/i;
-const ACCEPTANCE_TEST_FILE = /\.(test|spec|acceptance)\.[cm]?[jt]sx?$/i;
+// calculator.test.js, calculator.spec.ts, and the other common forms test_calculator.js / calculator_test.js.
+const ACCEPTANCE_TEST_FILE = /(?:\.(?:test|spec|acceptance)|^test[_-].+|.+[_-]test)\.[cm]?[jt]sx?$/i;
 const ACCEPTANCE_SCRIPT_FILE = /\.([cm]?[jt]sx?|json)$/i;
 
 /** Find bounded test/acceptance files without following links or protected paths. */
@@ -38,6 +39,23 @@ export async function listAcceptanceCandidates(fs: AgentFs): Promise<string[]> {
     }
   }
   return found.sort().slice(0, 80);
+}
+
+/** Files the "test" script names (node test_calc.js, node --test checks/run.mjs), when they exist in the project. */
+export async function testScriptFiles(fs: AgentFs, packageJsonRaw: string): Promise<string[]> {
+  const script = parsePackageScripts(packageJsonRaw)?.test ?? '';
+  const named = script.split(/\s+/).filter((token) => /^[\w.][\w./-]*\.[cm]?[jt]sx?$/.test(token) && !token.includes('..'));
+  const found: string[] = [];
+  for (const rel of named.slice(0, 8)) {
+    try {
+      if (checkAgentRelPath(rel).ok && (await fs.stat(rel)).kind === 'file') {
+        found.push(rel);
+      }
+    } catch {
+      // Unreadable: not offered for review.
+    }
+  }
+  return found;
 }
 
 export function parsePackageScripts(raw: string): Record<string, string> | undefined {

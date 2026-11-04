@@ -163,7 +163,11 @@ test('a RAME-launched llama-server: its -m basename, /props context and template
     await h.provider.sendMessage('Hi.', 'agent', 'local');
     const [entry] = all(h.last());
     assert.ok(entry);
-    assert.deepEqual(entry.runtime, { kind: 'rame-launched', model: GGUF, contextConfigured: 32768, contextConfirmed: 32768, template: 'muse-glimmer', projector: true, draft: true });
+    // The server facts are stored with the record too: RAME launched it, on loopback; this fake server writes no model id in its answer.
+    assert.deepEqual(entry.runtime, {
+      kind: 'rame-launched', model: GGUF, contextConfigured: 32768, contextConfirmed: 32768, template: 'muse-glimmer', projector: true, draft: true,
+      server: { kind: 'rame-llama-server', basis: 'launched', scope: 'loopback', responded: null },
+    });
     assert.equal(entry.identity, 'response-observed');
     assert.deepEqual(entry.usage, { input: 2427, output: 98 });
     assert.equal(entry.finish, 'stop');

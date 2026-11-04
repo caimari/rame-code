@@ -18,7 +18,7 @@ Utiliza Meta Model API para Chat y Agent cloud directos con modelos cuyas capaci
 
 > **La IA debería recordar lo que importa, respetar lo que decides y demostrar lo que realmente ha conseguido.**
 
-> **Estado de versión — candidato preview 0.2.0.** El commit [`e383ea4`](https://github.com/caimari/rame-code/commit/e383ea4281aaf25a85d66b5955d71707508a9af0) se construyó e instaló como VSIX aislado durante la validación humana. Es el candidato actual descrito aquí, pero todavía no se ha publicado un VSIX ni una release pública 0.2.0. La última release pública descargable sigue siendo [`v0.1.0`](https://github.com/caimari/rame-code/releases/tag/v0.1.0). Utiliza proyectos desechables; esta preview no es una frontera de seguridad para producción.
+> **Estado de versión — release preview experimental v0.2.0.** Descarga el VSIX auditado desde la [release v0.2.0](https://github.com/caimari/rame-code/releases/tag/v0.2.0). Esta versión sirve para evaluaciones controladas con proyectos desechables; no es una frontera de seguridad para producción.
 
 | Local-first | Meta Model API | Missions verificadas | Memoria gobernada |
 | --- | --- | --- | --- |
@@ -41,11 +41,11 @@ Por ejemplo, si la decisión aprobada «usar Node.js 20» cambia a «usar Node.j
 
 Empieza por [la tabla de afirmaciones y evidencias](docs/JUDGES.es.md). Enlaza una Mission supervisada con Glimmer local, la batería simulada reproducible, los comandos exactos de reproducción y los límites de cada afirmación. Una comprobación verde solo demuestra aquello que realmente cubre.
 
-## La preview 0.2.0
+## La release preview v0.2.0
 
 Para el hackathon, el desarrollo ha priorizado deliberadamente la funcionalidad real, la autoridad explícita y las evidencias reproducibles por encima del acabado visual. La interfaz y el logotipo actuales son provisionales. Las siguientes releases mejorarán la arquitectura de información, la accesibilidad, la incorporación de nuevos usuarios y la identidad visual después de completar la validación independiente y humana del comportamiento esencial.
 
-Frente a la primera base pública, el candidato 0.2.0 incorpora memoria gobernada del proyecto, Missions reanudables y verificadas por el host, mayor integridad de la aceptación, evidencia del modelo, conexión con Ollama y LM Studio, acceso web opcional de solo lectura y una terminal experimental para Agent local. La lista completa y auditable está en el [Changelog](CHANGELOG.md#020---unreleased).
+Frente a la primera base pública, v0.2.0 incorpora memoria gobernada del proyecto, Missions reanudables y verificadas por el host, mayor integridad de la aceptación, evidencia del modelo, conexión con Ollama y LM Studio, acceso web opcional de solo lectura y una terminal experimental para Agent local. La lista completa y auditable está en el [Changelog](CHANGELOG.md#020---2026-11-04).
 
 ## La base 0.1.0
 
@@ -56,15 +56,15 @@ La primera release conserva lo construido durante los primeros días del proyect
 - herramientas acotadas para el workspace, perfiles de permisos y autorizaciones exactas de un solo uso;
 - hilos persistentes, cancelación y registros de acciones escritos por el host.
 
-Es una base histórica de investigación, no la mejor descripción del candidato actual. Sus capacidades, trabajo de seguridad y limitaciones completos permanecen en el [Changelog de 0.1.0](CHANGELOG.md#010---2026-11-02).
+Es una base histórica de investigación, no la mejor descripción de la release actual. Sus capacidades, trabajo de seguridad y limitaciones completos permanecen en el [Changelog de 0.1.0](CHANGELOG.md#010---2026-11-02).
 
 ## Trabajo importante todavía pendiente
 
 - **Visión en RAME:** Muse Glimmer y su `mmproj` pueden trabajar con imágenes, pero la extensión todavía no adjunta imágenes ni envía peticiones multimodales a Glimmer local ni a los modelos cloud de Meta.
-- **Validación con Meta:** la integración de Meta Model API existe, pero las rutas nuevas de privacidad, Mission y relevo del candidato todavía necesitan una validación final, expresamente autorizada y con datos ficticios contra la API real.
+- **Validación con Meta:** tres inferencias directas de Chat puro con Muse Spark 1.3 se validaron contra la API real. Los resultados de herramientas de Agent cloud, Delegated, la planificación de Mission y Mission Advisory siguen validados solo con un grabador Meta simulado.
 - **Retorno causal entre modelos:** la escalada automática y el regreso al modelo local gobernado por un verificador siguen siendo investigación, no una capacidad publicada.
-- **Revisión de terminal:** `run_command` no dispone de sandbox del sistema operativo y debe superar su auditoría de seguridad y validación humana separadas antes de distribuirse públicamente.
-- **Distribución:** todavía no se ha publicado ninguna release 0.2. El candidato se está validando como VSIX instalable en un perfil aislado de VS Code; la publicación en el Marketplace llegará después.
+- **Limitación de terminal:** `run_command` es experimental, está desactivado por defecto, solo funciona en Agent local y queda fuera de Mission; cada comando requiere aprobación incluso en Workspace full. No tiene sandbox del sistema operativo y un proceso desacoplado deliberadamente puede sobrevivir a Detener.
+- **Distribución:** v0.2.0 se distribuye como VSIX mediante GitHub Releases. La publicación en Visual Studio Marketplace llegará después.
 - **Plataformas e interfaz:** falta la validación en Windows real. La interfaz y el logotipo actuales son prototipos funcionales que se rediseñarán y pulirán en releases posteriores.
 - **Frontera de seguridad:** no se afirma que la ejecución local, las autorizaciones o las evidencias sean resistentes a cualquier manipulación; los comandos y scripts aprobados se ejecutan con los permisos del usuario de VS Code.
 
@@ -72,9 +72,9 @@ El contenido del repositorio, las salidas de herramientas y las respuestas del m
 
 ## Instalación
 
-### Construir el candidato 0.2.0 actual desde GitHub
+### Construir v0.2.0 desde GitHub
 
-El código actual genera un `rame-code-0.2.0.vsix` instalable; el candidato todavía no es una release publicada.
+El código etiquetado genera un `rame-code-0.2.0.vsix` instalable:
 
 ```bash
 git clone https://github.com/caimari/rame-code.git
@@ -86,16 +86,16 @@ code --install-extension rame-code-0.2.0.vsix
 
 Utiliza Node.js 20 o 24. Revisa el commit fuente y el VSIX generado antes de instalarlo; el empaquetado ejecuta toda la suite automatizada.
 
-### Instalar el último VSIX publicado
+### Instalar el VSIX publicado
 
-Descarga `rame-code-0.1.0.vsix` desde la [release v0.1.0](https://github.com/caimari/rame-code/releases/tag/v0.1.0).
+Descarga `rame-code-0.2.0.vsix` desde la [release v0.2.0](https://github.com/caimari/rame-code/releases/tag/v0.2.0).
 
 ### Desde la interfaz de VS Code
 
 1. Abre **Extensiones** (`Ctrl+Shift+X`).
 2. Abre el menú `...` del panel de Extensiones.
 3. Selecciona **Install from VSIX...** o **Instalar desde VSIX...**.
-4. Selecciona `rame-code-0.1.0.vsix`.
+4. Selecciona `rame-code-0.2.0.vsix`.
 5. Ejecuta **Developer: Reload Window** si VS Code solicita una recarga.
 6. Pulsa el icono **R** de la barra de actividad.
 
@@ -104,7 +104,7 @@ Si utilizas Remote SSH, instala la extensión en el workspace remoto cuando VS C
 ### Desde un terminal
 
 ```bash
-code --install-extension rame-code-0.1.0.vsix
+code --install-extension rame-code-0.2.0.vsix
 ```
 
 Si el comando `code` no existe en el servidor remoto, utiliza **Instalar desde VSIX...** en la ventana conectada de VS Code.
@@ -133,13 +133,13 @@ RAME Code puede arrancar directamente `llama-server`; Ollama no es obligatorio.
 
 El servidor administrado escucha únicamente en `127.0.0.1`. RAME Code solo detiene el proceso que él mismo inició.
 
-**Servidores de modelos (candidato 0.2.0).** RAME también puede conectarse a un servidor que ejecutas tú: Ollama, LM Studio, otro `llama-server` o cualquier servidor compatible con OpenAI. **Buscar modelos** los distingue, lista sus modelos de chat con información de herramientas, visión y contexto, y un modelo que según el servidor no puede llamar herramientas queda limitado a Chat. Un servidor en otro ordenador de tu red privada (una IP privada numérica) solo se usa después de que confirmes que se le enviará el trabajo local; se rechazan las direcciones públicas y los nombres de equipo, y nunca se siguen redirecciones. La «visión» de la lista es una capacidad del modelo; RAME todavía no envía imágenes. Probado de verdad con Muse Glimmer 30B en LM Studio (RTX 3090 Ti, por la red privada) y con Ollama 0.32.5.
+**Servidores de modelos (v0.2.0).** RAME también puede conectarse a un servidor que ejecutas tú: Ollama, LM Studio, otro `llama-server` o cualquier servidor compatible con OpenAI. **Buscar modelos** los distingue, lista sus modelos de chat con información de herramientas, visión y contexto, y un modelo que según el servidor no puede llamar herramientas queda limitado a Chat. Un servidor en otro ordenador de tu red privada (una IP privada numérica) solo se usa después de que confirmes que se le enviará el trabajo local; se rechazan las direcciones públicas y los nombres de equipo, y nunca se siguen redirecciones. La «visión» de la lista es una capacidad del modelo; RAME todavía no envía imágenes. Probado de verdad con Muse Glimmer 30B en LM Studio (RTX 3090 Ti, por la red privada) y con Ollama 0.32.5.
 
-**Acceso web para el Agente (candidato 0.2.0, desactivado por defecto).** `web_search` y `web_fetch`, solo lectura, solo con un modelo local y nunca en las ejecuciones de una Misión; cada llamada se muestra para aprobarla salvo en Workspace full, las direcciones privadas se rechazan después del DNS y en cada redirección, y no se envían consultas con claves o rutas.
+**Acceso web opcional (v0.2.0, desactivado por defecto).** Con un modelo local, Agent puede usar `web_search` y `web_fetch`; esta vía tiene una validación REAL registrada con LM Studio en una LAN privada, DuckDuckGo y `web_fetch`. La web en Chat está implementada, pero es experimental y solo se ha probado con servidores simulados. La web en Mission también está implementada y es experimental: se autoriza por separado con presupuestos de búsquedas/lecturas y dominios opcionales, y solo tiene cobertura con servidores simulados. No presentes Chat ni Mission web como validados contra Internet real. Los destinos privados se rechazan después del DNS y en cada redirección, y no se envían consultas que contengan claves reconocibles o rutas de ficheros. Consulta la [guía de uso](docs/USER_GUIDE.es.md#acceso-web-en-agent-chat-y-mission).
 
-**Comandos de terminal para el Agente (candidato 0.2.0, desactivado por defecto).** `run_command` ejecuta una línea de órdenes en la carpeta del proyecto con tus permisos (sin sandbox), solo con un modelo local y nunca en las ejecuciones de una Misión; cada comando se muestra completo y se aprueba en todos los perfiles, también en Workspace full, con límite de tiempo y salida acotada. **Detener** señala el comando y su grupo normal de procesos, pero un proceso desacoplado deliberadamente puede sobrevivir. Consulta la [guía de uso](docs/USER_GUIDE.es.md).
+**Comandos de terminal para el Agente (v0.2.0, desactivado por defecto).** `run_command` ejecuta una línea de órdenes en la carpeta del proyecto con tus permisos (sin sandbox), solo con un modelo local y nunca en las ejecuciones de una Misión; cada comando se muestra completo y se aprueba en todos los perfiles, también en Workspace full, con límite de tiempo y salida acotada. **Detener** señala el comando y su grupo normal de procesos, pero un proceso desacoplado deliberadamente puede sobrevivir. Consulta la [guía de uso](docs/USER_GUIDE.es.md).
 
-En la extensión pública `v0.1.0`, el funcionamiento local significa que RAME Code envía peticiones de texto a un `llama-server` ejecutado en la propia máquina del usuario. Los modelos se leen desde rutas de disco configuradas por el usuario y no se incluyen en la extensión ni en este repositorio. La alternativa en la nube envía las peticiones a Meta Model API mediante la clave API del propio usuario.
+El funcionamiento local solo envía peticiones al servidor local seleccionado por el usuario. Los modelos se leen desde ubicaciones configuradas por el usuario y no se incluyen en la extensión ni en este repositorio. La alternativa cloud envía peticiones a Meta Model API mediante la clave API del propio usuario.
 
 ### Stack local Meta Muse probado
 
@@ -164,7 +164,7 @@ llama-server \
   --jinja
 ```
 
-**La visión no está activa en la experiencia de usuario de RAME Code `v0.1.0`.** El runtime local puede configurarse para cargar el `mmproj` suministrado por separado, y ese runtime se ha validado independientemente con imágenes y OCR, pero RAME Code todavía no permite adjuntar imágenes ni envía mensajes multimodales. Hasta implementar y verificar esa integración, RAME Code utiliza este stack local únicamente para peticiones de texto de Agent, Mission y Chat.
+**La visión no está activa en la experiencia de usuario de RAME Code v0.2.0.** El runtime local puede configurarse para cargar el `mmproj` suministrado por separado, y ese runtime se ha validado independientemente con imágenes y OCR, pero RAME Code todavía no permite adjuntar imágenes ni envía mensajes multimodales. Hasta implementar y verificar esa integración, RAME Code utiliza este stack local únicamente para peticiones de texto de Agent, Mission y Chat.
 
 ## Perfiles de permisos
 
@@ -176,13 +176,13 @@ llama-server \
 
 El agente queda ligado a una carpeta de workspace seleccionada explícitamente. La terminal opcional `run_command` es una capacidad separada de alto riesgo: está desactivada por defecto, solo se ofrece al Agent local, queda fuera de Mission y siempre exige aprobar el comando completo. Las pruebas mediante `run_tests` siguen limitadas a órdenes derivadas de una allowlist y se ejecutan con `shell: false`, aunque el script del proyecto podría ejecutar código arbitrario.
 
-## Misiones de arranque y verificadas (candidato 0.2.0, sin publicar)
+## Misiones de arranque y verificadas (v0.2.0)
 
 Una Mission puede comenzar en una carpeta vacía. Su primera autorización explícita de arranque puede crear la estructura del proyecto, los scripts del paquete y las pruebas, pero no puede ejecutar esas pruebas ni completar la Mission. RAME revoca entonces ese permiso y se detiene en **Estructura preparada**. El usuario revisa el nuevo comando permitido y los archivos de prueba en una segunda autorización; solo esa segunda autorización puede congelar la aceptación y permitir que continúe la Mission.
 
 En ese punto puede prepararse una **revisión independiente opcional de aceptación** con un modelo Meta Estándar documentado. Prepararla no envía nada: RAME muestra primero el texto exacto y acotado, incluido el requisito original y hasta tres fragmentos de pruebas elegidos entre los candidatos de aceptación ofrecidos. Enviarla requiere una autorización independiente de un solo uso, ligada a la Mission, carpeta, modelo, clase de tratamiento, revisión de la credencial, contenido y límites de bytes/tokens. Spark no recibe herramientas y no puede editar archivos, conceder permisos, elegir o congelar la aceptación ni completar la Mission. Su resultado estructurado es un consejo no confiable que el usuario puede considerar o descartar antes de tomar la decisión local definitiva. Cancelar, superar el presupuesto, recibir una salida mal formada o sufrir un fallo de API deja disponible el flujo local en dos etapas y nunca provoca un reintento automático. En este candidato, esta vía solo se ha verificado con una API de Meta simulada.
 
-## Integridad de la aceptación (candidato 0.2.0, sin publicar)
+## Integridad de la aceptación (v0.2.0)
 
 Una Mission se verifica en uno de tres niveles, y el nivel queda escrito en sus notas del host y en su informe final:
 
@@ -200,11 +200,11 @@ Estas garantías se ponen a prueba con una batería de sabotaje **SIMULATED** (`
 
 La traza de RAME se ejecuta junto al código bajo prueba y se puede falsificar, así que solo es una ayuda para descubrir; lo que decide es lo que comprueba el propio host (los hashes y la huella del proyecto). Separar procesos no es un sandbox. Si VS Code se cierra o se recarga durante una Mission, la ventana antigua no inicia ni escribe nada más. Consulta [Cómo verificarlo](docs/VERIFICATION.es.md). Los resultados se etiquetan como **REAL**, **SIMULATED** o **RECORDED**, y una simulación nunca se presenta como una ejecución real con Glimmer o con Meta.
 
-## Evidencia del modelo (candidato 0.2.0, sin publicar)
+## Evidencia del modelo (v0.2.0)
 
 > RAME doesn't just show what an AI agent did. It shows which model proposed it, what the host allowed, and what independent checks actually passed.
 
-En el candidato 0.2.0, **Detalles de la ejecución → Evidencia del modelo — registrada por RAME Code** muestra, para el hilo abierto, hechos que escribe el host y nunca el modelo. La sección empieza plegada. Primero aparecen las inferencias que propusieron un cambio o una prueba, produjeron la respuesta final, implicaron a Meta o están enlazadas a una comprobación. Las lecturas exploratorias quedan un nivel más abajo y acotadas.
+En v0.2.0, **Detalles de la ejecución → Evidencia del modelo — registrada por RAME Code** muestra, para el hilo abierto, hechos que escribe el host y nunca el modelo. La sección empieza plegada. Primero aparecen las inferencias que propusieron un cambio o una prueba, produjeron la respuesta final, implicaron a Meta o están enlazadas a una comprobación. Las lecturas exploratorias quedan un nivel más abajo y acotadas.
 
 Se distinguen tres niveles:
 
@@ -257,7 +257,7 @@ Cambiar de motor o de modelo en la nube afecta a la petición siguiente, no al h
 
 Antes de que salga cualquier petición a Meta, RAME comprueba la petición que realmente construyó: detiene la que llevaría un mensaje local no aprobado en sus condiciones, o cuya clave de API cambió durante la ejecución; sustituye las rutas absolutas de las carpetas de proyecto abiertas y de la carpeta personal (en Windows sin distinguir mayúsculas, con `\`, `/` o formato UNC, sin tocar rutas parecidas); y censura en los resultados de herramientas que envía los valores con aspecto de secreto (claves, tokens, claves privadas, JWT, credenciales en URL, asignaciones del estilo `*_PASSWORD=` o `*-auth=`). La censura y la sustitución de rutas se basan en patrones: reducen, pero no pueden excluir, el contenido sensible del material que permitas recibir a Meta, y las rutas absolutas distintas de esas carpetas se envían tal como aparecen. La comprobación reconoce textos locales de 24 caracteres o más; los mensajes locales más cortos quedan fuera por cómo se construye cada petición —solo la parte aprobada del hilo, sin búsqueda en el historial para Meta, solo decisiones aprobadas, nunca las notas propias de RAME—, lo que las pruebas automáticas verifican en cada vía (Chat, Agent y sus herramientas, Delegated, plan de Mission), no por detección. Es un control técnico de divulgación, no un consentimiento jurídico conforme a la normativa de protección de datos.
 
-**Limitaciones de privacidad del candidato:** la inspección exhaustiva de peticiones y la cobertura de fallos siguen utilizando una API de Meta simulada que registra cada petición completa. El 4 de noviembre de 2026, el build candidato `e383ea4.src.48ae3cd77018` completó además dos inferencias reales de Chat puro con `muse-spark-1.3`, con consentimiento y Model evidence registrados por RAME; eso valida únicamente la conexión directa de Chat, no los resultados de herramientas de Agent cloud, Delegated, planificación de Mission ni Advisory. Las clases de tratamiento proceden de los ids de modelo documentados que figuran en el código y deben revisarse cuando cambien el catálogo o las condiciones de Meta. En Agent, los mensajes anteriores de más de 4.000 caracteres se envían recortados, y la tarjeta los muestra exactamente como se envían, con el recorte señalado; las entradas de plan que lista la tarjeta no forman parte del historial de Agent, de modo que Agent puede enviar menos de lo que muestra la tarjeta, nunca más. No utilices datos personales, confidenciales ni sensibles reales con Meta durante la validación del candidato.
+**Limitaciones de privacidad de v0.2.0:** la inspección exhaustiva de peticiones y la cobertura de fallos siguen utilizando una API de Meta simulada que registra cada petición completa. El 4 de noviembre de 2026, la validación humana registró tres inferencias reales de Chat puro con `muse-spark-1.3`, con consentimiento y Model evidence registrados por RAME; eso valida únicamente la conexión directa de Chat, no los resultados de herramientas de Agent cloud, Delegated, planificación de Mission ni Advisory. Las clases de tratamiento proceden de los ids de modelo documentados que figuran en el código y deben revisarse cuando cambien el catálogo o las condiciones de Meta. En Agent, los mensajes anteriores de más de 4.000 caracteres se envían recortados, y la tarjeta los muestra exactamente como se envían, con el recorte señalado; las entradas de plan que lista la tarjeta no forman parte del historial de Agent, de modo que Agent puede enviar menos de lo que muestra la tarjeta, nunca más. No utilices datos personales, confidenciales ni sensibles reales con Meta durante el uso de esta preview experimental.
 
 ## Privacy by Design — Privacidad desde el diseño
 
@@ -277,7 +277,7 @@ Entre los mecanismos confirmados en el candidato v0.2.0 están:
 - extractos históricos etiquetados como contexto no fiable, nunca como instrucciones o permisos vigentes; y
 - autorizaciones y límites separados para Advisory de Mission y ejecución Delegated de Agent.
 
-Limitaciones que siguen existiendo: las dos validaciones reales con Meta cubren solo Chat; la matriz completa de divulgación y fallos sigue verificada contra el grabador simulado. La censura de secretos y la sustitución de rutas se basan en patrones y no pueden excluir todo valor sensible; una vez permitidos los resultados de herramientas de Agent para una sesión, su contenido futuro (ya censurado) no puede previsualizarse antes de la ejecución; y las clases de tratamiento dependen de los ids de modelo documentados que figuran en el código. No utilices datos personales, confidenciales ni sensibles reales con Meta durante la validación del candidato.
+Limitaciones que siguen existiendo: las tres inferencias reales con Meta cubren solo Chat; la matriz completa de divulgación y fallos sigue verificada contra el grabador simulado. La censura de secretos y la sustitución de rutas se basan en patrones y no pueden excluir todo valor sensible; una vez permitidos los resultados de herramientas de Agent para una sesión, su contenido futuro (ya censurado) no puede previsualizarse antes de la ejecución; y las clases de tratamiento dependen de los ids de modelo documentados que figuran en el código. No utilices datos personales, confidenciales ni sensibles reales con Meta durante el uso de esta preview experimental.
 
 ### Relación con principios del RGPD
 
@@ -343,7 +343,7 @@ La construcción y revisión posteriores combinaron el acceso existente a **Open
 
 ## Hoja de ruta
 
-Las prioridades inmediatas son completar la auditoría independiente y la validación humana del candidato 0.2, demostrar una instalación limpia mediante VSIX, terminar las comprobaciones en Windows real y con Meta API expresamente autorizada, y publicar una preview reproducible. Las releases posteriores incorporarán entrada de imágenes para Glimmer, refinarán la interfaz y el logotipo provisionales, prepararán la distribución en Visual Studio Marketplace, ampliarán los adaptadores de proyectos verificables y continuarán la investigación sobre relevos entre modelos gobernados por verificadores.
+Después de la release preview v0.2.0, las prioridades son la validación en Windows real, la validación expresamente autorizada de las rutas Meta restantes, la entrada de imágenes para Glimmer, una interfaz e identidad visual refinadas, la distribución en Visual Studio Marketplace, más adaptadores de proyectos verificables y continuar la investigación sobre relevos entre modelos gobernados por verificadores.
 
 ## Licencia
 

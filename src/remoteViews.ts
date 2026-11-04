@@ -222,6 +222,8 @@ export interface RemoteView {
   } | null;
   /** What the open thread shares with Meta now; null when nothing was ever answered. */
   sharing: { messages: number; decisions: 'shared' | 'withheld' | null; toolResults: boolean | null } | null;
+  /** A run waiting for the user's decision on another thread: its card is shown there only. */
+  waitingElsewhere?: { threadId: string; title: string } | null;
 }
 
 export const EMPTY_REMOTE_VIEW: RemoteView = {
@@ -233,6 +235,7 @@ export const EMPTY_REMOTE_VIEW: RemoteView = {
   disclosure: null,
   sharing: null,
   servers: null,
+  waitingElsewhere: null,
 };
 
 const LOCAL_RUNTIME_STATES: ReadonlyArray<RemoteView['runtime']['local']> = ['running', 'starting', 'connected', 'configured', 'stopped', 'not-configured'];
@@ -326,6 +329,12 @@ export function sanitizeRemoteView(value: unknown): RemoteView {
             decisions: sharing.decisions === 'shared' || sharing.decisions === 'withheld' ? sharing.decisions : null,
             toolResults: typeof sharing.toolResults === 'boolean' ? sharing.toolResults : null,
           };
+    })(),
+    waitingElsewhere: (() => {
+      const waiting = object(record.waitingElsewhere);
+      return waiting === null || typeof waiting.threadId !== 'string' || waiting.threadId.length === 0
+        ? null
+        : { threadId: waiting.threadId.slice(0, 128), title: text(waiting.title, 160) };
     })(),
     runtime: {
       local: LOCAL_RUNTIME_STATES.includes(runtime?.local as never) ? (runtime?.local as RemoteView['runtime']['local']) : 'not-configured',

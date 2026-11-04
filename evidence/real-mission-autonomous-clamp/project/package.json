@@ -1,0 +1,8 @@
+{
+  "name": "clamp-util",
+  "version": "1.0.0",
+  "description": "Minimal clamp utility",
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -481,7 +481,8 @@ test('the Mission card is in the thread, keyboard reachable, and announces with 
   assert.match(chat, /<div id="missionAcceptanceList" class="file-picker" role="group" aria-label="Acceptance files"><\/div>/);
   assert.match(chat, /<fieldset id="missionConsultRow" hidden>/);
   assert.match(chat, /<select id="missionConsults" aria-label="Maximum Meta consultations">/);
-  assert.match(chat, /<option value="0">0 — off<\/option>/);
+  // Meta advice is opt-in: "0 — off" is the preselected value (decision 2026-11-04).
+  assert.match(chat, /<option value="0" selected>0 — off<\/option>/);
   assert.match(chat, /<option value="1" selected>1<\/option>/);
   assert.match(chat, /id="missionConsultSummary" class="hint" role="status" aria-live="polite"/);
   assert.ok(chat.indexOf('id="missionConsultRow"') < chat.indexOf('id="missionStart"'), 'the advisory grant is reviewed before authorization');

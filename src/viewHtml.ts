@@ -8,7 +8,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { localSectionHtml, webAccessHtml } from './localSectionHtml.js';
+import { localSectionHtml, localSourceBannerHtml, localSourceChoiceHtml, missionWebHtml, webAccessHtml } from './localSectionHtml.js';
 import { missionAcceptanceReviewHtml } from './missionAcceptanceReviewHtml.js';
 
 export interface ViewHtmlOptions {
@@ -88,6 +88,8 @@ button.icon-btn.gear { font-size: 15px; }
 #homeCalm { min-height: 24px; }
 #conversationSection { display: flex; flex: 1 1 auto; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; overflow-y: auto; }
 #conversationSection[hidden] { display: none; }
+/* A scrolling flex column must never squeeze a card: an item with overflow hidden would shrink below its content and clip it. */
+#conversationSection > * { flex-shrink: 0; }
 #conversationBar { display: flex; align-items: center; gap: 6px; min-width: 0; position: sticky; top: 0; z-index: 1; background-color: var(--vscode-sideBar-background); padding: 2px 0; }
 #threadTitle { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; margin: 0; }
 #transcriptSection { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -133,8 +135,15 @@ section.settings-block > .hint { line-height: 1.45; margin-bottom: 2px; }
 #modelEvidence .evidence-link { padding-left: 12px; }
 #modelEvidenceOther[hidden] { display: none; }
 #profileSelect[hidden] { display: none; }
-#agentBox { border: 2px solid var(--vscode-inputValidation-warningBorder, #b89500); border-radius: 6px; padding: 8px; background-color: var(--vscode-editor-background); box-shadow: 0 4px 16px rgba(0,0,0,0.25); position: relative; z-index: 5; min-width: 0; max-width: 100%; box-sizing: border-box; overflow: hidden; }
+#agentBox { border: 2px solid var(--vscode-inputValidation-warningBorder, #b89500); border-radius: 6px; padding: 8px; background-color: var(--vscode-editor-background); box-shadow: 0 4px 16px rgba(0,0,0,0.25); position: relative; z-index: 5; min-width: 0; max-width: 100%; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; max-height: max(14em, 70vh); }
 #agentBox[hidden] { display: none; }
+/* The details scroll inside the card; the heading and the buttons stay in it, reachable at any panel size. */
+#pendingDetails { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+#agentBox > h3, #agentBox > .row { flex: 0 0 auto; }
+#pendingTargets, #pendingMeta { overflow-wrap: anywhere; max-height: 8em; overflow-y: auto; }
+section[role="dialog"] .row { flex-wrap: wrap; }
+#waitingElsewhere { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+#waitingElsewhere[hidden] { display: none; }
 #agentBox h3 { margin-top: 0; }
 #pendingBody { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; min-width: 0; max-width: 100%; max-height: min(42vh, 320px); box-sizing: border-box; overflow-y: auto; overflow-x: hidden; }
 #agentSection[hidden] { display: none; }
@@ -272,6 +281,11 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
   #modeSelect { max-width: 82px; }
   #runtimeStatus { max-width: 140px; }
 }
+@media (max-width: 300px) {
+  /* Below ~280 px the five columns overflowed and cut off Send / Stop: the mode moves to a second row. */
+  #composerToolbar { grid-template-columns: 32px auto minmax(0, 1fr) 32px; }
+  #modeSelect { grid-column: 1 / 4; grid-row: 2; max-width: none; }
+}
 @media (max-width: 260px) {
   .view-header { gap: 4px; }
   button.icon-btn { padding: 2px 5px; min-width: 26px; }
@@ -369,8 +383,8 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
             <div id="missionConsultCountRow">
               <label for="missionConsults">Maximum consultations for this Mission</label>
               <select id="missionConsults" aria-label="Maximum Meta consultations">
-                <option value="0">0 — off</option>
-                <option value="1" selected>1</option>
+                <option value="0" selected>0 — off</option>
+                <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
                 <option value="4">4</option>
@@ -392,6 +406,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
               <p class="hint">RAME refuses before sending anything that would exceed these limits and never raises them itself.</p>
             </details>
           </fieldset>
+    ${missionWebHtml}
           <div class="row">
             <button id="missionStart" type="button">Authorize and start</button>
           </div>
@@ -500,13 +515,16 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
       </section>
       <section id="agentBox" role="dialog" aria-modal="false" aria-labelledby="agent-pending-heading" hidden>
         <h3 id="agent-pending-heading">Pending approval — review exact action</h3>
-        <p id="pendingTool" class="hint"></p>
-        <p id="pendingTargets" class="hint"></p>
-        <p id="pendingBody" class="hint"></p>
-        <p id="pendingMeta" class="hint"></p>
-        <div class="row">
+        <div id="pendingDetails">
+          <p id="pendingTool" class="hint"></p>
+          <p id="pendingTargets" class="hint"></p>
+          <p id="pendingBody" class="hint"></p>
+          <p id="pendingMeta" class="hint"></p>
+        </div>
+        <div class="row" id="pendingActions">
           <button id="pendingApprove" type="button">Approve action</button>
           <button id="pendingReject" type="button">Reject</button>
+          <button id="pendingCancel" type="button" title="Stop this run without doing the action. The conversation is kept.">Cancel run</button>
         </div>
       </section>
       <details id="runDetails">
@@ -537,6 +555,8 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
       </details>
     </div>
     <footer id="composer-wrap">
+      <p id="waitingElsewhere" role="status" hidden><span id="waitingElsewhereText"></span> <button id="waitingElsewhereOpen" type="button">Open that thread</button></p>
+      <p id="authorizationPending" role="status" hidden><span id="authorizationPendingText"></span> <button id="authorizationPendingReview" type="button">Review</button></p>
       <div id="composerCard">
         <label for="composer">Message</label>
         <textarea id="composer" rows="3" placeholder="Describe the software goal."></textarea>
@@ -626,7 +646,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
         </select>
         <p class="hint">One provider only. Change it here; the Chat screen shows a read-only status.</p>
       </section>
-      <section class="settings-block" id="generationSection" aria-labelledby="generation-heading">
+${localSourceChoiceHtml}      <section class="settings-block" id="generationSection" aria-labelledby="generation-heading">
         <h3 id="generation-heading">Generation</h3>
         <p id="generationModel" class="hint" role="status"></p>
         <label for="reasoningSelect">Reasoning effort</label>
@@ -661,7 +681,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
     <details class="settings-card" id="cardRuntime" hidden>
       <summary><span class="card-title">Runtime</span> <span class="card-summary" id="summaryRuntime"></span></summary>
       <div class="card-body">
-${localSectionHtml}      </div>
+${localSourceBannerHtml}${localSectionHtml}      </div>
     </details>
     <details class="settings-card" id="cardMission" hidden>
       <summary><span class="card-title">Mission</span> <span class="card-summary" id="summaryMission"></span></summary>

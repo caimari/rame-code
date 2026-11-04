@@ -9,6 +9,37 @@
     'Configured: {0} · context {1} · mmproj {2} · DFlash draft {3}': 'Configurado: {0} · contexto {1} · mmproj {2} · borrador DFlash {3}',
     'Configured: external endpoint · requested model id {0}': 'Configurado: endpoint externo · id de modelo solicitado {0}',
     'Configured: no local model': 'Configurado: ningún modelo local',
+    'Running: {0} · {1} — {2}; the weights it runs are not verified': 'En ejecución: {0} · {1} — {2}; los pesos que ejecuta no se verifican',
+    'Running: OpenAI-compatible endpoint on another computer of the private network — server/model identity not verified': 'En ejecución: endpoint compatible con OpenAI en otro ordenador de la red privada — identidad del servidor/modelo no verificada',
+    'Provider: {0} · {1} · {2}': 'Proveedor: {0} · {1} · {2}',
+    'Provider: external OpenAI-compatible endpoint (server type and network not recorded by the build that ran it)': 'Proveedor: endpoint externo compatible con OpenAI (la build que lo ejecutó no registró el tipo de servidor ni la red)',
+    "Model id in the server's answer: {0} (as the server wrote it)": 'Id de modelo en la respuesta del servidor: {0} (tal como lo escribió el servidor)',
+    'llama-server launched by RAME': 'llama-server lanzado por RAME',
+    'OpenAI-compatible server': 'servidor compatible con OpenAI',
+    'OpenAI-compatible endpoint': 'endpoint compatible con OpenAI',
+    'on this computer (loopback)': 'en este ordenador (loopback)',
+    'on another computer of the private network': 'en otro ordenador de la red privada',
+    'started by RAME': 'arrancado por RAME',
+    "type identified from the server's own API": 'tipo identificado por la propia API del servidor',
+    'type as you chose it; not verified': 'tipo según tu elección; sin verificar',
+    'Server: {0} · version {1}': 'Servidor: {0} · versión {1}',
+    'unknown': 'desconocido',
+    'Requested model id: {0} · listed by the server: {1}': 'Id de modelo solicitado: {0} · el servidor lo lista: {1}',
+    'Model the server reports as loaded: {0}': 'Modelo que el servidor dice tener cargado: {0}',
+    'Model the server reports as loaded: not reported': 'Modelo que el servidor dice tener cargado: no informado',
+    'Reported by the server: family {0} · parameters {1} · quantization {2} · format {3} · context {4} (trained {5})': 'Según el servidor: familia {0} · parámetros {1} · cuantización {2} · formato {3} · contexto {4} (entrenado {5})',
+    'Digest announced by Ollama: sha256:{0} — announced by the server, not verified by RAME, and not documented as the hash of a GGUF file': 'Digest anunciado por Ollama: sha256:{0} — lo anuncia el servidor, RAME no lo verifica y no está documentado como el hash de un fichero GGUF',
+    'Evidence levels': 'Niveles de evidencia',
+    'Configured: {0}': 'Configurado: {0}',
+    'Endpoint verified (it answered and identified itself through its API in this session): {0}': 'Endpoint verificado (respondió y se identificó por su API en esta sesión): {0}',
+    'Model artifact verified (SHA-256 of the GGUF of the llama-server RAME launched): {0}': 'Artefacto del modelo verificado (SHA-256 del GGUF del llama-server lanzado por RAME): {0}',
+    'Response observed in this session: {0}': 'Respuesta observada en esta sesión: {0}',
+    "A response observed, even with a digest announced by the server, does not prove which weights an external server ran.": 'Una respuesta observada, aunque el servidor anuncie un digest, no prueba qué pesos ejecutó un servidor externo.',
+    'SHA-256 of {0} ({1} bytes), computed by RAME: {2}': 'SHA-256 de {0} ({1} bytes), calculado por RAME: {2}',
+    'The earlier SHA-256 of {0} no longer applies: {1}': 'El SHA-256 anterior de {0} ya no es válido: {1}',
+    'Computing SHA-256 of {0}: {1}%': 'Calculando el SHA-256 de {0}: {1}%',
+    'SHA-256 not computed: {0}': 'SHA-256 no calculado: {0}',
+    'A file rewritten with the same size and modification time is detected only by computing the hash again.': 'Un fichero reescrito con el mismo tamaño y la misma fecha de modificación solo se detecta volviendo a calcular el hash.',
     'yes': 'sí',
     'no': 'no',
     'Running: llama-server launched by RAME · loopback · {0} · {1}': 'En ejecución: llama-server lanzado por RAME · loopback · {0} · {1}',
@@ -79,6 +110,8 @@
     'invalid tool arguments': 'argumentos de herramienta no válidos',
     'Tool call {0}: {1}': 'Llamada {0}: {1}',
     'No host action recorded': 'No consta ninguna acción del host',
+    "Host action: you chose the project folder in VS Code's picker; nothing in it was read or changed": 'Acción del host: elegiste la carpeta del proyecto en el selector de VS Code; no se leyó ni cambió nada en ella',
+    'Host action: no folder chosen; nothing ran': 'Acción del host: no se eligió ninguna carpeta; no se ejecutó nada',
     'approved by you': 'aprobada por ti',
     'allowed by the permission profile': 'permitida por el perfil de permisos',
     'allowed by the Mission grant': 'permitida por la autorización de la misión',
@@ -146,13 +179,70 @@
         r.contextConfirmed === null ? t('context not confirmed') : tf('context {0} confirmed by /props', r.contextConfirmed),
         t(r.template === 'muse-glimmer' ? 'Muse Glimmer template confirmed by /props' : 'template not confirmed')));
     } else if (r) {
-      out.push(t('Running: OpenAI-compatible loopback endpoint — server/model identity not verified'));
+      var id = now.local.identity && now.local.identity.identity;
+      if (id && id.basis !== 'declared') {
+        out.push(tf('Running: {0} · {1} — {2}; the weights it runs are not verified', t(KIND[id.kind] || id.kind), t(SCOPE[id.scope]), t(BASIS[id.basis])));
+      } else {
+        out.push(t(r.scope === 'private-network'
+          ? 'Running: OpenAI-compatible endpoint on another computer of the private network — server/model identity not verified'
+          : 'Running: OpenAI-compatible loopback endpoint — server/model identity not verified'));
+      }
     } else {
       out.push(t('Running: no'));
     }
     out.push(t(now.local.observed ? 'Verified response: response observed in this session' : 'Verified response: none in this session'));
+    out = out.concat(identityLines(now.local.identity, t, tf));
     out.push(tf('Meta Model API: {0} · key {1} · response observed in this session: {2}', now.cloud.model, t(now.cloud.keyStored ? 'stored' : 'not stored'), t(now.cloud.observed ? 'yes' : 'no')));
-    out.push(t('The file name is what RAME passed to llama-server with -m; the weights are not verified cryptographically.'));
+    // Only about the llama-server RAME launches: an external server gets no -m from RAME.
+    if ((c && c.kind === 'owned') || (r && r.kind === 'rame-launched')) {
+      out.push(t('The file name is what RAME passed to llama-server with -m; the weights are not verified cryptographically.'));
+    }
+    return out;
+  }
+
+  var KIND = { 'rame-llama-server': 'llama-server launched by RAME', 'llama-server': 'llama-server', ollama: 'Ollama', lmstudio: 'LM Studio', 'openai-compatible': 'OpenAI-compatible server', unknown: 'OpenAI-compatible endpoint' };
+  var SCOPE = { loopback: 'on this computer (loopback)', 'private-network': 'on another computer of the private network' };
+  var BASIS = { launched: 'started by RAME', detected: "type identified from the server's own API", declared: 'type as you chose it; not verified' };
+
+  /** What the local server says about itself, the GGUF hash, and the evidence levels. Server claims are labelled as such. */
+  function identityLines(view, t, tf) {
+    if (!view) {
+      return [];
+    }
+    var out = [];
+    var id = view.identity;
+    var dash = function (v) { return v === null || v === undefined ? '—' : String(v); };
+    if (id) {
+      out.push(tf('Server: {0} · version {1}', t(KIND[id.kind] || id.kind), id.serverVersion || t('unknown')));
+      out.push(tf('Requested model id: {0} · listed by the server: {1}', id.requestedModel, t(id.listed === null ? 'unknown' : id.listed ? 'yes' : 'no')));
+      out.push(id.servedModel ? tf('Model the server reports as loaded: {0}', id.servedModel) : t('Model the server reports as loaded: not reported'));
+      if (id.family || id.parameters || id.quantization || id.format || id.contextReported || id.contextTrained) {
+        out.push(tf('Reported by the server: family {0} · parameters {1} · quantization {2} · format {3} · context {4} (trained {5})', dash(id.family), dash(id.parameters), dash(id.quantization), dash(id.format), dash(id.contextReported), dash(id.contextTrained)));
+      }
+      if (id.announcedDigest) {
+        out.push(tf('Digest announced by Ollama: sha256:{0} — announced by the server, not verified by RAME, and not documented as the hash of a GGUF file', id.announcedDigest));
+      }
+      (id.notes || []).forEach(function (note) { out.push(note); });
+    }
+    var a = view.artifact || { state: 'none' };
+    if (a.state === 'verified') {
+      out.push(tf('SHA-256 of {0} ({1} bytes), computed by RAME: {2}', a.file, a.size, a.sha256));
+      out.push(t('A file rewritten with the same size and modification time is detected only by computing the hash again.'));
+    } else if (a.state === 'stale') {
+      out.push(tf('The earlier SHA-256 of {0} no longer applies: {1}', a.file, a.reason));
+    } else if (a.state === 'hashing') {
+      out.push(tf('Computing SHA-256 of {0}: {1}%', a.file, a.percent));
+    } else if (a.state === 'failed') {
+      out.push(tf('SHA-256 not computed: {0}', a.reason));
+    }
+    var l = view.levels || {};
+    var yes = function (v) { return t(v ? 'yes' : 'no'); };
+    out.push(t('Evidence levels'));
+    out.push(tf('Configured: {0}', yes(l.configured)));
+    out.push(tf('Endpoint verified (it answered and identified itself through its API in this session): {0}', yes(l.endpointVerified)));
+    out.push(tf('Model artifact verified (SHA-256 of the GGUF of the llama-server RAME launched): {0}', yes(l.artifactVerified)));
+    out.push(tf('Response observed in this session: {0}', yes(l.responseObserved)));
+    out.push(t('A response observed, even with a digest announced by the server, does not prove which weights an external server ran.'));
     return out;
   }
 
@@ -179,6 +269,11 @@
       return out;
     }
     var approval = a.approval ? t(APPROVAL[a.approval]) : '—';
+    if (call.tool === 'request_project_folder') {
+      // The user's own choice in the folder picker; no file action, no digest.
+      out.push(t(a.result === 'applied' ? "Host action: you chose the project folder in VS Code's picker; nothing in it was read or changed" : 'Host action: no folder chosen; nothing ran'));
+      return out;
+    }
     if (a.result === 'applied' && a.commandId !== null) {
       out.push(tf('Host action: {0} and ran · {1} exit={2} · digest {3}', approval, a.commandId, a.exitCode === null ? '?' : a.exitCode, short(a.digest)));
     } else if (a.result === 'applied') {
@@ -219,11 +314,14 @@
         : 'Authority: Meta selected as the runtime'));
       out.push(tf('Response observed: {0}', t(answered ? 'yes' : 'no')));
     } else {
-      out.push(t(rt.kind === 'rame-launched' ? 'Provider: local llama-server' : rt.kind === 'external-endpoint' ? 'Provider: OpenAI-compatible loopback endpoint' : 'Provider: local (not running)'));
+      out.push(providerLine(rt, t, tf));
       out.push(tf(rt.kind === 'external-endpoint' ? 'Requested model id: {0}' : 'Configured model: {0}', rt.model));
       var who = t(rt.kind === 'rame-launched' ? 'RAME-launched process' : rt.kind === 'external-endpoint' ? 'server/model identity not verified' : 'not running');
       var level = t(answered ? 'response observed' : e.identity === 'running' ? 'running · no response observed' : 'configured only · no response');
       out.push(tf('Identity: {0}', who + ' · ' + level));
+      if (rt.server && rt.server.responded) {
+        out.push(tf("Model id in the server's answer: {0} (as the server wrote it)", rt.server.responded));
+      }
     }
     var usage = e.usage ? tf('Observed usage: {0} input · {1} output tokens', num(e.usage.input, language), num(e.usage.output, language)) : t('Observed usage: not reported');
     out.push(e.finish ? usage + ' · ' + tf('finish: {0}', e.finish) : usage);
@@ -237,6 +335,27 @@
       out.push(tf('No response: {0}', e.failure));
     }
     return out;
+  }
+
+  /**
+   * Which server answered, from what this record stored at the time. A record
+   * from an earlier build has no server facts: it is not given any now.
+   */
+  function providerLine(rt, t, tf) {
+    if (rt.kind === 'rame-launched') {
+      return t('Provider: local llama-server');
+    }
+    if (rt.kind !== 'external-endpoint') {
+      return t('Provider: local (not running)');
+    }
+    var server = rt.server;
+    if (!server) {
+      return t('Provider: external OpenAI-compatible endpoint (server type and network not recorded by the build that ran it)');
+    }
+    if ((server.kind === 'unknown' || server.kind === 'openai-compatible') && server.basis === 'declared' && server.scope === 'loopback') {
+      return t('Provider: OpenAI-compatible loopback endpoint');
+    }
+    return tf('Provider: {0} · {1} · {2}', t(KIND[server.kind] || server.kind), t(SCOPE[server.scope]), t(BASIS[server.basis]));
   }
 
   /** Plain data for the view and for tests: every line already translated. */

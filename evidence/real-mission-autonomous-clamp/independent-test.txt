@@ -1,0 +1,22 @@
+Independent verification by Codex on 2026-11-04
+
+The three project files were copied byte-for-byte to a temporary directory.
+The original project was not modified.
+
+Runtime: Node v20.19.0; npm 11.11.0
+Command: npm test (node --test)
+
+Results:
+- tests: 3
+- pass: 3
+- fail: 0
+- cancelled: 0
+- skipped: 0
+
+Observed cases:
+- value inside range returns value: passed
+- value below minimum returns minimum: passed
+- value above maximum returns maximum: passed
+
+Additional direct assertions: 3/3 passed.
+Every original SHA-256 remained unchanged after verification.

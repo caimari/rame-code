@@ -144,6 +144,10 @@ test('after advice, authority stays restricted: another passing test does not re
     const final = liveOf(h.last())?.remote;
     assert.equal(final?.causalState, 'normal');
     assert.equal(final?.validResponses, 1);
+    // Visible while it happens, and after: which Meta model, which consultation of how many.
+    const statuses = h.posted.map((state) => String(state.status));
+    assert.ok(statuses.some((status) => /^Consulting Meta muse-spark-1\.3 for advice \(consultation 1 of 1\); only the bounded text shown in Remote advice is sent, and Glimmer keeps control\.$/.test(status)), 'shown while Meta is consulted');
+    assert.ok(statuses.some((status) => /^Meta muse-spark-1\.3 answered \(consultation 1 of 1\); Glimmer continues locally/.test(status)), 'shown when Meta answered');
   });
 });
 
@@ -223,6 +227,8 @@ test('cancelled before sending is not counted; cancelled after sending is', asyn
     memory: { listCurrentDecisions: () => [] },
     chatRunner: { start: (work: (context: { signal: AbortSignal }) => Promise<unknown>) => start(work) },
     recordUsage: () => {},
+    status: '',
+    postState: async () => undefined,
     updateActiveMission: async (change: (mission: MissionRecord) => { ok: boolean }) => {
       const current = missions.get(id) as MissionRecord;
       return (await missions.update(id, current.revision, change as never)).ok;

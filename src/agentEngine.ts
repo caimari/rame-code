@@ -65,6 +65,8 @@ import {
 import {
   applyPatchViaFs,
   checkReplacement,
+  commitModelProposal,
+  describeMemoryProposal,
 } from './agentController.js';
 import { type LocalStopKind } from './cascade.js';
 import { agentContinuity } from './agentContinuity.js';
@@ -73,10 +75,10 @@ import { contextSelectionBudget, selectedTurnIndexes } from './contextBudget.js'
 import { recordedHistorySearch } from './continuityLogHost.js';
 import { offerConsult } from './remoteController.js';
 import { checkUserStatement } from './decisionSource.js';
+import { runAgentWithoutProject } from './agentNoProject.js';
+import { BOOTSTRAP_TESTS_WAIT } from './missionStore.js';
 import {
-  describeProposal,
   scopeIdForRoot,
-  type MemoryAuthorization,
   type MemoryProposal,
 } from './decisionStore.js';
 import { GenerationContextError } from './generationSettings.js';
@@ -113,10 +115,6 @@ import {
   isRecoverableAgentToolError,
   summarizeToolResult,
 } from './toolResultSummary.js';
-import {
-  memoryPreconditionKey,
-  memoryPreconditionValue,
-} from './projectMemory.js';
 import type { AgentDecision, ProviderHost, RunGeneration } from './providerTypes.js';
 
 const AGENT_STEPS_WARNING_REMAINING = 2;
@@ -159,7 +157,7 @@ function historyText(text: string): string {
 function recordAgentAudit(
   host: ProviderHost,
   pending: PendingAgentAction,
-  decision: 'human' | 'profile-auto' | 'rejected' | 'policy',
+  decision: 'human' | 'profile-auto' | 'mission-grant' | 'rejected' | 'policy',
   result: string,
 ): void {
   const entry = host.audit.append({
@@ -509,61 +507,6 @@ async function prepareModelArtifact(
   });
 }
 
-function describeMemoryProposal(
-  _host: ProviderHost,
-  proposal: MemoryProposal,
-): { targets: string[]; body: string; preconditions: Record<string, string> } {
-  const body = `${describeProposal(proposal)}\nProposal ${proposal.proposalId}, digest ${proposal.digest}.`;
-  if (proposal.kind === 'decision') {
-    return {
-      targets: [`memory:${proposal.key}`],
-      body,
-      preconditions: { [memoryPreconditionKey(proposal.scopeId, proposal.key)]: memoryPreconditionValue(proposal.expectedVersion) },
-    };
-  }
-  return {
-    targets: [proposal.path, `memory:${proposal.decisionKey}`],
-    body,
-    preconditions: {
-      [proposal.path]: proposal.fileHash,
-      [memoryPreconditionKey(proposal.scopeId, proposal.decisionKey)]: memoryPreconditionValue(proposal.decisionVersion),
-    },
-  };
-}
-
-async function commitModelProposal(
-  host: ProviderHost,
-  proposal: MemoryProposal,
-  approved: PendingAgentAction | null,
-  threadId: string,
-  provider: ProviderId,
-): Promise<string> {
-  if (approved === null || !approved.used) {
-    host.memory.discardProposals({ proposalId: proposal.proposalId });
-    return 'not written: memory changes need your approval.';
-  }
-  const authorization: MemoryAuthorization = {
-    proposalId: proposal.proposalId,
-    proposalDigest: proposal.digest,
-    scopeId: proposal.scopeId,
-    threadId,
-    provider,
-    approvedBy: 'user',
-    approvalDigest: approved.digest,
-    approvedAt: Date.now(),
-  };
-  const result = await host.memory.commitAuthorizedChange(authorization);
-  if (!result.ok) {
-    return `not written: ${result.error}`;
-  }
-  if ('version' in result.value) {
-    const entry = result.value;
-    return `committed ${entry.key} v${entry.version} = ${entry.op === 'delete' ? '(removed)' : JSON.stringify(entry.value)} (approved by you)`;
-  }
-  const binding = result.value;
-  return `recorded ${binding.path} as verified against ${binding.decisionKey} v${binding.decisionVersion} (approved by you)`;
-}
-
 function bindArtifactHint(
   host: ProviderHost,
   resultText: string,
@@ -658,8 +601,14 @@ export async function sendAgent(
   generation: RunGeneration,
   resolvedTarget?: { root: string; label: string },
 ): Promise<void> {
-  const profile: AgentProfileId = capProfile(host.settings.agentProfile ?? DEFAULT_AGENT_PROFILE, host.missionProfileCap);
-  const target: { ok: true; root: string; label: string } | { ok: false; cancelled: boolean; error: string } = resolvedTarget
+  if (resolvedTarget?.root === '' && provider === 'local' && host.missionAuto === null) {
+    // A new thread with no folder, or several, open: Agent without a project (agentFolder.ts).
+    return runAgentWithoutProject(host, threadId, text, generation);
+  }
+  // A Mission run is governed by its own authorization, never by the Agent selector: reads run (as in a
+  // supervised Mission), and writes and tests run on their own only through an autonomous grant.
+  const profile: AgentProfileId = host.activeMission !== null ? 'safe-auto' : capProfile(host.settings.agentProfile ?? DEFAULT_AGENT_PROFILE, host.missionProfileCap);
+  const target: { ok: true; root: string; label: string } | { ok: false; cancelled: boolean; error: string } = resolvedTarget?.root
     ? { ok: true, root: resolvedTarget.root, label: resolvedTarget.label }
     : await host.resolveAgentRunRoot();
   if (!target.ok) {
@@ -896,6 +845,7 @@ export async function sendAgent(
           toolChoice,
         });
         host.recordUsage(modelProvider.id, completion.usage);
+        host.cloudConfirmed ||= modelProvider.id === 'cloud';
         inference = { id: recordAgentStep(host, threadId, evidenceRun, provider, model, { completion }), calls: completion.toolCalls };
         if (modelProvider.id === 'local') {
           host.armIdleShutdown();
@@ -1057,7 +1007,8 @@ export async function sendAgent(
         }
         const testContext = await host.testCommandContext(workspaceId);
         const bootstrap = host.missionAuto !== null && host.missions.get(host.missionAuto.missionId)?.grant?.bootstrap === true;
-        const gate = policyGateForCall(call, bootstrap ? [] : testContext.allowlist);
+        // An empty-project Mission runs no test until the user authorizes its verification stage: say so, never "retry".
+        const gate = bootstrap && call.tool === 'run_tests' ? { ok: false as const, error: BOOTSTRAP_TESTS_WAIT } : policyGateForCall(call, bootstrap ? [] : testContext.allowlist);
         if (!gate.ok) {
           recordBlockedProposal(host, call, provider, threadId, workspaceId, gate.error);
           recordHostAction(call, describeAgentCall(call).targets, `blocked by policy: ${gate.error}`);
@@ -1072,7 +1023,9 @@ export async function sendAgent(
             role: 'tool',
             tool_call_id: call.id,
             content: truncateToolOutput(
-              call.tool === 'run_tests'
+              gate.error === BOOTSTRAP_TESTS_WAIT
+                ? `Not run: ${gate.error} Do not call run_tests again in this Mission stage. Finish the scaffold files and end this run with a short report.`
+                : call.tool === 'run_tests'
                 ? `Rejected by host policy: ${gate.error} No action ran. Read package.json and retry with commandId npm:<safe-script-name>; for the test script use npm:test.`
                 : gate.error === WINDOWS_SET_EXECUTABLE_ERROR
                   ? `Rejected by host policy: ${gate.error} No action ran. Do not retry it; Windows has no executable bit, so continue without it.`
@@ -1192,7 +1145,7 @@ export async function sendAgent(
           }
           memoryProposal = prepared.value;
           memoryProposals.set(call.id, memoryProposal);
-          described = describeMemoryProposal(host, memoryProposal);
+          described = describeMemoryProposal(memoryProposal);
         }
         const digest = computeActionDigest({
           tool: call.tool,
@@ -1203,12 +1156,12 @@ export async function sendAgent(
           threadId,
           preconditions: described.preconditions,
         });
-        const auto =
-          isAutoAllowed(profile, call.tool) ||
-          missionGrantAllows(host, call.tool, memoryScope.scopeId, provider, model, {
-            commandId: String((call.args as Record<string, unknown>).commandId ?? ''),
-            packageJsonHash: hashContent(testContext.packageJsonRaw),
-          });
+        const byGrant = missionGrantAllows(host, call.tool, memoryScope.scopeId, provider, model, {
+          commandId: String((call.args as Record<string, unknown>).commandId ?? ''),
+          packageJsonHash: hashContent(testContext.packageJsonRaw),
+        });
+        const auto = byGrant || isAutoAllowed(profile, call.tool);
+        const autoDecision = byGrant ? ('mission-grant' as const) : ('profile-auto' as const);
         let approvedPending: PendingAgentAction | null = null;
         if (!auto) {
           const pending = createPendingAction(
@@ -1292,7 +1245,7 @@ export async function sendAgent(
             return 'policy-stop';
           }
         }
-        approvedBy = { digest, approval: approvedPending ? 'human' : isAutoAllowed(profile, call.tool) ? 'profile' : 'mission-grant' };
+        approvedBy = { digest, approval: approvedPending ? 'human' : byGrant ? 'mission-grant' : 'profile' };
         const journalId = `act-${digest.slice(0, 12)}`;
         if (host.activeMission !== null) {
           const journaled = await host.updateActiveMission((mission) =>
@@ -1343,7 +1296,7 @@ export async function sendAgent(
             recordAgentAudit(
               host,
               approvedPending ?? autoAuditRecord(host, call, described, provider, workspaceId, threadId, digest),
-              approvedPending ? 'human' : 'profile-auto',
+              approvedPending ? 'human' : autoDecision,
               recorded,
             );
             recordHostAction(call, described.targets, recorded);
@@ -1375,7 +1328,7 @@ export async function sendAgent(
         recordAgentAudit(
           host,
           approvedPending ?? autoAuditRecord(host, call, described, provider, workspaceId, threadId, digest),
-          approvedPending ? 'human' : 'profile-auto',
+          approvedPending ? 'human' : autoDecision,
           summarizeToolResult(call.tool, resultText),
         );
         recordHostAction(call, described.targets, summarizeToolResult(call.tool, resultText));

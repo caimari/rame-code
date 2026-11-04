@@ -10,6 +10,8 @@
 
 import { AgentOutputTruncatedError, LocalMalformedToolCallError, type AgentCompletion } from './agentModel.js';
 import { AgentToolProtocolError } from './agentTools.js';
+import { endpointLabel, requestedLocalModel, type EvidenceServer } from './localIdentity.js';
+import { localIdentityView, serverForEvidence } from './localIdentityHost.js';
 import { classifyMetaFailure } from './metaFailures.js';
 import { acceptanceState } from './missionPhase.js';
 import {
@@ -36,21 +38,28 @@ import type { ProviderUsage } from './usage.js';
 
 const WRITE_TOOLS = new Set(['apply_patch', 'replace_in_file', 'create_directory', 'move_file', 'delete_file', 'set_executable']);
 
-function localRuntime(host: ProviderHost): { runtime: EvidenceRuntime; running: boolean } {
+/** The server facts, only when there is a local endpoint (records stay exact-key valid). */
+function withServer(host: ProviderHost, responded: string | null): { server?: EvidenceServer } {
+  const server = serverForEvidence(host, responded);
+  return server === undefined ? {} : { server };
+}
+
+function localRuntime(host: ProviderHost, responded: string | null = null): { runtime: EvidenceRuntime; running: boolean } {
   const endpoint = host.localEndpoint();
   const launch = host.localLaunch;
   const props = endpoint !== null && host.localProps?.endpoint === endpoint ? host.localProps.props : null;
   const confirmed = { contextConfirmed: props?.contextWindow ?? null, template: props?.template ?? 'unknown' } as const;
   if (endpoint !== null && launch !== null && launch.endpoint === endpoint) {
     return {
-      runtime: { kind: 'rame-launched', model: launch.model, contextConfigured: launch.contextSize, ...confirmed, projector: launch.projector, draft: launch.draft },
+      runtime: { kind: 'rame-launched', model: launch.model, contextConfigured: launch.contextSize, ...confirmed, projector: launch.projector, draft: launch.draft, ...withServer(host, responded) },
       running: true,
     };
   }
   if (endpoint !== null) {
-    const requested = host.settings.local.modelId.trim() || 'local-glimmer';
+    // The id RAME really puts in its requests (the model chosen on the server, else the configured id).
+    const requested = requestedLocalModel(host.settings, endpoint);
     return {
-      runtime: { kind: 'external-endpoint', model: requested, contextConfigured: null, ...confirmed, projector: false, draft: false },
+      runtime: { kind: 'external-endpoint', model: requested, contextConfigured: null, ...confirmed, projector: false, draft: false, ...withServer(host, responded) },
       running: host.localConfirmed === endpoint,
     };
   }
@@ -99,13 +108,13 @@ export function recordInference(
     provider: EvidenceProvider;
     model: string;
     request: EvidenceRequest;
-    answer: { toolCalls: Array<{ id: string; tool: string }>; usage: ProviderUsage; finish?: unknown } | null;
+    answer: { toolCalls: Array<{ id: string; tool: string }>; usage: ProviderUsage; finish?: unknown; responseModel?: string | null } | null;
     invalid?: { failure: EvidenceFailure; usage?: ProviderUsage };
     failure?: EvidenceFailure;
     final?: boolean;
   },
 ): string | null {
-  const local = input.provider === 'local' ? localRuntime(host) : null;
+  const local = input.provider === 'local' ? localRuntime(host, input.answer?.responseModel ?? null) : null;
   const runtime: EvidenceRuntime =
     local?.runtime ?? { kind: 'meta-api', model: input.model, contextConfigured: null, contextConfirmed: null, template: 'unknown', projector: false, draft: false };
   const answered = input.answer !== null || input.invalid !== undefined;
@@ -186,11 +195,11 @@ export function recordReply(
   provider: EvidenceProvider,
   model: string,
   request: 'chat' | 'plan',
-  outcome: { usage: ProviderUsage } | { error: unknown },
+  outcome: { usage: ProviderUsage; responseModel?: string | null } | { error: unknown },
 ): void {
   const run = beginRun(host, threadId);
   if ('usage' in outcome) {
-    recordInference(host, threadId, run, { provider, model, request, answer: { toolCalls: [], usage: outcome.usage }, final: true });
+    recordInference(host, threadId, run, { provider, model, request, answer: { toolCalls: [], usage: outcome.usage, responseModel: outcome.responseModel ?? null }, final: true });
     return;
   }
   const failure = failureOf(provider, outcome.error);
@@ -210,8 +219,8 @@ export function recordAgentStep(
 ): string | null {
   const base = { provider, model, request: 'agent-step' as const };
   if ('completion' in outcome) {
-    const { toolCalls, usage, finish } = outcome.completion;
-    return recordInference(host, threadId, run, { ...base, answer: { toolCalls: (toolCalls ?? []).map((call) => ({ id: call.id, tool: call.tool })), usage, finish } });
+    const { toolCalls, usage, finish, responseModel } = outcome.completion;
+    return recordInference(host, threadId, run, { ...base, answer: { toolCalls: (toolCalls ?? []).map((call) => ({ id: call.id, tool: call.tool })), usage, finish, responseModel: responseModel ?? null } });
   }
   const error = outcome.error;
   if (error instanceof AgentToolProtocolError) {
@@ -235,7 +244,7 @@ export function recordAgentAction(
   calls: ReadonlyArray<{ id: string; tool: string }> | null,
   call: { id: string; tool: string; args?: unknown },
   outcome: string,
-  approved: { digest: string; approval: EvidenceApproval } | null,
+  approved: { digest: string | null; approval: EvidenceApproval } | null,
 ): void {
   const n = (calls ?? []).indexOf(call) + 1;
   if (inferenceId === null || n === 0) {
@@ -287,18 +296,20 @@ export function evidenceNow(host: ProviderHost, lifecycle: string, owned: boolea
     local: {
       configured:
         external.length > 0
-          ? { kind: 'external', model: local.modelId.trim() || 'local-glimmer', context: null, projector: false, draft: false }
+          ? { kind: 'external', model: requestedLocalModel(host.settings, endpoint ?? external), context: null, projector: false, draft: false }
           : local.modelPath.length > 0
             ? { kind: 'owned', model: evidenceModelName(local.modelPath), context: local.contextSize, projector: local.projectorPath.length > 0, draft: local.draftModelPath.length > 0 }
             : null,
       running: launched
         ? { kind: 'rame-launched', contextConfirmed: props?.contextWindow ?? null, template: props?.template ?? 'unknown' }
         : !owned && endpoint !== null && host.localConfirmed === endpoint
-          ? { kind: 'external-endpoint', contextConfirmed: props?.contextWindow ?? null, template: props?.template ?? 'unknown' }
+          ? { kind: 'external-endpoint', contextConfirmed: props?.contextWindow ?? null, template: props?.template ?? 'unknown', scope: endpointLabel(endpoint)?.scope ?? 'loopback' }
           : null,
       observed: host.modelEvidence.observed.local,
+      identity: localIdentityView(host, host.modelEvidence.observed.local),
     },
-    cloud: { model: host.selectedCloudModel(), keyStored: host.hasKey, observed: host.modelEvidence.observed.cloud },
+    // Same rule as the header: a valid Meta answer with the current key in this session.
+    cloud: { model: host.selectedCloudModel(), keyStored: host.hasKey, observed: host.cloudConfirmed },
   };
 }
 

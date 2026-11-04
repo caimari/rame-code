@@ -255,6 +255,10 @@ export function policyGateForCall(
   allowlist?: readonly AllowedTestCommand[],
   platform: HostPlatform = process.platform,
 ): { ok: true } | { ok: false; error: string } {
+  if (call.tool === 'request_project_folder') {
+    // Only an Agent thread without a project folder may ask for one (agentNoProject.ts); this run already has its folder.
+    return { ok: false, error: 'request_project_folder is only for an Agent thread without a project folder; this thread already works in its project, so use its tools.' };
+  }
   if (call.tool === 'set_executable' && platform === 'win32') {
     // Windows has no owner-executable bit; refuse before asking for approval.
     return { ok: false, error: WINDOWS_SET_EXECUTABLE_ERROR };

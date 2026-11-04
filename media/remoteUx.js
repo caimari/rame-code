@@ -68,6 +68,22 @@
     'running': 'en marcha',
     'starting': 'iniciando',
     'Connected: it answered in this session. Configured: saved, not verified yet.': 'Conectado: respondió en esta sesión. Configurado: guardado, aún sin verificar.',
+    'Glimmer local — verified: it answered in this session': 'Glimmer local — verificado: respondió en esta sesión',
+    'Glimmer local — {0}, not verified yet': 'Glimmer local — {0}, aún sin verificar',
+    'Glimmer local — not configured': 'Glimmer local — sin configurar',
+    'Save to project memory? — review the exact change': '¿Guardar en la memoria del proyecto? — revisa el cambio exacto',
+    'Save this decision': 'Guardar esta decisión',
+    'Save this verification': 'Guardar esta verificación',
+    "Don't save": 'No guardar',
+    'No project folder — web only': 'Sin carpeta de proyecto — solo web',
+    'Agent has no project folder in this thread: it can answer and use the web, and asks you to choose a folder when it needs the project.':
+      'Agent no tiene carpeta de proyecto en este hilo: puede responder y usar la web, y te pide elegir una carpeta cuando necesita el proyecto.',
+    'Cancel run': 'Cancelar ejecución',
+    'Cancelling…': 'Cancelando…',
+    'Stop this run without doing the action. The conversation is kept.': 'Detiene esta ejecución sin realizar la acción. La conversación se conserva.',
+    'Open that thread': 'Abrir ese hilo',
+    'A run is waiting for your decision in "{0}". Its card is shown in that thread.': 'Una ejecución espera tu decisión en «{0}». Su tarjeta se muestra en ese hilo.',
+    'another thread': 'otro hilo',
     'Remote advice': 'Consejo remoto',
     'Consultations remaining': 'Consultas restantes',
     'Bytes sent': 'Bytes enviados',
@@ -610,6 +626,16 @@
     if (badge) {
       badge.setAttribute('title', h.t('Connected: it answered in this session. Configured: saved, not verified yet.'));
     }
+    // The conversation chip describes the selected runtime, like the header: with Glimmer local selected it never shows the Meta key line.
+    var chip = el('connection');
+    var idle = data.connection === 'ready' || data.connection === 'verified' || data.connection === 'missing-key';
+    if (chip && idle && runtime.selected === 'local') {
+      chip.textContent = data.connection === 'verified' || runtime.local === 'connected'
+        ? h.t('Glimmer local — verified: it answered in this session')
+        : runtime.local === 'not-configured'
+          ? h.t('Glimmer local — not configured')
+          : h.tf('Glimmer local — {0}, not verified yet', h.t(RUNTIME_WORDS[runtime.local] || runtime.local));
+    }
   }
 
   function renderMissionGrant(data) {
@@ -760,6 +786,70 @@
     renderDisclosure(data);
     renderSharing(data);
     renderMissionRemote(data.missionLive && data.missionLive.threadId === data.activeThreadId ? data.missionLive : null);
+    // After main.js has drawn the card, the badge and the buttons in this same pass (a microtask).
+    Promise.resolve().then(function () { renderWaiting(data); renderMemoryCard(data); renderProjectBadge(data); });
+  }
+
+  // Agent with no project folder says so, instead of hiding the workspace badge.
+  function renderProjectBadge(data) {
+    var badge = el('workspaceBadge');
+    if (!badge || data.mode !== 'agent' || data.agentWorkspace) {
+      return;
+    }
+    badge.hidden = false;
+    setText(badge, h.t('No project folder — web only'));
+    if (typeof badge.setAttribute === 'function') {
+      badge.setAttribute('title', h.t('Agent has no project folder in this thread: it can answer and use the web, and asks you to choose a folder when it needs the project.'));
+    }
+  }
+
+  // A memory change is approved on a card that says so: what is saved, and buttons that name it.
+  // Proposing or confirming a value in the conversation saves nothing; only this card does.
+  var MEMORY_TOOLS = { propose_decision: 'decision', bind_artifact: 'artifact' };
+  function renderMemoryCard(data) {
+    var pending = data.agentPending || null;
+    var kind = pending && Object.prototype.hasOwnProperty.call(MEMORY_TOOLS, pending.tool) ? MEMORY_TOOLS[pending.tool] : null;
+    var box = el('agentBox');
+    if (box) {
+      box.setAttribute('data-kind', kind ? 'memory' : 'action');
+    }
+    setText(el('agent-pending-heading'), kind ? h.t('Save to project memory? — review the exact change') : h.t('Pending approval — review exact action'));
+    var approve = el('pendingApprove');
+    var reject = el('pendingReject');
+    var busy = function (button) { return Boolean(button.classList && typeof button.classList.contains === 'function' && button.classList.contains('is-pending')); };
+    if (approve && !busy(approve)) {
+      setText(approve, kind === 'decision' ? h.t('Save this decision') : kind === 'artifact' ? h.t('Save this verification') : h.t('Approve action'));
+    }
+    if (reject && !busy(reject)) {
+      setText(reject, kind ? h.t("Don't save") : h.t('Reject'));
+    }
+  }
+
+  // A pending card is never trapped: it is scrolled into view when it appears, and a run waiting on another thread is announced with a way back.
+  var shownAction = null;
+  function renderWaiting(data) {
+    var pending = data.agentPending || null;
+    var box = el('agentBox');
+    var cancel = el('pendingCancel');
+    if (cancel) {
+      cancel.disabled = !pending;
+    }
+    var actions = el('pendingActions');
+    if (pending && box && shownAction !== pending.actionId && typeof box.scrollIntoView === 'function') {
+      // The card first; then, on a short panel where it does not fit, its buttons win.
+      box.scrollIntoView({ block: 'nearest' });
+      if (actions && typeof actions.scrollIntoView === 'function') {
+        actions.scrollIntoView({ block: 'nearest' });
+      }
+    }
+    shownAction = pending ? pending.actionId : null;
+    var waiting = data.remote && data.remote.waitingElsewhere ? data.remote.waitingElsewhere : null;
+    var line = el('waitingElsewhere');
+    if (line) {
+      line.hidden = !waiting;
+      line.setAttribute('data-thread', waiting ? waiting.threadId : '');
+    }
+    setText(el('waitingElsewhereText'), waiting ? h.tf('A run is waiting for your decision in "{0}". Its card is shown in that thread.', waiting.title === 'another thread' ? h.t(waiting.title) : waiting.title) : '');
   }
 
   function on(id, handler) {
@@ -773,6 +863,19 @@
 
   function init(helpers) {
     h = helpers;
+    // Cancel stops the run at once: nothing is done, the conversation stays, and the message box is free again.
+    on('pendingCancel', function (btn) {
+      if (h.markPending(btn, h.t('Cancelling…'))) {
+        h.vscode.postMessage({ type: 'cancel' });
+      }
+    });
+    on('waitingElsewhereOpen', function () {
+      var line = el('waitingElsewhere');
+      var threadId = line ? line.getAttribute('data-thread') : '';
+      if (threadId) {
+        h.vscode.postMessage({ type: 'openThread', threadId: threadId });
+      }
+    });
     var consultations = el('missionConsults');
     if (consultations) {
       consultations.addEventListener('change', function () {

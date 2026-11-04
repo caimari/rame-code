@@ -27,6 +27,7 @@ import type {
 } from './generationSettings.js';
 import { createLocalChatCompletion, createLocalMissionPlan } from './localProvider.js';
 import { isLocalOrPrivateUrl } from './localServers.js';
+import { chatWebOffered, runChatWithWeb } from './chatWeb.js';
 import { createChatCompletion, missionPlanSchema, validateMissionPlan } from './meta-provider.js';
 import { decisionsForThread, threadForRun, withheldForRun } from './cloudDisclosureHost.js';
 import { logPacket } from './continuityLogHost.js';
@@ -42,6 +43,8 @@ import { redactKeyFromText } from './webviewMessages.js';
 import { localUnreachableMessage } from './viewMessages.js';
 import { formatPlanAsText } from './panelState.js';
 import { recordReply } from './modelEvidenceRecorder.js';
+import { requestedLocalModel } from './localIdentity.js';
+import { classifyMetaFailure } from './metaFailures.js';
 import type { ProviderUsage } from './usage.js';
 import type { MissionPlan } from './types.js';
 import type { ProviderHost, RunGeneration } from './providerTypes.js';
@@ -109,14 +112,8 @@ export function generationModel(
   if (provider === 'cloud') {
     return host.selectedCloudModel();
   }
-  // A model chosen on an external server (Ollama, LM Studio) while RAME runs none of its own.
-  const external = host.settings.externalLocal.model;
-  if (external.length > 0 && host.settings.externalLocalEndpoint.trim().length > 0 && host.localEndpoint() === host.settings.externalLocalEndpoint.trim()) {
-    return external;
-  }
-  return host.settings.local.modelId.trim().length > 0
-    ? host.settings.local.modelId.trim()
-    : 'local-glimmer';
+  // A model chosen on an external server (Ollama, LM Studio) while RAME runs none of its own; Model evidence records the same id.
+  return requestedLocalModel(host.settings, host.localEndpoint());
 }
 
 /**
@@ -301,6 +298,7 @@ export async function sendCloud(
       generation: request,
     }));
     host.recordUsage('cloud', result.usage);
+    host.cloudConfirmed = true;
     host.running = false;
     host.connection = 'verified';
     host.status = withNote('Plan ready.', note);
@@ -325,6 +323,7 @@ export async function sendCloud(
         generation: request,
       })).then((completion) => {
         host.recordUsage('cloud', completion.usage);
+        host.cloudConfirmed = true;
         return completion.text;
       }),
     );
@@ -355,7 +354,7 @@ function observed<T extends { usage: ProviderUsage }>(
 ): Promise<T> {
   return work.then(
     (value) => {
-      recordReply(host, threadId, provider, model, request, { usage: value.usage });
+      recordReply(host, threadId, provider, model, request, { usage: value.usage, responseModel: (value as { responseModel?: string | null }).responseModel ?? null });
       return value;
     },
     (error: unknown) => {
@@ -426,17 +425,32 @@ export async function sendLocal(
     host.connection = 'verified';
     return;
   }
+  // Chat with read-only web tools when the user turned web access on (chatWeb.ts); plain Chat otherwise.
+  let webRecord: string[] = [];
   const result = await host.chatRunner.start(async ({ signal }) =>
-    observed(host, threadId, 'local', modelId, 'chat', createLocalChatCompletion({
-      endpoint,
-      model: modelId,
-      messages: built.messages,
-      generation: request,
-      signal,
-    })).then((completion) => {
-      host.recordUsage('local', completion.usage);
-      return completion.text;
-    }),
+    mode !== 'mission' && chatWebOffered(host)
+      ? runChatWithWeb(host, {
+          threadId,
+          endpoint,
+          model: modelId,
+          messages: built.messages,
+          generation: request,
+          signal,
+          observe: (promise) => observed(host, threadId, 'local', modelId, 'chat', promise),
+        }).then((reply) => {
+          webRecord = reply.hostRecord;
+          return reply.text;
+        })
+      : observed(host, threadId, 'local', modelId, 'chat', createLocalChatCompletion({
+          endpoint,
+          model: modelId,
+          messages: built.messages,
+          generation: request,
+          signal,
+        })).then((completion) => {
+          host.recordUsage('local', completion.usage);
+          return completion.text;
+        }),
   );
   host.armIdleShutdown();
   if (mode === 'mission') {
@@ -460,11 +474,12 @@ export async function sendLocal(
   } else {
     const current = host.store.get(threadId);
     if (current) {
+      const lines = [...(built.continuity.hostRecordLine ? [built.continuity.hostRecordLine] : []), ...webRecord];
       host.store.save(appendAssistantTurn(
         current,
         result,
         undefined,
-        built.continuity.hostRecordLine ? [built.continuity.hostRecordLine] : undefined,
+        lines.length > 0 ? lines : undefined,
         { provider: 'local', model: modelId },
       ));
     }
@@ -559,6 +574,10 @@ export async function handleSendError(
   const redacted = redactKeyFromText(detail, apiKey ?? '');
   const concise = redacted.replace(/\s+/g, ' ').trim().slice(0, 300);
   const safe = concise.length > 0 ? concise : 'Unknown error.';
+  // Meta refused the key (Chat, Agent, a Mission plan or a delegated run): an earlier answer no longer verifies the connection.
+  if (provider === 'cloud' && classifyMetaFailure(error, [apiKey ?? '']).category === 'authentication') {
+    host.cloudConfirmed = false;
+  }
   const displayEndpoint =
     host.localEndpoint() ??
     `http://127.0.0.1:${host.settings.local.port}`;

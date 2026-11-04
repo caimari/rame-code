@@ -10,9 +10,11 @@
  */
 
 import { invalidatePendingApproval } from './agentController.js';
+import { cancelArtifactHash, checkLocalIdentity, startArtifactHash } from './localIdentityHost.js';
 import { probeLocalProps } from './generationController.js';
 import { classifyEndpoint, modelFitness, scanLocalServer } from './localServers.js';
 import { lastScan, recordScan } from './localSourceState.js';
+import { recordMissionWebRequest, validateMissionWebRequest } from './missionWeb.js';
 import type { LocalSourceMessage } from './localSourceView.js';
 import type { ProviderHost } from './providerTypes.js';
 import { EMPTY_EXTERNAL_LOCAL, type ExternalLocalChoice } from './settingsStore.js';
@@ -80,8 +82,31 @@ export async function handleLocalSourceMessage(host: ProviderHost, message: Loca
         return;
       }
       await selectExternalEndpoint(host, scan.endpoint, { model: model.id, kind: scan.kind, tools: model.tools, context: model.loadedContext, lan: scan.scope === 'private' });
-      host.status = `${host.status} ${modelFitness(model, scan.kind).note}`.trim();
+      const fitness = `${host.status} ${modelFitness(model, scan.kind).note}`.trim();
+      // Record what the server says about itself and this model, for Model evidence (metadata requests only).
+      await checkLocalIdentity(host);
+      host.status = fitness;
       await host.postState();
+      return;
+    }
+    case 'localIdentity':
+      if (message.action === 'check') {
+        return checkLocalIdentity(host);
+      }
+      if (message.action === 'hash') {
+        // Not awaited: the view stays usable and can cancel while the file is read.
+        void startArtifactHash(host);
+        return;
+      }
+      return cancelArtifactHash(host);
+    case 'missionWebSet': {
+      // Kept until this Mission is authorized; validated again there and bound to its grant.
+      recordMissionWebRequest(host, message.missionId, { enabled: message.enabled, maxSearches: message.maxSearches, maxFetches: message.maxFetches, domains: message.domains });
+      const checked = validateMissionWebRequest({ enabled: message.enabled, maxSearches: message.maxSearches, maxFetches: message.maxFetches, domains: message.domains });
+      if (!checked.ok) {
+        host.status = checked.error;
+        await host.postState();
+      }
       return;
     }
     case 'shellAccessSet':

@@ -175,6 +175,8 @@ export interface WebFetchOptions {
   trustedOrigins?: readonly string[];
   /** Test seam: allow non-public addresses (never used by the product). */
   allowNonPublicForTests?: boolean;
+  /** Only these hosts may be reached, on the first request and on every redirect (a Mission's authorized domains). */
+  allowHost?: (host: string) => boolean;
   timeoutMs?: number;
   maxBytes?: number;
   accept?: string;
@@ -207,6 +209,9 @@ export async function safeFetch(rawUrl: string, options: WebFetchOptions = {}): 
     }
     const url = checked.url;
     const host = url.hostname.replace(/^\[|\]$/g, '');
+    if (options.allowHost && !options.allowHost(host)) {
+      return { ok: false, error: `${host} is not one of the domains authorized for this run${redirects.length > 0 ? ' (reached by a redirect)' : ''}.` };
+    }
     let address: { address: string; family: number };
     try {
       const answers = net.isIP(host) !== 0 ? [{ address: host, family: net.isIP(host) }] : await lookup(host);

@@ -11,6 +11,7 @@
  * verifier does that (missionVerifiers.ts).
  */
 
+import { withoutWebLines } from './missionWeb.js';
 import { buildConsultPayload, cascadeAdviceSchema, formatAdvisory, validateCascadeAdvice } from './cascade.js';
 import { createCascadeAdvice } from './meta-provider.js';
 import { classifyMetaFailure, describeMetaFailure } from './metaFailures.js';
@@ -62,7 +63,8 @@ export async function consultForMission(
   const payload = buildConsultPayload({
     task: `${mission.goal}\nCurrent task: ${task?.title ?? ''}`,
     reason: `${reason}; blocking verifier ${blocker.commandId} has failed since internal run ${blocker.sinceRun}`,
-    hostRecord,
+    // Web searches and pages stay local: never sent to Meta with a consultation.
+    hostRecord: withoutWebLines(hostRecord),
     decisions: host.memory.listCurrentDecisions(scopeId).map((entry) => ({ key: entry.key, value: entry.value, version: entry.version })),
     verifier: { commandId: blocker.commandId, exitCode: blocker.originalExit },
   });
@@ -96,6 +98,9 @@ export async function consultForMission(
       }
       return { ok: true, value: draft };
     });
+  // Visible while it happens: the user sees that Meta is being consulted, which one, and how many remain.
+  host.status = `Consulting Meta ${escalation.model} for advice (consultation ${attempt} of ${escalation.maxConsultations}); only the bounded text shown in Remote advice is sent, and Glimmer keeps control.`;
+  await host.postState();
   try {
     const result = await host.chatRunner.start(async ({ signal }) =>
       createCascadeAdvice({
@@ -127,6 +132,7 @@ export async function consultForMission(
       await account(0, actual - reserved);
     }
     advice = formatAdvisory(escalation.model, validateCascadeAdvice(JSON.parse(result.content) as unknown));
+    host.cloudConfirmed = true;
     recordAdvisory(host, mission.threadId, escalation.model, { usage: result.usage });
     line = `remote advice for ${blocker.commandId} [${blocker.id}]: attempt ${attempt}/${escalation.maxConsultations}, a valid answer from Meta ${escalation.model} (in ${result.usage.inputTokens} / out ${result.usage.outputTokens} tokens), kept as untrusted data; the blocker stays open until the host's run of ${blocker.commandId} passes`;
   } catch (error) {
@@ -161,4 +167,8 @@ export async function consultForMission(
     }
     return { ok: true, value: draft };
   });
+  host.status = advice.length > 0
+    ? `Meta ${escalation.model} answered (consultation ${attempt} of ${escalation.maxConsultations}); Glimmer continues locally and the host's tests still decide.`
+    : `Meta consultation ${attempt} of ${escalation.maxConsultations}: no advice used (see the Mission record). Glimmer continues locally.`;
+  await host.postState();
 }

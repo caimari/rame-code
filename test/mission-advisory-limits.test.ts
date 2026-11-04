@@ -164,6 +164,8 @@ test('the total limits refuse a request before sending; a budget already used up
     memory: { listCurrentDecisions: () => [] },
     chatRunner: { start: (work: (context: { signal: AbortSignal }) => Promise<unknown>) => work({ signal: new AbortController().signal }) },
     recordUsage: () => {},
+    status: "",
+    postState: async () => undefined,
     updateActiveMission: async (change: (mission: MissionRecord) => { ok: boolean }) => {
       const current = missions.get(id) as MissionRecord;
       return (await missions.update(id, current.revision, change as never)).ok;
@@ -204,7 +206,7 @@ test('a limit out of range authorizes nothing; malformed limits are refused at t
   assert.throws(() => parseViewInboundMessage({ ...base, unknownKey: true }));
 });
 
-test('after a reload, the authorized grant and usage are unchanged; an eligible new Mission visibly defaults to one consultation', async () => {
+test('after a reload, the authorized grant and usage are unchanged; an eligible new Mission visibly defaults to no consultation (0 — off)', async () => {
   await withMission(async (h, mission) => {
     fakeCloud.handler = advice;
     stuckThenFixed(h);
@@ -224,10 +226,13 @@ test('after a reload, the authorized grant and usage are unchanged; an eligible 
     );
     assert.equal(fakeCloud.requests.length, 1, 'nothing was resent after the reload');
   });
-  // The visible grant defaults to one bounded consultation. It is still not
-  // authorized until the user presses Authorize and start.
+  // Product decision 2026-11-04 (human validation): Meta advice in a Mission
+  // is a voluntary choice, so the grant defaults to "0 — off"; the user picks
+  // 1-5 consultations before pressing Authorize and start.
   const html = buildViewHtml({ cspSource: 'c', scriptUri: 'main.js', styleUri: 'main.css', nonce: 'n', i18nUri: 'i18n.js', remoteUxUri: 'remoteUx.js' });
-  assert.match(html, /<select id="missionConsults" aria-label="Maximum Meta consultations">[\s\S]*?<option value="1" selected>1<\/option>/);
+  assert.match(html, /<select id="missionConsults" aria-label="Maximum Meta consultations">[\s\S]*?<option value="0" selected>0 — off<\/option>/);
+  const consults = html.slice(html.indexOf('<select id="missionConsults"'), html.indexOf('</select>', html.indexOf('<select id="missionConsults"')));
+  assert.doesNotMatch(consults, /<option value="[1-5]" selected>/, 'no consultation is preselected');
   for (const id of ['missionLimitRequestBytes', 'missionLimitTotalBytes', 'missionLimitOutputTokens', 'missionLimitTotalTokens']) {
     assert.match(html, new RegExp(`<input id="${id}" type="number"[^>]*>`));
     assert.equal(new RegExp(`<input id="${id}"[^>]* value=`).test(html), false, `${id} has no preset value`);

@@ -9,6 +9,7 @@
  * confirmed it. A public address is refused.
  */
 
+import { respondedModelOf } from './localIdentity.js';
 import { isAbortError, withBoundedRequest } from './boundedRequest.js';
 import {
   OutputCutOffError,
@@ -42,6 +43,8 @@ export interface LocalChatOptions {
 export interface LocalChatResult {
   text: string;
   usage: ProviderUsage;
+  /** The `model` field of the answer, as the server wrote it (Model evidence only). */
+  responseModel?: string | null;
 }
 
 /**
@@ -124,7 +127,7 @@ export async function createLocalChatCompletion(
   if (typeof content !== 'string' || content.length === 0) {
     throw new Error('The local runtime returned no assistant reply.');
   }
-  return { text: content, usage: parseUsage(payload) };
+  return { text: content, usage: parseUsage(payload), responseModel: respondedModelOf(payload) };
 }
 
 /**

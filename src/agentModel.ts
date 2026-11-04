@@ -7,6 +7,7 @@
  * provider explicitly; this module never switches providers silently.
  */
 
+import { respondedModelOf } from './localIdentity.js';
 import { MetaHttpError } from './metaFailures.js';
 import { isAbortError, withBoundedRequest } from './boundedRequest.js';
 import {
@@ -48,6 +49,8 @@ export interface AgentCompletion {
   usage: ProviderUsage;
   /** The provider's finish_reason, as reported (for Model evidence only). */
   finish?: unknown;
+  /** The `model` field of the answer, as the server wrote it (Model evidence only; not a weights proof). */
+  responseModel?: string | null;
 }
 
 /** Agent system prompt: truthful bounded scope, no over-claims. */
@@ -226,7 +229,7 @@ function parseAgentPayload(payload: unknown, maxCompletionTokens: number): Agent
     }
     throw error instanceof Error ? error : new Error('Invalid tool calls.');
   }
-  return { text, toolCalls, usage, finish: finishReason(payload) };
+  return { text, toolCalls, usage, finish: finishReason(payload), responseModel: respondedModelOf(payload) };
 }
 
 /** Narrow protocol failures without treating network/provider errors as repairable. */

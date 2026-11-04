@@ -218,6 +218,7 @@ export async function approveConsult(host: ProviderHost, digest: string): Promis
     );
     host.recordUsage('cloud', result.usage);
     advice = validateCascadeAdvice(JSON.parse(result.content) as unknown);
+    host.cloudConfirmed = true;
     recordAdvisory(host, offer.threadId, offer.model, { usage: result.usage });
     lines.push(`advisory: attempt ${offer.attempts + 1}: Meta ${offer.model} answered (in ${result.usage.inputTokens} / out ${result.usage.outputTokens} tokens); a valid answer`);
   } catch (error) {
@@ -560,5 +561,19 @@ export function remoteView(host: ProviderHost, threadId: string | null, lifecycl
         : { kind: host.localIssue.kind, canStart: host.localIssue.canStart, delegation: host.localIssue.delegation },
     disclosure,
     sharing: sharingView(host, threadId),
+    waitingElsewhere: waitingElsewhere(host, threadId),
   };
+}
+
+/**
+ * A run waiting for an approval or a disclosure choice on another thread
+ * (for example a card the model asked again after the user left): its card
+ * stays bound to its own thread, and the view offers a way back to it.
+ */
+function waitingElsewhere(host: ProviderHost, threadId: string | null): RemoteView['waitingElsewhere'] {
+  const other = [host.agentPending?.threadId, host.cloudDisclosureOffer?.threadId].find((id) => id !== undefined && id !== threadId);
+  if (other === undefined) {
+    return null;
+  }
+  return { threadId: other, title: host.store.get(other)?.title ?? 'another thread' };
 }

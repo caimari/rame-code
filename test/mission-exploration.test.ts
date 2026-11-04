@@ -14,7 +14,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-import { buildAutoTaskPrompt, MISSION_STATE_KEY, type MissionRecord } from '../src/missionStore.js';
+import { MISSION_STATE_KEY, type MissionRecord } from '../src/missionStore.js';
+import { buildAutoTaskPrompt } from '../src/missionPrompt.js';
 import { buildViewHtml } from '../src/viewHtml.js';
 import { parseViewInboundMessage, type MissionLiveView } from '../src/viewMessages.js';
 import { assistantText, HostHarness, toolCallReply, type PostedState } from './helpers/hostHarness.js';

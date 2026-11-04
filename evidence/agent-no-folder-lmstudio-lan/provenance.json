@@ -1,0 +1,30 @@
+{
+  "schema": "rame-evidence-provenance-v1",
+  "recordedDate": "2026-11-04",
+  "status": "recorded-interface-transcript-private-screenshot",
+  "privateSources": [
+    {
+      "name": "thread-01-original.txt",
+      "sha256": "d7ae64446007aac0e09d9988a596bfcd5828062145dbebb47cea1af92bb0449b"
+    },
+    {
+      "name": "screenshot-01.png",
+      "sha256": "a37db4cd6aff6f332ebf87353e432b5e175d4fbf1e3f1e7f9c4fa4a7017f2922",
+      "public": false,
+      "reason": "contains a private endpoint and an absolute workspace path"
+    }
+  ],
+  "candidate": {
+    "version": "0.2.0",
+    "build": "src.2f737eddcab9",
+    "channel": "candidate",
+    "candidateVsixSha256": "be952a9748cdc158e92562c9eba4ff3eeb8ab52759e218f534b4a021722ead67"
+  },
+  "sanitization": [
+    "private LAN endpoint replaced by a descriptive label",
+    "absolute workspace path replaced with [WORKSPACE]",
+    "model metadata, usage counts and host wording retained",
+    "no API key, credential or unrelated project content included"
+  ],
+  "observedDiscrepancy": "Host record confirms folder selection, while Model evidence says no host action was recorded for request_project_folder."
+}

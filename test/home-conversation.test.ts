@@ -54,6 +54,10 @@ test('home vs conversation structure with dedicated back navigation', () => {
   assert.match(script, /conversationSectionEl\.hidden/);
   assert.match(script, /threadTitleFor/);
   assert.match(script, /type:\s*['"]backToList['"]/);
+  assert.match(script, /markPending\(btn, title\)/, 'opening a thread immediately shows a pending state');
+  assert.match(script, /markPending\(backToListBtn, ['"]\\u2190['"]\)/, 'Back immediately shows a pending state');
+  assert.match(html, /#backToList\.is-pending \{[^}]*animation: rame-back-pulse/);
+  assert.match(html, /#runIndicator \{ margin: 5px 0 3px; \}/);
 });
 
 test('completed replies render as a distinct final Result after Activity', () => {
@@ -113,14 +117,14 @@ test('Agent default with Agent, Mission, Chat order is preserved', () => {
   assert.equal(DEFAULT_CHAT_MODE, 'agent');
   assert.deepEqual(
     CHAT_MODES.map((mode) => mode.id),
-    ['agent', 'chat', 'mission'],
+    ['agent', 'mission', 'chat'],
   );
   const html = document();
   const modeSelect = html.match(/<select id="modeSelect"[^>]*>([\s\S]*?)<\/select>/)?.[1] ?? '';
   const agentAt = modeSelect.indexOf('value="agent"');
   const missionAt = modeSelect.indexOf('value="mission"');
   const chatAt = modeSelect.indexOf('value="chat"');
-  assert.ok(agentAt >= 0 && chatAt > agentAt && missionAt > chatAt);
+  assert.ok(agentAt >= 0 && missionAt > agentAt && chatAt > missionAt);
   assert.match(html, /<option value="agent" selected title="[^"]+">Agent<\/option>/);
   const script = readFileSync('media/main.js', 'utf8');
   assert.match(script, /modeSelectEl\.value = 'agent'/);
@@ -297,6 +301,29 @@ test('unified composer is rounded, narrow-safe, keyboard accessible, strict CSP'
   assert.doesNotMatch(script, /\beval\s*\(/);
   assert.match(script, /textContent/);
   assert.match(script, /Escape/);
+});
+
+test('composer grows, Enter sends, Shift+Enter stays multiline, and scrolling respects the reader', () => {
+  const script = readFileSync('media/main.js', 'utf8');
+  const ux = readFileSync('media/composerUx.js', 'utf8');
+  const stylesheet = readFileSync('media/main.css', 'utf8');
+  assert.match(script, /RAME_COMPOSER_UX\.init\(composerEl, sendBtn, conversationSectionEl/);
+  assert.match(ux, /event\.key === 'Enter' && !event\.shiftKey && !event\.isComposing/);
+  assert.match(ux, /send\.click\(\)/);
+  assert.match(ux, /Math\.min\(composer\.scrollHeight, maxHeight\)/);
+  assert.match(ux, /following = nearEnd\(\)/);
+  assert.match(ux, /if \(!following\)/);
+  assert.match(ux, /MutationObserver\(followSoon\)/);
+  assert.match(stylesheet, /#composer\s*\{[^}]*min-height:\s*64px[^}]*max-height:\s*180px/);
+});
+
+test('narrow header keeps title, version, status, and actions vertically visible', () => {
+  const html = document();
+  const stylesheet = readFileSync('media/main.css', 'utf8');
+  assert.match(html, /\.view-header\s*\{[^}]*min-height:\s*36px[^}]*overflow:\s*visible/);
+  assert.match(html, /\.view-header \.view-title\s*\{[^}]*margin:\s*0[^}]*line-height:\s*1\.4/);
+  assert.match(stylesheet, /\.view-header\s*\{[^}]*min-height:\s*36px[^}]*overflow:\s*visible/);
+  assert.match(stylesheet, /\.view-actions\s*\{[^}]*align-items:\s*center/);
 });
 
 test('settings fully hides chat and threads expose confirmed deletion', () => {

@@ -64,6 +64,23 @@ test('Chat sends bounded active-thread history plus the new message', () => {
   assert.deepEqual(roles, ['system', 'user', 'assistant', 'user']);
 });
 
+test('the user message persisted before generation is sent only once', () => {
+  const active = threadWith([
+    user('Earlier question.', 1),
+    assistant('Earlier answer.', 2),
+    user('Current question.', 3),
+  ]);
+  const built = buildRequestMessages({
+    mode: 'chat',
+    activeThread: active,
+    currentText: 'Current question.',
+  });
+  assert.equal(
+    built.messages.filter((message) => message.role === 'user' && message.content === 'Current question.').length,
+    1,
+  );
+});
+
 test('history uses only the active thread and stays within bounds', () => {
   const otherText = 'Other-thread secret topic marsupial.';
   void otherText;
@@ -87,6 +104,7 @@ test('history uses only the active thread and stays within bounds', () => {
   const trimmed = selectActiveThreadHistory(long);
   const chars = trimmed.reduce((sum, message) => sum + message.content.length, 0);
   assert.ok(chars <= MAX_HISTORY_CHARS);
+  assert.equal(trimmed.length, 0, 'an over-budget old turn is omitted whole, never silently sliced');
 
   // Error notes are skipped; plan turns contribute goal text.
   const mixed = selectActiveThreadHistory(

@@ -1,10 +1,6 @@
-/* RAME Code interface translations.
- * English is the source language: every key is the exact English text the
- * view or the host produces. Text sent to models, approval digests, and the
- * host record stay English; only what the view displays is translated.
- * Anything not listed here is shown unchanged (in English). Patterns only
- * rearrange text they matched exactly; captured values are kept verbatim.
- */
+/* RAME Code interface translations. English is the source language. Model
+ * prompts, approval digests and host records stay English. Unknown text is
+ * shown unchanged; captured pattern values are kept verbatim. */
 (function () {
   'use strict';
 
@@ -26,7 +22,6 @@
     'Activity': 'Actividad',
     'Result': 'Resultado',
     'Cloud escalation': 'Escalado a la nube',
-    'Send this request to Meta': 'Enviar esta petición a Meta',
     'Dismiss': 'Descartar',
     'Pending approval — review exact action': 'Aprobación pendiente — revisa la acción exacta',
     'Approve action': 'Aprobar acción',
@@ -74,6 +69,7 @@
     'Settings actions': 'Acciones de ajustes',
     'Back to Chat': 'Volver al chat',
     '← Back': '← Volver',
+    'Models': 'Modelos',
     'Interface': 'Interfaz',
     'Language': 'Idioma',
     'Interface language. Requests to models stay in English.': 'Idioma de la interfaz. Las peticiones a los modelos siguen en inglés.',
@@ -91,7 +87,6 @@
     'High': 'Alto',
     'XHigh': 'Muy alto',
     'Max': 'Máximo',
-    'Advanced: maximum output tokens': 'Avanzado: máximo de tokens de salida',
     'Local maximum (empty = automatic)': 'Máximo local (vacío = automático)',
     'Meta maximum (empty = automatic)': 'Máximo de Meta (vacío = automático)',
     'Automatic': 'Automático',
@@ -101,15 +96,19 @@
 
     // Project memory
     'Project memory': 'Memoria del proyecto',
-    'Project': 'Proyecto',
-    'Choose a project…': 'Elige un proyecto…',
-    'No project selected.': 'Ningún proyecto seleccionado.',
+    'Used automatically by Agent and Mission.': 'Se usa automáticamente en Agente y Misión.',
+    'Approved decisions for the working folder are added automatically. Nothing needs to be selected here.': 'Las decisiones aprobadas de la carpeta de trabajo se añaden automáticamente. No necesitas seleccionar nada aquí.',
+    'View another open folder': 'Ver otra carpeta abierta',
+    'Choose a folder…': 'Elige una carpeta…',
+    'This only changes this Settings view; it never changes a thread or merges memories.': 'Esto solo cambia esta vista de Ajustes; nunca cambia un hilo ni mezcla memorias.',
+    'No folder selected for this Settings view.': 'Ninguna carpeta seleccionada para esta vista de Ajustes.',
+    'Memory shown for: {0}': 'Memoria mostrada de: {0}',
     'Pending memory change — review the exact change': 'Cambio de memoria pendiente — revisa el cambio exacto',
     'Approve this change': 'Aprobar este cambio',
     'Decisions in force': 'Decisiones vigentes',
     'Verified files': 'Archivos verificados',
     'History': 'Historial',
-    'Propose a decision': 'Proponer una decisión',
+    'Advanced: add a decision manually': 'Avanzado: añadir una decisión manualmente',
     'Key': 'Clave',
     'Type': 'Tipo',
     'Value type': 'Tipo de valor',
@@ -144,8 +143,6 @@
     'Mission tasks': 'Tareas de la Misión',
     'Evidence': 'Evidencias',
     'Run task': 'Ejecutar tarea',
-    'Each task is one bounded Agent run that you start. A task interrupted by a reload is never repeated automatically; resuming starts a new run that is told what already ran and asks before any write.':
-      'Cada tarea es una ejecución acotada del Agente que inicias tú. Una tarea interrumpida por una recarga nunca se repite sola; al reanudarla empieza una ejecución nueva que sabe lo que ya se hizo y pregunta antes de escribir.',
     'active': 'activa',
     'waiting for your approval': 'esperando tu aprobación',
     'interrupted': 'interrumpida',
@@ -160,6 +157,8 @@
     'Enter a separate Meta Model API key': 'Introduce una clave propia de Meta Model API',
     'Save key': 'Guardar clave',
     'Clear key': 'Borrar clave',
+    'Test connection': 'Probar conexión',
+    'Testing…': 'Comprobando…',
     'Muse Code subscription credentials are not reused. Sent to the extension host only when you click Save key. Stored only in VS Code SecretStorage; this view only ever learns whether a key exists.':
       'No se reutilizan las credenciales de la suscripción de Muse Code. La clave solo se envía al host de la extensión cuando pulsas Guardar clave. Se guarda solo en SecretStorage de VS Code; esta vista solo sabe si existe una clave.',
     'Available compatible Meta models': 'Modelos de Meta compatibles disponibles',
@@ -182,7 +181,7 @@
     'Model / display ID': 'ID del modelo / nombre visible',
     'Context size': 'Tamaño de contexto',
     'Port (loopback only)': 'Puerto (solo loopback)',
-    'Idle timeout (seconds, 0 disables)': 'Apagado por inactividad (segundos, 0 lo desactiva)',
+    'Idle timeout (minutes, 0 disables)': 'Apagado por inactividad (minutos, 0 lo desactiva)',
     'External loopback endpoint (optional, not owned)': 'Endpoint loopback externo (opcional, no gestionado)',
     'Use detected settings': 'Usar ajustes detectados',
     'Save': 'Guardar',
@@ -194,15 +193,15 @@
     'Stopping…': 'Deteniendo…',
     'Use external endpoint': 'Usar endpoint externo',
     'Clear external endpoint': 'Quitar endpoint externo',
-    'The server binds to 127.0.0.1 only and is spawned directly with an argument array (no shell). Stopping here stops only the process started by RAME Code.':
-      'El servidor escucha solo en 127.0.0.1 y se lanza directamente con una lista de argumentos (sin shell). Detenerlo aquí solo detiene el proceso que arrancó RAME Code.',
+    "Bound to 127.0.0.1 and launched without a shell. Closing a terminal does not stop it. Timeout 0 keeps it running while VS Code stays open; reloading or closing VS Code stops RAME Code's server.":
+      'Escucha solo en 127.0.0.1 y se inicia sin shell. Cerrar una terminal no lo detiene. El valor 0 lo mantiene activo mientras VS Code siga abierto; recargar o cerrar VS Code detiene el servidor de RAME Code.',
     'Escalation': 'Escalado',
     'Allow cloud escalation': 'Permitir escalado a la nube',
     'Default OFF. There is no silent fallback: when local work fails, the Chat screen offers a visible choice and only your explicit approval sends the current request to Meta.':
       'Desactivado por defecto. No hay alternativa silenciosa: si falla el trabajo local, el chat te ofrece una opción visible y solo tu aprobación explícita envía la petición actual a Meta.',
     'Privacy / Security': 'Privacidad / seguridad',
-    'The API key stays in VS Code SecretStorage and this view receives only true/false. Chat sends the active thread’s bounded history plus your new message; Mission sends only your new message. Agent may read and change active-workspace files and run allowlisted tests only under the selected permission profile and policy boundary. Meta Billing/Usage is authoritative for cost; token counts below are observed usage, and any dollar figure is an estimate.':
-      'La clave de API se queda en SecretStorage de VS Code y esta vista solo recibe verdadero/falso. El chat envía el historial acotado del hilo activo más tu mensaje nuevo; Misión envía solo tu mensaje nuevo. El Agente puede leer y cambiar ficheros del workspace activo y ejecutar pruebas permitidas solo bajo el perfil de permisos elegido y los límites de la política. Meta Billing/Usage es la referencia del coste; los tokens de abajo son el uso observado y cualquier cifra en dólares es una estimación.',
+    'The API key stays in VS Code SecretStorage and this view receives only true/false. Agent and Chat send recent active-thread history and may recover a bounded set of relevant older excerpts. Other threads are never sent. When moving from local to Meta, extra older excerpts and host records stay local. Mission planning sends only your new message. Agent may read and change active-workspace files and run allowlisted tests only under the selected permission profile and policy boundary. Meta Billing/Usage is authoritative for cost; token counts below are observed usage, and any dollar figure is an estimate.':
+      'La clave queda en SecretStorage y esta vista solo recibe verdadero/falso. Agente y Chat envían el historial reciente del hilo activo y pueden recuperar extractos antiguos relevantes y acotados. Nunca se envían otros hilos. Al pasar de local a Meta, los extractos y registros antiguos adicionales permanecen locales. La planificación de Misión solo envía el mensaje nuevo. El Agente actúa en el workspace con el perfil y la política elegidos. Meta Billing/Usage es la referencia del coste; los tokens son uso observado y cualquier cifra en dólares es estimada.',
     'Diagnostics': 'Diagnóstico',
     'No diagnostics.': 'Sin diagnóstico.',
 
@@ -230,6 +229,7 @@
     'Host record — verified by RAME Code, not written by the model': 'Registro del host — verificado por RAME Code, no escrito por el modelo',
     'Not connected — API key required': 'Sin conexión — hace falta una clave de API',
     'Key stored — live connection not yet verified': 'Clave guardada — conexión aún sin verificar',
+    'Connection verified — Meta API responded in this session': 'Conexión verificada — Meta API respondió en esta sesión',
     'Plan ready': 'Plan listo',
     'Connected — verified': 'Conectado — verificado',
     'Error': 'Error',
@@ -313,15 +313,11 @@
     'Permission for this Mission': 'Permiso para esta Misión',
     'Supervised: every write and test asks': 'Supervisada: cada escritura y prueba pregunta',
     'Autonomous workspace: edits and allowlisted tests run without asking': 'Workspace autónomo: ediciones y pruebas permitidas sin preguntar',
-    'Meta consultations allowed (0 = none)': 'Consultas a Meta permitidas (0 = ninguna)',
     'Authorize and start': 'Autorizar e iniciar',
-    'Your acceptance check (frozen; RAME Code runs it before the Mission can end)': 'Tu comprobación de aceptación (congelada; RAME Code la ejecuta antes de dar la Misión por terminada)',
     'Acceptance check': 'Comprobación de aceptación',
     'None': 'Ninguna',
-    'Files that define it (comma-separated; checked by hash with package.json and, when present, the lockfile, tsconfig.json, and .npmrc)': 'Ficheros que la definen (separados por comas; se verifican por hash junto con package.json y, si existen, el lockfile, tsconfig.json y .npmrc)',
     'With an acceptance check, RAME Code blocks its own tools from changing node_modules. node_modules is not hashed: test scripts, other processes, or you can still change the dependencies.':
       'Con una comprobación de aceptación, RAME bloquea a sus propias herramientas para que no modifiquen node_modules. node_modules no se verifica por hash: los scripts de prueba, otros procesos o tú mismo podéis seguir cambiando las dependencias.',
-    'Name the files of the acceptance check, or choose None.': 'Indica los ficheros de la comprobación de aceptación, o elige Ninguna.',
     'Acceptance check: {0} (frozen: {1})': 'Comprobación de aceptación: {0} (congelada: {1})',
     'No acceptance check: completion means the project and agent tests passed': 'Sin comprobación de aceptación: completada significa que pasaron las pruebas del proyecto y del agente',
     'I trust this project (required for autonomous workspace)': 'Confío en este proyecto (necesario para el workspace autónomo)',
@@ -374,6 +370,8 @@
     'Only a blocked Mission can be retried with guidance.': 'Solo se puede reintentar con indicaciones una Misión bloqueada.',
     'The Agent stopped without a change or a test; asking it to act with the steps left…': 'El Agente se detuvo sin cambios ni pruebas; se le pide que actúe con los pasos que quedan…',
     'Public version': 'Versión pública',
+    'Author': 'Autor',
+    'Repository': 'Repositorio',
     'Verification level': 'Nivel de verificación',
     'Standard Mission': 'Misión estándar',
     'The project\'s normal tests decide when each task is done.': 'Las pruebas normales del proyecto deciden cuándo está terminada cada tarea.',
@@ -397,7 +395,6 @@
     'Open the Mission thread': 'Abrir el hilo de la Misión',
     'Authorize, follow, pause, or cancel a Mission from its card in the Mission thread.': 'Autoriza, sigue, pausa o cancela una Misión desde su tarjeta en el hilo de la Misión.',
     'Meta consultations allowed for the next Mission you authorize (0 = none)': 'Consultas a Meta permitidas para la próxima Misión que autorices (0 = ninguna)',
-    'Only after a capability stop, only with the cloud model shown when you authorize, and never more than this number.': 'Solo tras una parada por capacidad, solo con el modelo en la nube que se muestre al autorizar y nunca más de este número.',
     'Planning': 'Planificando',
     'Plan ready — awaiting authorization': 'Plan listo — esperando autorización',
     'Authorizing': 'Autorizando',
@@ -458,7 +455,7 @@
     'Language: {0}': 'Idioma: {0}',
     'running': 'en marcha',
     'external endpoint': 'endpoint externo',
-    'stopped': 'detenido',
+    'stopped': 'parado',
     'key saved': 'clave guardada',
     'no key': 'sin clave',
     'No Mission': 'Sin Misión',
@@ -472,9 +469,6 @@
     'Authorizing the Mission…': 'Autorizando la Misión…',
 
     // Cascade
-    'Ask Meta for advice? — review the exact text': '¿Pedir consejo a Meta? — revisa el texto exacto',
-    'Only this text is sent, once, with no file contents and no tools. The answer is used as untrusted hints by a new local run, which still asks before any write and must pass the tests.':
-      'Solo se envía este texto, una vez, sin contenido de ficheros ni herramientas. La respuesta se usa como pistas no confiables en una nueva ejecución local, que sigue pidiendo permiso antes de escribir y debe pasar las pruebas.',
     'Send this text to Meta': 'Enviar este texto a Meta',
     'Sending…': 'Enviando…',
     'Dismissing…': 'Descartando…',
@@ -551,6 +545,9 @@
     'No request is running.': 'No hay ninguna petición en marcha.',
     'The API key is invalid.': 'La clave de API no es válida.',
     'API key stored. Refreshing available models…': 'Clave de API guardada. Actualizando los modelos disponibles…',
+    'Meta connection not tested: save an API key first.': 'Conexión con Meta no comprobada: guarda primero una clave de API.',
+    'Meta connection verified. Live model catalog loaded.': 'Conexión con Meta verificada. Catálogo real de modelos cargado.',
+    'Meta connection test failed. Check the key, balance, network, and Meta service status.': 'Falló la prueba de conexión con Meta. Revisa la clave, el saldo, la red y el estado del servicio de Meta.',
     'API key cleared. Save a key to run cloud requests.': 'Clave de API borrada. Guarda una clave para usar la nube.',
     'Unknown mode.': 'Modo desconocido.',
     'Settings saved.': 'Ajustes guardados.',
@@ -598,8 +595,8 @@
     'The authorization does not match the exact proposal.': 'La autorización no coincide con la propuesta exacta.',
     'The authorization belongs to another project, thread, or provider.': 'La autorización pertenece a otro proyecto, hilo o proveedor.',
     'The proposal expired before it was approved; propose it again.': 'La propuesta caducó antes de aprobarse; vuelve a proponerla.',
-    'Chat sends the active thread’s recent history (bounded, most recent first) plus your new message. Other threads are never sent.':
-      'El chat envía el historial reciente del hilo activo (acotado, lo más reciente primero) más tu mensaje nuevo. Los demás hilos nunca se envían.',
+    'Chat sends the active thread’s recent history, a bounded host-selected set of relevant older excerpts, and your new message. Other threads are never sent. Older local excerpts are withheld when switching to Meta.':
+      'El chat envía el historial reciente del hilo activo, extractos antiguos relevantes y acotados elegidos por el host, y tu mensaje nuevo. Los demás hilos nunca se envían. Los extractos locales antiguos no se envían al cambiar a Meta.',
     'Mission sends only your new message to Meta Model API. Earlier thread content is never sent as context.':
       'Misión envía solo tu mensaje nuevo a Meta Model API. El contenido anterior del hilo nunca se envía como contexto.',
   };
@@ -796,6 +793,13 @@
     },
     translate: translate,
     translateHost: translateHost,
+    // Feature modules add their own interface strings; existing ones win.
+    extend: function (language, entries) {
+      var table = TABLES[language];
+      Object.keys(entries || {}).forEach(function (k) {
+        if (table && !Object.prototype.hasOwnProperty.call(table.text, k)) table.text[k] = entries[k];
+      });
+    },
     // For tests: the English keys of a table.
     keys: function (language) {
       return TABLES[language] ? Object.keys(TABLES[language].text) : [];

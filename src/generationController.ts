@@ -5,6 +5,7 @@
  * never imports VS Code or reaches into the provider class.
  */
 
+import * as remote from './remoteController.js';
 import { withBoundedRequest } from './boundedRequest.js';
 import {
   REASONING_LABELS,
@@ -27,6 +28,9 @@ import type {
 import { createLocalChatCompletion, createLocalMissionPlan } from './localProvider.js';
 import { isLoopbackUrl } from './localRuntime.js';
 import { createChatCompletion, missionPlanSchema, validateMissionPlan } from './meta-provider.js';
+import { decisionsForThread, threadForRun, withheldForRun } from './cloudDisclosureHost.js';
+import { logPacket } from './continuityLogHost.js';
+import { CloudEgressBlocked, guardCloudMessages } from './cloudEgress.js';
 import { buildRequestMessages } from './requestBuilder.js';
 import {
   appendErrorTurn,
@@ -37,6 +41,8 @@ import type { ChatThread } from './threadStore.js';
 import { redactKeyFromText } from './webviewMessages.js';
 import { localUnreachableMessage } from './viewMessages.js';
 import { formatPlanAsText } from './panelState.js';
+import { recordReply } from './modelEvidenceRecorder.js';
+import type { ProviderUsage } from './usage.js';
 import type { MissionPlan } from './types.js';
 import type { ProviderHost, RunGeneration } from './providerTypes.js';
 import type { ProviderId } from './settingsStore.js';
@@ -133,6 +139,9 @@ export async function probeLocalProps(
         },
       );
       props = parseLlamaServerProps(payload);
+      if (payload !== null) {
+        host.localConfirmed = endpoint;
+      }
     } catch {
       props = { ...UNKNOWN_LOCAL_PROPS };
     }
@@ -257,24 +266,35 @@ export async function sendCloud(
     }
     return;
   }
-  const thread = host.store.get(threadId);
+  // Only Meta's own exchanges and what the user disclosed (cloudDisclosure.ts).
+  const thread = threadForRun(host, threadId, 'cloud', text);
+  const withheldLocalTurns = mode === 'mission' ? 0 : withheldForRun(host, threadId, 'cloud', text);
   const built = buildRequestMessages({
     mode: mode === 'mission' ? 'mission' : 'chat',
     activeThread: thread,
     currentText: text,
+    currentModel: { provider: 'cloud', model: generation.model },
+    contextWindow: generation.profile.contextWindow,
+    continuityOptions: {
+      authorizedDecisions: host.cloudRun?.threadId === threadId ? host.cloudRun.decisions : [],
+      withheldLocalTurns,
+    },
   });
+  if (mode !== 'mission') {
+    logPacket(host, threadId, 'chat', { provider: 'cloud', model: generation.model }, text, built.continuity, withheldLocalTurns);
+  }
   const cloudModel = generation.model;
   const { request, note } = host.generationRequest(generation, {
     messages: built.messages,
   });
   if (mode === 'mission') {
-    const result = await host.missionRunner.startWithUsage({
+    const result = await observed(host, threadId, 'cloud', cloudModel, 'plan', host.missionRunner.startWithUsage({
       apiKey,
       goal: text,
       fetchImpl: undefined,
       model: cloudModel,
       generation: request,
-    });
+    }));
     host.recordUsage('cloud', result.usage);
     host.running = false;
     host.connection = 'verified';
@@ -288,15 +308,17 @@ export async function sendCloud(
     host.outputChannel.appendLine(formatPlanAsText(result.plan, cloudModel));
     host.outputChannel.show(true);
   } else {
+    // The request actually built is checked before anything is sent (cloudEgress.ts).
+    const outgoing = guardCloudMessages(host, threadId, text, built.messages);
     const result = await host.chatRunner.start(async ({ signal }) =>
-      createChatCompletion({
+      observed(host, threadId, 'cloud', cloudModel, 'chat', createChatCompletion({
         apiKey,
         goal: text,
-        messages: built.messages,
+        messages: outgoing,
         signal,
         model: cloudModel,
         generation: request,
-      }).then((completion) => {
+      })).then((completion) => {
         host.recordUsage('cloud', completion.usage);
         return completion.text;
       }),
@@ -306,9 +328,36 @@ export async function sendCloud(
     host.status = withNote('Reply ready.', note);
     const current = host.store.get(threadId);
     if (current) {
-      host.store.save(appendAssistantTurn(current, result));
+      host.store.save(appendAssistantTurn(
+        current,
+        result,
+        undefined,
+        built.continuity.hostRecordLine ? [built.continuity.hostRecordLine] : undefined,
+        { provider: 'cloud', model: cloudModel },
+      ));
     }
   }
+}
+
+/** Model evidence for a chat reply or a plan: its usage, or its failure category. */
+function observed<T extends { usage: ProviderUsage }>(
+  host: ProviderHost,
+  threadId: string,
+  provider: ProviderId,
+  model: string,
+  request: 'chat' | 'plan',
+  work: Promise<T>,
+): Promise<T> {
+  return work.then(
+    (value) => {
+      recordReply(host, threadId, provider, model, request, { usage: value.usage });
+      return value;
+    },
+    (error: unknown) => {
+      recordReply(host, threadId, provider, model, request, { error });
+      throw error;
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -329,25 +378,33 @@ export async function sendLocal(
     );
   }
   const thread = host.store.get(threadId);
+  const authorizedDecisions = (await decisionsForThread(host, thread)).list;
   const built = buildRequestMessages({
     mode: mode === 'mission' ? 'mission' : 'chat',
     activeThread: thread,
     currentText: text,
+    currentModel: { provider: 'local', model: generation.model },
+    contextWindow: generation.profile.contextWindow,
+    continuityOptions: {
+      authorizedDecisions,
+      scopeLabel: thread?.workspaceRoot?.split(/[\\/]/).filter(Boolean).at(-1),
+    },
   });
+  logPacket(host, threadId, mode === 'mission' ? 'mission-plan' : 'chat', { provider: 'local', model: generation.model }, text, built.continuity);
   const modelId = generation.model;
   const { request, note } = host.generationRequest(generation, {
     messages: built.messages,
   });
   if (mode === 'mission') {
     const planned = await host.chatRunner.start(async ({ signal }) =>
-      createLocalMissionPlan({
+      observed(host, threadId, 'local', modelId, 'plan', createLocalMissionPlan({
         endpoint,
         model: modelId,
         messages: built.messages,
         generation: request,
         signal,
         planSchema: missionPlanSchema.json_schema.schema,
-      }).then((completion) => {
+      })).then((completion) => {
         host.recordUsage('local', completion.usage);
         return completion;
       }),
@@ -365,13 +422,13 @@ export async function sendLocal(
     return;
   }
   const result = await host.chatRunner.start(async ({ signal }) =>
-    createLocalChatCompletion({
+    observed(host, threadId, 'local', modelId, 'chat', createLocalChatCompletion({
       endpoint,
       model: modelId,
       messages: built.messages,
       generation: request,
       signal,
-    }).then((completion) => {
+    })).then((completion) => {
       host.recordUsage('local', completion.usage);
       return completion.text;
     }),
@@ -388,7 +445,7 @@ export async function sendLocal(
       await host.createMissionFromPlan(threadId, plan);
     } else {
       if (current) {
-        host.store.save(appendAssistantTurn(current, result));
+        host.store.save(appendAssistantTurn(current, result, undefined, undefined, { provider: 'local', model: modelId }));
       }
       host.status = withNote(
         'The local model did not return a strict plan; its reply is shown as prose.',
@@ -398,7 +455,13 @@ export async function sendLocal(
   } else {
     const current = host.store.get(threadId);
     if (current) {
-      host.store.save(appendAssistantTurn(current, result));
+      host.store.save(appendAssistantTurn(
+        current,
+        result,
+        undefined,
+        built.continuity.hostRecordLine ? [built.continuity.hostRecordLine] : undefined,
+        { provider: 'local', model: modelId },
+      ));
     }
     host.status = withNote('Reply ready.', note);
   }
@@ -454,6 +517,16 @@ export async function handleSendError(
 ): Promise<void> {
   host.running = false;
   host.memory.discardProposals({ threadId });
+  if (error instanceof CloudEgressBlocked) {
+    // Stopped by RAME before sending: not a Meta failure, and nothing to retry or delegate.
+    host.connection = 'error';
+    host.status = error.message;
+    const current = host.store.get(threadId);
+    if (current) {
+      host.store.save(appendErrorTurn(current, error.message));
+    }
+    return;
+  }
   if (
     (error instanceof Error && error.name === 'AbortError') ||
     (error instanceof DOMException && error.name === 'AbortError')
@@ -489,27 +562,35 @@ export async function handleSendError(
     /not running|no external endpoint|not reachable|unreachable|refused|failed to fetch|fetch failed|network|econn|socket|health/i.test(
       safe,
     );
-  if (provider === 'local' && host.settings.allowCloudEscalation) {
-    host.pendingRequest = {
-      threadId,
-      text: lastUserText(host.store.get(threadId)) ?? '',
-      mode: host.settings.mode,
-    };
-    host.escalation = {
-      pending: true,
-      reason: looksUnreachable
-        ? `${unreachable} You can send this request to Meta explicitly, or dismiss.`
-        : `Local work could not complete (${safe}). You can send this request to Meta explicitly, or dismiss.`,
-    };
+  const reason = looksUnreachable
+    ? `${unreachable} You can send this request to Meta explicitly, or dismiss.`
+    : `Local work could not complete (${safe}). You can send this request to Meta explicitly, or dismiss.`;
+  // A failed delegated run is classified and recorded; it never switches to Glimmer by itself.
+  const delegated = provider === 'cloud' ? remote.delegationFailed(host, threadId, error, apiKey ?? '') : null;
+  // The local actions shown depend on the request: see remote.localFailure.
+  const local = provider === 'local' ? remote.localFailure(host, threadId, looksUnreachable, reason, apiKey !== undefined && apiKey.length > 0) : null;
+  const failed = looksUnreachable ? unreachable : `Local work failed (${safe}).`;
+  if (local === 'offered') {
     host.connection = 'error';
     host.status = looksUnreachable
       ? `${unreachable} Escalation is waiting for approval.`
       : 'Local work failed. Escalation is waiting for approval.';
-  } else if (provider === 'local') {
+  } else if (local !== null && !host.settings.allowCloudEscalation) {
     host.connection = 'error';
-    host.status = looksUnreachable
-      ? `${unreachable} Cloud escalation is OFF, so nothing was sent.`
-      : `Local work failed (${safe}). Cloud escalation is OFF, so nothing was sent.`;
+    host.status = `${failed} Cloud escalation is OFF, so nothing was sent.`;
+  } else if (local === 'internal') {
+    // A host-written prompt (a Mission's internal run, an Advisory verification) is never delegated.
+    host.connection = 'error';
+    host.status = `${failed} A RAME Code internal run is never delegated to Meta; nothing was sent.`;
+  } else if (local === 'not-agent') {
+    host.connection = 'error';
+    host.status = `${failed} Only an Agent request can be run with Meta; nothing was sent.`;
+  } else if (local === 'no-key') {
+    host.connection = 'error';
+    host.status = `${failed} No Meta Model API key is stored, so nothing was sent.`;
+  } else if (delegated !== null) {
+    host.connection = 'error';
+    host.status = delegated;
   } else {
     host.connection = 'error';
     host.status = `Request failed (${safe}).`;

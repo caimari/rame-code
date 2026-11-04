@@ -1,10 +1,7 @@
 /**
  * Extension-host side of the single `RAME Code` webview view.
  *
- * This is the **delegation shell**: it owns VS Code lifecycle, state
- * fields, message routing and settings, then delegates every large
- * subsystem to an extracted controller module through the typed
- * {@link ProviderHost} interface.
+ * Delegation shell for VS Code lifecycle, state, routing, and controllers.
  *
  * Key-handling contract:
  * - The key is read from `vscode.SecretStorage` at call time and never
@@ -13,18 +10,8 @@
  * - Errors are redacted before display; the key never appears in HTML,
  *   postMessage state, logs, diagnostics, tests, or persisted data.
  *
- * Transcript contract (release-blocking: the submitted user turn and the
- * returned assistant result must both be visible immediately):
- * - The user turn is persisted and posted BEFORE the network call.
- * - The assistant/plan/error turn is persisted and posted right after.
- * - Internal Chat <-> Settings navigation flips only the screen flag;
- *   threads, selection, and running state are preserved.
- *
- * Local-runtime contract:
- * - The executable is spawned directly with an argument array and
- *   `shell: false`, bound to `127.0.0.1` only.
- * - Only the owned child is ever stopped (tracked handle); an external
- *   endpoint is never owned and never killed.
+ * Turns persist immediately. The local runtime is loopback-only, shell-free,
+ * and stops only its tracked child, never an external endpoint.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -117,6 +104,7 @@ import {
   appendAssistantTurn,
   appendErrorTurn,
   appendUserTurn,
+  bindThreadWorkspace,
   ThreadStore,
   type ChatThread,
 } from './threadStore.js';
@@ -174,6 +162,15 @@ import * as genCtrl from './generationController.js';
 import * as memCtrl from './memoryController.js';
 import * as agentCtrl from './agentController.js';
 import * as missionCoord from './missionCoordinator.js';
+import * as remote from './remoteController.js';
+import { CLOUD_DISCLOSURE_KEY, loadDisclosure, type CloudDisclosureOffer, type CloudRun, type DisclosureState } from './cloudDisclosure.js';
+import { cloudGate, cloudMemoryText, credentialChanged, decideDisclosure, stopSharing } from './cloudDisclosureHost.js';
+import { loadCredentialRevision, rotateCredentialRevision } from './metaRecipient.js';
+import { launchFacts, ModelEvidenceStore, type LocalLaunchFacts } from './modelEvidence.js';
+import { evidenceView } from './modelEvidenceRecorder.js';
+import { ContinuityLogStore, continuityLogView } from './continuityLog.js';
+import type { ChosenAdvisoryLimits } from './missionAdvisoryLimits.js';
+import type { ConsultOffer, DelegationFailure, DelegationOffer, LocalIssue } from './remoteAuthority.js';
 import { sendAgent as sendAgentFn } from './agentEngine.js';
 
 export const API_KEY_SECRET = 'rameCode.metaModelApiKey';
@@ -210,9 +207,19 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     publish: async (status, message) => {
       this.localRuntime.replaceStatus(status);
       this.status = message;
+      if (status.lifecycle === 'stopped') {
+        this.localLaunch = null;
+      }
+      if (status.lifecycle === 'running' && this.localIssue?.kind === 'unreachable') {
+        this.localIssue = null;
+      }
       await this.postState();
     },
-    probe: async (endpoint) => { await genCtrl.probeLocalProps(this, endpoint); },
+    probe: async (endpoint) => {
+      await genCtrl.probeLocalProps(this, endpoint);
+      // What /props confirmed (context, template) reaches the view without waiting for another event.
+      await this.postState();
+    },
     isBusy: () => this.isBusy(),
     idleTimeoutSeconds: () => this.settings.local.idleTimeoutSec,
   });
@@ -229,23 +236,27 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   agentRunWorkspace: { root: string; label: string } | null = null;
   runThreadId: string | null = null;
   localProps: { endpoint: string; props: LocalServerProps } | null = null;
+  localLaunch: LocalLaunchFacts | null = null;
+  readonly modelEvidence: ModelEvidenceStore;
+  readonly continuityLog: ContinuityLogStore;
   readonly memory: DecisionStore;
   memoryPending: { action: PendingAgentAction; proposal: MemoryProposal } | null = null;
   memoryGeneration = 0;
   memoryView: MemoryView | null = null;
   memoryRoot: string | null = null;
   pinnedRunRoot: string | null = null;
-  consultOffer: {
-    threadId: string;
-    root: string;
-    task: string;
-    reason: string;
-    payload: string;
-    model: string;
-    digest: string;
-    createdAt: number;
-    generation: number;
-  } | null = null;
+  consultOffer: ConsultOffer | null = null;
+  delegationOffer: DelegationOffer | null = null;
+  delegationFailure: DelegationFailure | null = null;
+  localIssue: LocalIssue | null = null;
+  cloudConfirmed = false;
+  cloudDisclosure: DisclosureState;
+  cloudDisclosureOffer: CloudDisclosureOffer | null = null;
+  cloudRun: CloudRun | null = null;
+  readonly cloudToolGrants = new Map<string, boolean>();
+  metaCredential: string;
+  localConfirmed: string | null = null;
+  delegatedRun: { threadId: string; root: string | null; text: string; mode: string } | null = null;
   cascadeVerification: { threadId: string } | null = null;
   hostPromptText: string | null = null;
   readonly missions: MissionStore;
@@ -304,6 +315,10 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     this.settings = this.reconcileCloudModel(this.settings, this.cloudCatalog);
     this.usage = validateUsageTotals(state.get(RAME_USAGE_KEY));
     this.audit.load(state.get(RAME_AUDIT_KEY));
+    this.cloudDisclosure = loadDisclosure(state.get(CLOUD_DISCLOSURE_KEY));
+    this.metaCredential = loadCredentialRevision(state);
+    this.modelEvidence = new ModelEvidenceStore(state);
+    this.continuityLog = new ContinuityLogStore(state);
     const runningElsewhere = this.recoverInterruptedRun();
     if (!runningElsewhere) {
       this.missionRecovery = this.missions.recoverInterrupted((lease) => this.isLeaseAlive(lease));
@@ -355,6 +370,14 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       i18nUri: view.webview
         .asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'i18n.js'))
         .toString(),
+      settingsTabsUri: view.webview
+        .asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'settingsTabs.js'))
+        .toString(),
+      composerUxUri: view.webview
+        .asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'composerUx.js'))
+        .toString(),
+      remoteUxUri: view.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'remoteUx.js')).toString(),
+      evidenceUxUri: view.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'evidenceUx.js')).toString(),
       nonce,
     });
     const messageHandler = view.webview.onDidReceiveMessage((raw: unknown) => {
@@ -423,6 +446,13 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     );
   }
 
+  /** The open project a Chat thread joins: the only open folder, else the one chosen in Settings; never a prompt. */
+  chatProjectRoot(): string | undefined {
+    const open = this.listOpenWorkspaceFolders();
+    const chosen = this.memoryRoot !== null ? validateChosenWorkspace(this.memoryRoot, open) : null;
+    return open.length === 1 ? (open[0] as OpenWorkspaceFolder).path : chosen ?? undefined;
+  }
+
   isBoundRootStillOpen(boundRoot: string): boolean {
     return validateChosenWorkspace(boundRoot, this.listOpenWorkspaceFolders()) !== null;
   }
@@ -436,7 +466,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     return { owned: this.local.owned, endpoint: this.local.endpoint };
   }
 
-  async resolveAgentRunRoot(): Promise<
+  async resolveAgentRunRoot(preferredRoot?: string | null): Promise<
     { ok: true; root: string; label: string } | { ok: false; cancelled: boolean; error: string }
   > {
     const open = this.listOpenWorkspaceFolders();
@@ -448,6 +478,17 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       return pinned
         ? { ok: true, root: pinned.path, label: workspaceDisplayLabel(pinned) ?? pinned.path }
         : { ok: false, cancelled: false, error: 'The project folder of this run is no longer open.' };
+    }
+    if (preferredRoot) {
+      const validated = validateChosenWorkspace(preferredRoot, open);
+      if (validated !== null) {
+        const preferred = open.find((folder) => folder.path === validated) as OpenWorkspaceFolder;
+        return {
+          ok: true,
+          root: validated,
+          label: workspaceDisplayLabel(preferred) ?? validated,
+        };
+      }
     }
     if (open.length === 1) {
       const only = open[0] as OpenWorkspaceFolder;
@@ -529,6 +570,12 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   }
 
   recordUsage(provider: 'cloud' | 'local', usage: ProviderUsage): void {
+    // Only a real answer confirms a connection.
+    if (provider === 'cloud') {
+      this.cloudConfirmed = true;
+    } else {
+      this.localConfirmed = this.localEndpoint();
+    }
     this.usageLast = usage;
     this.usage = {
       ...this.usage,
@@ -582,7 +629,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   }
 
   async memorySnapshotText(scope: { scopeId: string; label: string }, fs: AgentFs): Promise<string> {
-    return memCtrl.memorySnapshotText(this, scope, fs);
+    return cloudMemoryText(this, scope.label) ?? memCtrl.memorySnapshotText(this, scope, fs);
   }
 
   async liveArtifactHashes(scopeId: string, fs: AgentFs): Promise<Record<string, string | null>> {
@@ -689,6 +736,15 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       return;
     }
     this.activeThreadId = thread.id;
+    // Settings follows the folder already bound to the opened thread. This
+    // changes only the memory inspector; a pending approval remains pinned.
+    if (
+      this.memoryPending === null &&
+      thread.workspaceRoot !== undefined &&
+      this.isBoundRootStillOpen(thread.workspaceRoot)
+    ) {
+      this.memoryRoot = thread.workspaceRoot;
+    }
     this.status = `Opened "${thread.title}".`;
     await this.postState();
   }
@@ -785,6 +841,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
           this.local.lifecycle === 'starting'
             ? 'Muse Glimmer is still starting. Wait for Running before sending.'
             : 'The local model is not running. Start Muse Glimmer, choose Meta Model API, or configure an external OpenAI-compatible loopback server.';
+        if (this.local.lifecycle !== 'starting') {
+          remote.localNotRunning(this, this.activeThreadId);
+        }
         await this.postState();
         return;
       }
@@ -799,13 +858,16 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       }
     }
 
+    let thread = this.activeThreadId !== null
+      ? this.store.get(this.activeThreadId)
+      : undefined;
     let agentTarget: { root: string; label: string } | undefined;
-    if (rawMode === 'agent') {
+    if (rawMode === 'agent' || rawMode === 'mission') {
       this.running = true;
       this.connection = 'working';
-      this.status = 'Choose the workspace folder for this Agent run…';
+      this.status = `Selecting the project for this ${rawMode === 'mission' ? 'Mission' : 'Agent'} thread…`;
       await this.postState();
-      const target = await this.resolveAgentRunRoot();
+      const target = await this.resolveAgentRunRoot(thread?.workspaceRoot ?? null);
       if (!this.running) {
         return;
       }
@@ -820,6 +882,11 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         return;
       }
       agentTarget = { root: target.root, label: target.label };
+      if (rawMode === 'mission') {
+        // Planning itself reads no project files, but the saved Mission must
+        // belong to the same user-selected project as its thread.
+        this.memoryRoot = target.root;
+      }
     }
 
     this.settings = {
@@ -830,14 +897,16 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     };
     this.persistSettings();
 
-    let thread = this.activeThreadId !== null
-      ? this.store.get(this.activeThreadId)
-      : undefined;
+    // Chat joins the open project when that is unambiguous: no tools, only its decisions.
+    const project = agentTarget?.root ?? (rawMode === 'chat' && !thread?.workspaceRoot ? this.chatProjectRoot() : undefined);
     if (!thread) {
-      thread = this.store.create(text, rawMode);
+      thread = this.store.create(text, rawMode, project);
       this.activeThreadId = thread.id;
     } else {
       thread = appendUserTurn(thread, text, undefined, { host: this.hostPromptText === text, mode: rawMode });
+      if (project !== undefined && thread.workspaceRoot !== project) {
+        thread = bindThreadWorkspace(thread, project);
+      }
       this.store.save(thread);
     }
     const threadId = thread.id;
@@ -845,14 +914,18 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     await this.executeSend(threadId, text, rawMode, provider, agentTarget);
   }
 
-  private async executeSend(
+  async executeSend(
     threadId: string,
     text: string,
     mode: string,
     provider: ProviderId,
     agentTarget?: { root: string; label: string },
   ): Promise<void> {
+    if (provider === 'cloud' && !(await cloudGate(this, threadId, text, mode, agentTarget))) {
+      return;
+    }
     this.agentLogView = [];
+    this.localIssue = null;
     this.runThreadId = threadId;
     this.runKind = this.missionAuto !== null || this.activeMission !== null ? 'mission-run' : mode === 'mission' ? 'mission-plan' : 'other';
     void this.extensionState.update(RAME_ACTIVE_RUN_KEY, { threadId, pid: process.pid, startedAt: Date.now() });
@@ -885,6 +958,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     if (generationNote !== null && !this.status.includes(generationNote)) {
       this.status = `${this.status} ${generationNote}`;
     }
+    this.cloudRun = null;
     if (!this.disposed) {
       void this.extensionState.update(RAME_ACTIVE_RUN_KEY, undefined);
     }
@@ -1003,7 +1077,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     missionId: string,
     expectedRevision: number,
     mode: MissionGrant['mode'],
-    consultConfig: { maxConsultations: number } | null,
+    consultConfig: { maxConsultations: number; limits?: ChosenAdvisoryLimits | null } | null,
     trustedProject = false,
     acceptance: { commandId: string; files: string[] } | null = null,
   ): Promise<void> {
@@ -1030,123 +1104,18 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     return missionCoord.retryMission(this, missionId, expectedRevision, guidance);
   }
 
-  // ----- Shell: cascade (local-to-Meta advice escalation) -----
+  // ----- Shell: Meta paths (Advisory and delegated; see remoteController) -----
 
-  /** Host-written record of the cascade, kept in the thread apart from model text. */
-  private appendCascadeRecord(threadId: string, text: string, lines: string[]): void {
-    const current = this.store.get(threadId);
-    if (current) {
-      this.store.save(appendAssistantTurn(current, text, undefined, lines.map((line) => `• ${line}`.slice(0, MAX_HOST_RECORD_LINE_LENGTH))));
-    }
-  }
-
-  /** The user approved this exact payload: ask Meta once, then verify locally. */
   async approveConsult(digest: string): Promise<void> {
-    const offer = this.consultOffer;
-    const expired = offer !== null && Date.now() - offer.createdAt > CONSULT_OFFER_TTL_MS;
-    if (offer === null || offer.digest !== digest || offer.generation !== this.agentGeneration || expired) {
-      if (expired) {
-        this.consultOffer = null;
-      }
-      this.status = 'That consultation approval is no longer valid. Nothing was sent.';
-      await this.postState();
-      return;
-    }
-    if (this.running || this.missionRunner.isRunning || this.chatRunner.isRunning || this.agentRunner.isRunning) {
-      this.status = 'A request is already running. Cancel it or wait before sending to Meta. Nothing was sent.';
-      await this.postState();
-      return;
-    }
-    if (!this.settings.allowCloudEscalation) {
-      this.status = 'Cloud escalation is OFF. Nothing was sent.';
-      await this.postState();
-      return;
-    }
-    const apiKey = await this.secrets.get(API_KEY_SECRET);
-    if (!apiKey) {
-      this.status = 'No Meta Model API key is stored. Save one in Settings or choose a local runtime.';
-      await this.postState();
-      return;
-    }
-    this.consultOffer = null;
-    const lines = [
-      `cascade: the local run stopped for a capability reason: ${offer.reason}`,
-      `cascade: you approved sending ${offer.payload.length} characters to Meta ${offer.model} (digest ${offer.digest.slice(0, 12)}…); no file contents were included`,
-    ];
-    this.activeThreadId = offer.threadId;
-    this.running = true;
-    this.connection = 'working';
-    this.status = `Asking Meta ${offer.model} for advice with the approved text only…`;
-    await this.postState();
-    let advice: CascadeAdvice;
-    try {
-      const generation = await this.snapshotGeneration('cloud');
-      const { request } = this.generationRequest(generation, { messages: [{ role: 'user', content: offer.payload }] });
-      const result = await this.chatRunner.start(async ({ signal }) =>
-        createCascadeAdvice({ apiKey, model: offer.model, payload: offer.payload, schema: cascadeAdviceSchema, generation: request, signal }),
-      );
-      this.recordUsage('cloud', result.usage);
-      lines.push(`cascade: Meta ${offer.model} answered (in ${result.usage.inputTokens} / out ${result.usage.outputTokens} tokens)`);
-      advice = validateCascadeAdvice(JSON.parse(result.content) as unknown);
-    } catch (error) {
-      const raw = error instanceof Error ? error.message : 'Unknown error.';
-      const detail = redactKeyFromText(raw, apiKey).replace(/\s+/g, ' ').trim().slice(0, 200) || 'Unknown error.';
-      const cancelled = error instanceof Error && error.name === 'AbortError';
-      lines.push(
-        cancelled
-          ? 'cascade: you cancelled the consultation; the local verification run was not started'
-          : `cascade: the advice was not used (${detail}); the local verification run was not started`,
-      );
-      this.running = false;
-      this.connection = cancelled ? 'cancelled' : 'error';
-      this.status = cancelled ? 'Request cancelled.' : `The Meta advice could not be used (${detail}). Nothing else was sent and nothing changed.`;
-      this.appendCascadeRecord(offer.threadId, 'Cascade stopped before the local verification run.', lines);
-      await this.postState();
-      return;
-    }
-    lines.push(`cascade: advice kept only as untrusted data (${advice.steps.length} step(s), ${advice.checks.length} check(s)); it wrote nothing`);
-    this.running = false;
-    const prompt = buildVerificationPrompt({ task: offer.task, reason: offer.reason, model: offer.model, advice }).slice(0, 7900);
-    this.cascadeVerification = { threadId: offer.threadId };
-    this.pinnedRunRoot = offer.root;
-    this.hostPromptText = prompt.trim();
-    this.lastAgentOutcome = null;
-    try {
-      await this.sendMessage(prompt, 'agent', providerToRuntime('local'));
-    } finally {
-      this.pinnedRunRoot = null;
-      this.hostPromptText = null;
-      this.cascadeVerification = null;
-    }
-    // sendMessage may have set lastAgentOutcome; re-read past flow analysis.
-    const outcome = this.lastAgentOutcome as AgentOutcomeRecord | null;
-    if (outcome !== null && outcome.threadId === offer.threadId) {
-      const test = outcome.lastTest ? `${outcome.lastTest.commandId} exit=${outcome.lastTest.exitCode ?? 'unknown'}` : 'no test ran';
-      lines.push(`cascade: local verification run ${outcome.outcome === 'done' ? 'finished' : `stopped (${outcome.outcome})`}; last test: ${test}`);
-    } else {
-      lines.push(`cascade: the local verification run did not start (${this.status.slice(0, 160)})`);
-    }
-    lines.push('cascade: no calibrated policy chose these steps; you approved each one');
-    const verified = outcome !== null && outcome.outcome === 'done' && outcome.lastTest?.exitCode === 0;
-    this.appendCascadeRecord(
-      offer.threadId,
-      verified ? 'Cascade finished: the local verification run passed its test.' : 'Cascade finished without a passing local test.',
-      lines,
-    );
-    await this.postState();
+    return remote.approveConsult(this, digest);
   }
 
   async dismissConsult(): Promise<void> {
-    const offer = this.consultOffer;
-    this.consultOffer = null;
-    if (offer !== null) {
-      this.appendCascadeRecord(offer.threadId, 'Cascade not used.', [
-        `cascade: the local run stopped for a capability reason: ${offer.reason}`,
-        'cascade: you dismissed the consultation; nothing was sent to Meta',
-      ]);
-    }
-    this.status = 'Consultation dismissed. Nothing was sent to Meta.';
-    await this.postState();
+    return remote.dismissConsult(this);
+  }
+
+  async includeConsultFiles(digest: string, files: string[]): Promise<void> {
+    return remote.includeConsultFiles(this, digest, files);
   }
 
   // ----- Shell: language -----
@@ -1157,47 +1126,16 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     await this.postState();
   }
 
-  // ----- Shell: escalation -----
-
-  async approveEscalation(): Promise<void> {
-    if (!this.escalation.pending || !this.pendingRequest) {
-      this.status = 'No escalation is waiting for approval.';
-      await this.postState();
-      return;
-    }
-    if (
-      this.running ||
-      this.missionRunner.isRunning ||
-      this.chatRunner.isRunning ||
-      this.agentRunner.isRunning
-    ) {
-      this.status = 'A request is already running. Cancel it or wait before sending to Meta. Nothing was sent.';
-      await this.postState();
-      return;
-    }
-    if (!this.settings.allowCloudEscalation) {
-      this.status = 'Cloud escalation is OFF. Nothing was sent.';
-      await this.postState();
-      return;
-    }
-    const pending = this.pendingRequest;
-    this.pendingRequest = null;
-    this.escalation = { pending: false, reason: '' };
-    const thread = this.store.get(pending.threadId);
-    if (!thread) {
-      this.status = 'That thread is no longer stored. Nothing was sent.';
-      await this.postState();
-      return;
-    }
-    this.activeThreadId = thread.id;
-    await this.executeSend(thread.id, pending.text, pending.mode, 'cloud');
+  async approveEscalation(digest: string): Promise<void> {
+    return remote.approveDelegation(this, digest);
   }
 
   async dismissEscalation(): Promise<void> {
-    this.pendingRequest = null;
-    this.escalation = { pending: false, reason: '' };
-    this.status = 'Escalation dismissed. Nothing was sent to Meta.';
-    await this.postState();
+    return remote.dismissDelegation(this);
+  }
+
+  async runDelegationLocally(): Promise<void> {
+    return remote.runDelegationLocally(this);
   }
 
   cancelRequest(): boolean {
@@ -1251,19 +1189,24 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       await this.postState();
       return;
     }
+    // The new revision is persisted before the key: approvals under the old key never apply to the new one.
+    credentialChanged(this, rotateCredentialRevision(this.extensionState));
     await this.secrets.store(API_KEY_SECRET, checked.apiKey);
     this.hasKey = true;
+    this.cloudConfirmed = false;
     if (!this.running) {
       this.connection = 'ready';
     }
     this.status = 'API key stored. Refreshing available models…';
     await this.postState();
-    await this.refreshModels(true);
+    await this.refreshModels('save');
   }
 
   async clearKey(): Promise<void> {
+    credentialChanged(this, rotateCredentialRevision(this.extensionState));
     await this.secrets.delete(API_KEY_SECRET);
     this.hasKey = false;
+    this.cloudConfirmed = false;
     if (!this.running) {
       this.connection = 'missing-key';
     }
@@ -1332,7 +1275,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     await this.postState();
   }
 
-  async refreshModels(fromSaveKey = false): Promise<void> {
+  async refreshModels(intent: 'refresh' | 'save' | 'test' = 'refresh'): Promise<void> {
     const apiKey = await this.secrets.get(API_KEY_SECRET);
     if (!apiKey) {
       this.hasKey = false;
@@ -1343,14 +1286,18 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       };
       this.settings = this.reconcileCloudModel(this.settings, this.cloudCatalog);
       this.persistSettings();
-      this.status = fromSaveKey
+      this.status = intent === 'save'
         ? 'API key stored. No key available for catalog refresh; using fallback catalog.'
-        : 'No API key stored. Using fallback catalog.';
+        : intent === 'test'
+          ? 'Meta connection not tested: save an API key first.'
+          : 'No API key stored. Using fallback catalog.';
       await this.postState();
       return;
     }
-    this.status = 'Refreshing available models…';
-    await this.postState();
+    if (intent !== 'test') {
+      this.status = 'Refreshing available models…';
+      await this.postState();
+    }
     let result;
     try {
       result = await refreshCompatibleModels({ apiKey });
@@ -1363,6 +1310,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     }
     this.cloudCatalog = result.models;
     const source = result.source === 'live' ? 'live' : 'fallback';
+    this.cloudConfirmed = source === 'live';
     this.settings = { ...this.settings, cloudCatalogSource: source };
     const reconciled = validateCloudModelSelection(
       this.settings.cloudModel,
@@ -1380,7 +1328,11 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     }
     this.settings = this.reconcileCloudModel(this.settings, this.cloudCatalog);
     this.persistSettings();
-    this.status = result.status;
+    this.status = intent === 'test'
+      ? source === 'live'
+        ? 'Meta connection verified. Live model catalog loaded.'
+        : 'Meta connection test failed. Check the key, balance, network, and Meta service status.'
+      : result.status;
     await this.postState();
   }
 
@@ -1467,7 +1419,22 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     this.settings = { ...this.settings, local: checked.settings };
     this.localSettingsRev += 1;
     this.persistSettings();
+    if (this.local.lifecycle === 'stopped') {
+      // Kept only while the process launched with these arguments lives.
+      this.localLaunch = launchFacts(checked.settings);
+    }
     await this.localRuntime.start(checked.settings);
+  }
+
+  /** "Start Muse Glimmer" on a failed request: the saved settings, only when offered. */
+  async startAfterLocalIssue(): Promise<void> {
+    if (this.localIssue === null || !this.localIssue.canStart) {
+      this.status = 'Nothing to start: open the runtime settings to configure Muse Glimmer.';
+      await this.postState();
+      return;
+    }
+    this.localIssue = null;
+    await this.startLocalRuntime();
   }
 
   async stopLocalRuntime(): Promise<void> {
@@ -1570,6 +1537,12 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       case 'refreshModels':
         await this.refreshModels();
         return;
+      case 'testMetaConnection':
+        await this.refreshModels('test');
+        return;
+      case 'openRepository':
+        await vscode.env.openExternal(vscode.Uri.parse('https://github.com/caimari/rame-code'));
+        return;
       case 'startLocal':
         await this.startLocalRuntime({
           executablePath: message.executablePath,
@@ -1592,7 +1565,22 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         await this.clearExternalEndpoint();
         return;
       case 'escalateApprove':
-        await this.approveEscalation();
+        await this.approveEscalation(message.digest);
+        return;
+      case 'delegationRunLocal':
+        await this.runDelegationLocally();
+        return;
+      case 'disclosureDecide':
+        await decideDisclosure(this, message.digest, message.choice, message.toolResults === true);
+        return;
+      case 'disclosureStop':
+        await stopSharing(this, this.activeThreadId);
+        return;
+      case 'localIssueStart':
+        await this.startAfterLocalIssue();
+        return;
+      case 'consultIncludeFiles':
+        await this.includeConsultFiles(message.digest, message.files);
         return;
       case 'escalateDismiss':
         await this.dismissEscalation();
@@ -1630,7 +1618,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
             message.missionId,
             message.revision,
             message.mode,
-            message.maxConsultations > 0 ? { maxConsultations: message.maxConsultations } : null,
+            message.maxConsultations > 0 ? { maxConsultations: message.maxConsultations, limits: message.advisoryLimits ?? null } : null,
             message.trustedProject,
             message.acceptanceCommand.length > 0 ? { commandId: message.acceptanceCommand, files: message.acceptanceFiles } : null,
           ),
@@ -1735,6 +1723,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         missionLive: missionCoord.missionLiveView(this, active ? active.id : null),
         runKind: this.runKind,
         about: this.about,
+        remote: remote.remoteView(this, active ? active.id : null, this.local.lifecycle),
+        modelEvidence: evidenceView(this, active ? active.id : null, this.local.lifecycle, this.local.owned),
+        continuityLog: continuityLogView(this.continuityLog.state, active ? active.id : null, this.continuityLog.discarded),
       }),
     );
   }

@@ -1,4 +1,5 @@
 import { MAX_AGENT_STEPS } from './agentPolicy.js';
+import { missionRemoteView } from './missionRemote.js';
 import { canRunTask, currentTask, leaseHeldByOther, type MissionLease, type MissionRecord } from './missionStore.js';
 import { acceptanceState, missionFinalReport, missionPhase, missionTestRuns, missionTestsNotRun } from './missionPhase.js';
 import type { MissionLiveView, MissionView } from './viewMessages.js';
@@ -120,6 +121,7 @@ export function buildPlanningMissionLiveView(threadId: string, goal: string): Mi
     report: null,
     blocked: null,
     review: [],
+    remote: null,
     note: '',
   };
 }
@@ -142,6 +144,8 @@ export function buildMissionLiveView(mission: MissionRecord, runtime: MissionVie
         candidates: [...runtime.setup.candidates],
         environmentFiles: [...runtime.setup.environmentFiles],
         packageJsonHash: runtime.setup.packageJsonHash,
+        bootstrap: runtime.setup.packageJsonHash.length === 0 || runtime.setup.testCommands.length === 0,
+        awaitingVerification: mission.awaitingVerification === true,
       }
     : null;
   return {
@@ -183,6 +187,7 @@ export function buildMissionLiveView(mission: MissionRecord, runtime: MissionVie
       ? { reason: mission.note, runs: mission.auto?.runs ?? 0, lastProgress: mission.auto?.lastProgress ?? '', testsNotRun: missionTestsNotRun(mission) }
       : null,
     review: mission.evidence.slice(-40).map((entry) => `${entry.kind}: ${entry.text}`),
+    remote: missionRemoteView(mission),
     note: mission.note,
   };
 }

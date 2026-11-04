@@ -130,6 +130,12 @@ test('parses every valid unified inbound message shape', () => {
   assert.deepEqual(parseViewInboundMessage({ type: 'refreshModels' }), {
     type: 'refreshModels',
   });
+  assert.deepEqual(parseViewInboundMessage({ type: 'testMetaConnection' }), {
+    type: 'testMetaConnection',
+  });
+  assert.deepEqual(parseViewInboundMessage({ type: 'openRepository' }), {
+    type: 'openRepository',
+  });
   assert.deepEqual(
     parseViewInboundMessage({
       type: 'startLocal',
@@ -152,8 +158,10 @@ test('parses every valid unified inbound message shape', () => {
   assert.deepEqual(parseViewInboundMessage({ type: 'clearExternalEndpoint' }), {
     type: 'clearExternalEndpoint',
   });
-  assert.deepEqual(parseViewInboundMessage({ type: 'escalateApprove' }), {
+  // A delegated run is approved by the digest of the exact offer shown.
+  assert.deepEqual(parseViewInboundMessage({ type: 'escalateApprove', digest: 'a'.repeat(64) }), {
     type: 'escalateApprove',
+    digest: 'a'.repeat(64),
   });
   assert.deepEqual(parseViewInboundMessage({ type: 'escalateDismiss' }), {
     type: 'escalateDismiss',
@@ -241,6 +249,8 @@ test('rejects unified messages with extra fields without echoing values', () => 
     { type: 'selectCloudModel', model: '' },
     { type: 'selectCloudModel', model: 'muse-spark-1.3', extra: PROBE },
     { type: 'refreshModels', extra: PROBE },
+    { type: 'testMetaConnection', extra: PROBE },
+    { type: 'openRepository', extra: PROBE },
     { type: 'startLocal' },
     {
       type: 'updateLocalSettings',
@@ -259,6 +269,8 @@ test('rejects unified messages with extra fields without echoing values', () => 
     { type: 'selectExternalEndpoint' },
     { type: 'selectExternalEndpoint', endpoint: 42 },
     { type: 'escalateApprove', extra: PROBE },
+    { type: 'escalateApprove' },
+    { type: 'escalateApprove', digest: PROBE },
     { type: 'escalateDismiss', extra: PROBE },
   ];
 

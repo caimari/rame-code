@@ -29,7 +29,7 @@ function assistantPayload(content: string, usage?: unknown): Response {
 test('agent request body carries tools without touching chat/mission shape', () => {
   const body = buildAgentRequestBody('muse-spark-1.3', [{ role: 'user', content: 'hi' }], CLOUD_GEN);
   assert.equal(body.model, 'muse-spark-1.3');
-  assert.equal((body.tools as unknown[]).length, 12);
+  assert.equal((body.tools as unknown[]).length, 13);
   assert.equal(body.tool_choice, 'auto');
   assert.equal(body.store, false);
   assert.ok(!('response_format' in body));
@@ -178,7 +178,7 @@ test('the output budget comes from the run, and Meta never gets the undocumented
   await createLocalAgentCompletion({ endpoint: 'http://127.0.0.1:9', model: 'local-glimmer', messages: [], generation: LOCAL_GEN, fetchImpl: capture, toolChoice: 'none' });
   assert.deepEqual(
     [sent[2]?.tool_choice, sent[2]?.max_completion_tokens, (sent[2]?.tools as unknown[]).length],
-    ['none', 4096, 12],
+    ['none', 4096, 13],
   );
   // The Meta call has no tool_choice option at all: it always sends "auto".
   // @ts-expect-error toolChoice is not accepted for Meta

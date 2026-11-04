@@ -192,7 +192,7 @@ test('after a reload, an uncertain action is shown and never repeated blindly, a
   );
 });
 
-test('Agent and Chat keep their earlier behavior: the conversation so far is still sent', async () => {
+test('Agent and Chat keep the conversation but send the current message only once', async () => {
   await withProject(async (h) => {
     h.model.enqueue(text('Hello.'), text('Second.'));
     await h.provider.sendMessage('FIRST-AGENT', 'agent', 'local');
@@ -201,12 +201,12 @@ test('Agent and Chat keep their earlier behavior: the conversation so far is sti
     assert.ok(agent.includes('user:FIRST-AGENT'));
     assert.ok(agent.includes('assistant:Hello.'));
     assert.ok(agent.some((entry) => entry.startsWith('system:Context from RAME Code')), 'the host record of the earlier reply');
-    // Unchanged on purpose, reported separately: the current Agent message is in the history and is also the goal.
-    assert.equal(agent.filter((entry) => entry === 'user:SECOND-AGENT').length, 2);
+    assert.equal(agent.filter((entry) => entry === 'user:SECOND-AGENT').length, 1);
     h.model.enqueue(text('Chat one.'), text('Chat two.'));
     await h.provider.sendMessage('FIRST-CHAT', 'chat', 'local');
     await h.provider.sendMessage('SECOND-CHAT', 'chat', 'local');
     const chat = JSON.stringify(h.model.requests.at(-1));
     assert.ok(chat.includes('FIRST-CHAT') && chat.includes('Chat one.') && chat.includes('SECOND-CHAT'), 'Chat still sends the thread history');
+    assert.equal((chat.match(/SECOND-CHAT/g) ?? []).length, 1);
   });
 });

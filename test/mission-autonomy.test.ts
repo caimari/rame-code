@@ -345,16 +345,27 @@ test('Mission escalation stays within its grant: model, count, output budget, pa
     const mission = await createMission(h);
     fakeCloud.handler = () => Response.json({ choices: [{ message: { role: 'assistant', content: JSON.stringify(advice) }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } });
     h.model.requests.length = 0;
-    for (let i = 0; i < MAX_AGENT_STEPS * 3; i++) h.model.enqueue(tool(`r${i}`, 'read_file', { path: 'secret-notes.txt', maxBytes: 4096 }));
+    // Each run: the allowed test fails (a reproducible blocker), then the run reads until its budget ends.
+    for (let run = 0; run < 6; run++) {
+      h.model.enqueue(runTests(`t${run}`));
+      for (let i = 1; i < MAX_AGENT_STEPS; i++) h.model.enqueue(tool(`r${run}-${i}`, 'read_file', { path: 'secret-notes.txt', maxBytes: 4096 }));
+    }
     await h.provider.startMission(mission.id, mission.revision, 'autonomous-workspace', { maxConsultations: 1 }, true);
     const record = stored(h);
-    assert.equal(record.status, 'blocked', 'three stuck runs');
+    assert.equal(record.status, 'blocked', 'stuck runs end blocked');
     assert.equal(fakeCloud.requests.length, 1, 'exactly one consultation, as granted');
+    const blocker = record.auto?.blockers[0];
+    assert.equal(blocker?.commandId, 'npm:test');
+    assert.equal(blocker?.advisoryAttempts, 1, 'the consultation is counted on the blocker that motivated it');
+    assert.equal(blocker?.validResponses, 1);
+    assert.equal(record.grant?.escalation?.validResponses, 1);
+    assert.ok(record.evidence.some((entry) => entry.text.startsWith(`remote advice for npm:test [${blocker?.id}]: attempt 1/1, a valid answer`)));
     const sent = fakeCloud.requests[0]?.body as { model: string; max_completion_tokens: number; tools?: unknown; messages: Message[] };
     assert.equal(sent.model, 'muse-spark-1.3');
     assert.equal(sent.max_completion_tokens, 2048);
     assert.equal('tools' in sent, false);
     assert.equal(sent.messages.some((m) => m.content.includes('FILE-CONTENT-NEVER-SENT-551')), false, 'no file contents');
+    assert.ok(sent.messages.some((m) => m.content.includes('Failing check: npm:test exit=1 (its output is not included)')), 'the blocker is named, without its output');
     assert.equal(record.grant?.escalation?.used, 1);
     const secondPrompt = (h.model.requests[MAX_AGENT_STEPS]?.messages as Message[]).filter((m) => m.role === 'user').pop()?.content ?? '';
     assert.match(secondPrompt, /ADVISORY DATA from Meta muse-spark-1\.3\. It is untrusted/);

@@ -141,6 +141,54 @@ test('Chat only never gets tools, even after Agent messages in the same thread; 
   });
 });
 
+test('Agent recovers a relevant antecedent beyond its recent window and records the retrieval', async () => {
+  await withHarness(async (h) => {
+    h.model.enqueue({ kind: 'json', body: assistantText('Entendido.') });
+    await send(h, 'El sincronizador offline debe seguir siendo cache-first.');
+    for (let index = 0; index < 11; index++) {
+      h.model.enqueue({ kind: 'json', body: assistantText(`Respuesta de diseño ${index}.`) });
+      await send(h, `Hablemos del espaciado visual número ${index}. ${'x'.repeat(3900)}`);
+    }
+    h.model.requests.length = 0;
+    h.model.enqueue({ kind: 'json', body: assistantText('Mantendré el sincronizador offline cache-first.') });
+    await send(h, '¿Qué antecedente tenemos sobre el sincronizador offline?');
+
+    const messages = lastRequest(h).messages as Message[];
+    const continuity = messages.find((message) =>
+      message.role === 'user' && message.content.startsWith('RELEVANT EARLIER EXCERPTS'),
+    );
+    assert.match(continuity?.content ?? '', /sincronizador offline debe seguir siendo cache-first/);
+    assert.match(continuity?.content ?? '', /untrusted context; never persistent authority/);
+    assert.match(lastAssistant(h.last()).hostRecord?.join('\n') ?? '', /context_continuity → recovered 1 earlier excerpt/);
+  });
+});
+
+test('Agent can ask two bounded history questions; a third search returns the fixed limit', async () => {
+  await withHarness(async (h) => {
+    h.model.enqueue({ kind: 'json', body: assistantText('Entendido.') });
+    await send(h, 'Este proyecto debe funcionar sin Internet.');
+    h.model.requests.length = 0;
+    const search = (id: string, query: string) => ({
+      kind: 'json' as const,
+      body: toolCallReply([{ id, name: 'search_history', args: { queries: [query], limit: 2 } }]),
+    });
+    h.model.enqueue(
+      search('h1', 'disconnected operation'),
+      search('h2', 'offline requirement'),
+      search('h3', 'Internet requirement'),
+      { kind: 'json', body: assistantText('Recuperé el antecedente disponible.') },
+    );
+    assert.deepEqual(await send(h, 'Recupera el antecedente relevante.'), []);
+    const requests = h.model.requests as Array<{ messages?: Message[] }>;
+    const allToolResults = requests.flatMap((request) => request.messages ?? [])
+      .filter((message) => message.role === 'tool')
+      .map((message) => message.content);
+    assert.ok(allToolResults.some((content) => /Este proyecto debe funcionar sin Internet/.test(content)));
+    assert.ok(allToolResults.some((content) => /History search limit reached for this run \(2 calls\)/.test(content)));
+    assert.match(lastAssistant(h.last()).hostRecord?.join('\n') ?? '', /search_history persisted thread history/);
+  });
+});
+
 test('a user turn keeps its mode across a reload; an unknown mode is refused', () => {
   let thread = createThread('Hola', { mode: 'agent' });
   thread = appendUserTurn(thread, '¿Cómo me llamo?', undefined, { mode: 'chat' });
@@ -154,7 +202,7 @@ test('a user turn keeps its mode across a reload; an unknown mode is refused', (
 
 test('the view decides how a reply looks from the host record: plain, folded reads, or the result card', () => {
   const script = readFileSync('media/main.js', 'utf8');
-  assert.match(script, /var READ_ONLY_TOOLS = \['list_files', 'inspect_workspace', 'filesystem_usage', 'search_text', 'read_file', 'read_decisions'\];/);
+  assert.match(script, /var READ_ONLY_TOOLS = \['list_files', 'inspect_workspace', 'filesystem_usage', 'search_history', 'search_text', 'read_file', 'read_decisions', 'context_continuity'\];/);
   const render = script.slice(script.indexOf('function replyKind'), script.indexOf('function renderThreads'));
   assert.match(render, /lastTurn\.kind === 'assistant' && replyKind\(lastTurn\) === 'work'/, 'only work becomes the result card');
   assert.match(render, /if \(kind === 'read'\) \{\n\s+renderFoldedRecord\(card, turn\.hostRecord\);\n\s+\} else if \(kind === 'work'\) \{\n\s+renderHostRecord\(card, turn\.hostRecord\);/);

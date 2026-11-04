@@ -156,6 +156,16 @@ This log separates work created during the Meta Global AI Developer Hackathon 20
 - Standard open-source dependencies may be used under their respective licenses.
 - Every released capability must be reproducible from this repository and documented with the model, tools, tests, and human intervention involved.
 
+## Development-assistance and budget decision
+
+- **Antoni Caimari Caldés is RAME Code's human architect, product lead, maintainer and release decision-maker.** Muse Code, Muse models, OpenAI Codex and Claude Code are development or audit assistants operating under his direction; they are not identified as the project's architect.
+- The original development plan was to build RAME Code primarily with Muse Code and Meta Muse models. The early slices documented above used Muse Code 1.4.x with exact model `muse-spark-1.3`, directed and reviewed by the human maintainer.
+- Meta's dashboard recorded USD 150.00 in initial free credits and USD 122.96 remaining after the intensive early implementation windows: USD 27.04 used, approximately 18% of the initial amount. These are cumulative, potentially rounded or delayed dashboard figures rather than a per-feature bill; Meta Billing/Usage remains authoritative.
+- The human maintainer then chose to reserve the remaining Meta credits for RAME Code inference, real-API validation and demonstrations. This was a budget-allocation decision, not evidence that Muse was unable to implement the software.
+- Subsequent construction and review combined existing access to OpenAI Codex and Claude Code, local Muse Glimmer, and human product direction, architecture, prompting, approval and testing. The Git author identifies the human integrator; it does not by itself identify which assistant contributed each line.
+- Exact line-by-line or percentage attribution is not claimed where the evidence cannot establish it. Mixed work remains labelled as mixed or unknown. Autonomous Glimmer changes produced in disposable self-improvement trials are distinguished from changes actually integrated into a public release.
+- Supported models, development assistants and models used in a final demonstration are separate facts. The final demonstration models will be recorded only after the corresponding run has been verified.
+
 ## 2026-11-02 — Public preview v0.1.0
 
 - Consolidated the independently implemented Agent, Mission and Chat slices into the first installable public preview.

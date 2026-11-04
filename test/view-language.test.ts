@@ -24,6 +24,9 @@ interface I18n {
 function loadI18n(): I18n {
   const context = { window: {} as { RAME_I18N?: I18n } };
   vm.runInNewContext(readFileSync('media/i18n.js', 'utf8'), context);
+  // Feature modules add their own Spanish entries, as in the real view.
+  vm.runInNewContext(readFileSync('media/remoteUx.js', 'utf8'), context);
+  vm.runInNewContext(readFileSync('media/evidenceUx.js', 'utf8'), context);
   assert.ok(context.window.RAME_I18N);
   return context.window.RAME_I18N;
 }
@@ -42,7 +45,12 @@ function unescapeLiteral(raw: string): string {
 }
 
 test('every interface string of the script and the markup has a Spanish entry', () => {
-  const script = readFileSync('media/main.js', 'utf8');
+  // The remote module's own Spanish table is data, not interface text: leave it out of the scan.
+  const remoteUx = readFileSync('media/remoteUx.js', 'utf8');
+  const withoutTable = remoteUx.slice(0, remoteUx.indexOf('var ES = {')) + remoteUx.slice(remoteUx.indexOf('\n  };', remoteUx.indexOf('var ES = {')));
+  const evidenceUx = readFileSync('media/evidenceUx.js', 'utf8');
+  const evidenceCode = evidenceUx.slice(0, evidenceUx.indexOf('var ES = {')) + evidenceUx.slice(evidenceUx.indexOf('\n  };', evidenceUx.indexOf('var ES = {')));
+  const script = [readFileSync('media/main.js', 'utf8'), withoutTable, evidenceCode].join('\n');
   const used = new Set<string>();
   for (const match of script.matchAll(/\bt\('((?:[^'\\]|\\.)*)'\)/g)) {
     used.add(unescapeLiteral(match[1] as string));
@@ -51,7 +59,7 @@ test('every interface string of the script and the markup has a Spanish entry', 
     used.add(unescapeLiteral(match[1] as string));
   }
   // Labels picked through tables before t() is applied.
-  for (const table of ['MISSION_STATUS_LABELS', 'MISSION_PHASE_LABELS', 'START_LABELS', 'REASONING_LABELS', 'ARTIFACT_LABELS']) {
+  for (const table of ['MISSION_STATUS_LABELS', 'MISSION_PHASE_LABELS', 'START_LABELS', 'REASONING_LABELS', 'ARTIFACT_LABELS', 'CATEGORY', 'CAUSAL', 'PROFILES', 'FAILURE', 'APPROVAL', 'STATUS', 'TRIGGER', 'MODE']) {
     const body = script.slice(script.indexOf(`var ${table} = {`), script.indexOf('}', script.indexOf(`var ${table} = {`)));
     for (const match of body.matchAll(/:\s*'([^']+)'/g)) {
       used.add(match[1] as string);
@@ -86,6 +94,8 @@ test('templates keep their slots and the table loads after the markup, before th
   }
   const html = buildViewHtml({ cspSource: 'c', scriptUri: 'main.js', styleUri: 'main.css', nonce: 'abc', i18nUri: 'i18n.js' });
   assert.ok(html.indexOf('src="i18n.js"') > 0 && html.indexOf('src="i18n.js"') < html.indexOf('src="main.js"'));
+  const withRemote = buildViewHtml({ cspSource: 'c', scriptUri: 'main.js', styleUri: 'main.css', nonce: 'abc', i18nUri: 'i18n.js', remoteUxUri: 'remoteUx.js' });
+  assert.ok(withRemote.indexOf('src="i18n.js"') < withRemote.indexOf('src="remoteUx.js"') && withRemote.indexOf('src="remoteUx.js"') < withRemote.indexOf('src="main.js"'), 'the remote module extends the table before the main script');
   assert.match(html, /<script nonce="abc" src="i18n.js"><\/script>/);
   assert.match(html, /<select id="languageSelect"[^>]*>\s*<option value="en" lang="en" selected>English<\/option>\s*<option value="es" lang="es">Español<\/option>/);
 });
@@ -244,6 +254,28 @@ test('an Agent run in a chosen folder makes Settings show that folder', async ()
   }
 });
 
+test('opening a stored thread makes Settings inspect that thread folder automatically', async () => {
+  const h = new HostHarness({ folders: 2 });
+  await h.start({ agentProfile: 'safe-auto' });
+  try {
+    const second = path.join(h.root, 'ws1');
+    fakeWindow.quickPickAnswer = (items: unknown[]) => (items as Array<{ description?: string }>).find((item) => item.description === second);
+    h.model.enqueue({ kind: 'json', body: assistantText('Nothing to change.') });
+    await h.provider.sendMessage('Bind this thread.', 'agent', 'local');
+    const threadId = h.provider.activeThreadId as string;
+
+    h.send({ type: 'selectMemoryProject', path: h.workspace });
+    await h.waitFor((state) => memoryOf(state)?.selectedPath === h.workspace);
+    h.send({ type: 'openThread', threadId });
+    h.send({ type: 'navigate', screen: 'settings' });
+    const shown = await h.waitFor((state) => memoryOf(state)?.selectedPath === second);
+    assert.equal(memoryOf(shown).project, 'ws1');
+  } finally {
+    h.provider.cancelRequest();
+    await h.dispose();
+  }
+});
+
 test('memory actions show progress and their answer inside Project memory', () => {
   const script = readFileSync('media/main.js', 'utf8');
   assert.match(script, /markPending\(memoryProposeBtn, t\('Preparing…'\)\)/);
@@ -255,7 +287,10 @@ test('memory actions show progress and their answer inside Project memory', () =
   assert.match(script, /type: 'setLanguage', language: next/);
   const html = readFileSync('src/viewHtml.ts', 'utf8');
   assert.match(html, /<p id="memoryStatus" role="status" aria-live="polite" hidden><\/p>/);
-  assert.match(html, /<select id="memoryProjectSelect" aria-label="Project"><\/select>/);
+  assert.match(html, /Used automatically by Agent and Mission\./);
+  assert.match(html, /Nothing needs to be selected here\./);
+  assert.match(html, /<select id="memoryProjectSelect" aria-label="View another open folder"><\/select>/);
+  assert.match(html, /Advanced: add a decision manually/);
   // The picker shows only folders the host listed; nothing is typed in.
   assert.doesNotMatch(script.slice(script.indexOf('function renderMemoryProjects'), script.indexOf('function renderMemory(')), /innerHTML/);
 });

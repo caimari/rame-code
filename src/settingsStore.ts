@@ -33,7 +33,7 @@ import { EMPTY_USAGE, type ProviderUsage } from './usage.js';
 
 export const RAME_SETTINGS_KEY = 'rameCode.settings.v1';
 export const RAME_USAGE_KEY = 'rameCode.usage.v1';
-export const SETTINGS_VERSION = 1;
+export const SETTINGS_VERSION = 2;
 
 export type ProviderId = 'cloud' | 'local';
 
@@ -142,7 +142,7 @@ function defaultLocal(): LocalRuntimeSettings {
     modelId: 'local-glimmer',
     contextSize: 32768,
     port: 8775,
-    idleTimeoutSec: 600,
+    idleTimeoutSec: 900,
   };
 }
 
@@ -259,6 +259,14 @@ export function validateSettings(value: unknown): RameSettings {
   const model = provider === 'local' ? 'local-glimmer' : cloudModel;
   void fallback;
   const checkedLocal = validateLocalSettings(value.local);
+  let local = checkedLocal.ok && checkedLocal.settings
+    ? checkedLocal.settings
+    : defaultLocal();
+  // v1 used ten minutes as its default. Migrate only that exact old default;
+  // once saved as v2, an explicit ten-minute choice remains ten minutes.
+  if (value.version === 1 && local.idleTimeoutSec === 600) {
+    local = { ...local, idleTimeoutSec: 900 };
+  }
   const externalLocalEndpoint =
     typeof value.externalLocalEndpoint === 'string'
       ? value.externalLocalEndpoint.slice(0, 512)
@@ -272,9 +280,7 @@ export function validateSettings(value: unknown): RameSettings {
     model,
     cloudModel,
     cloudCatalogSource,
-    local: checkedLocal.ok && checkedLocal.settings
-      ? checkedLocal.settings
-      : defaultLocal(),
+    local,
     externalLocalEndpoint,
     allowCloudEscalation: value.allowCloudEscalation === true,
     agentProfile: parseAgentProfile(value.agentProfile),

@@ -8,7 +8,8 @@ export interface MissionReportEntry {
 }
 
 /** Build the host-authored terminal Mission record without touching UI state. */
-export function buildMissionReportEntry(mission: MissionRecord): MissionReportEntry | null {
+/** `evidence`: the Model evidence summary lines (modelEvidence.ts), placed before the closing note. */
+export function buildMissionReportEntry(mission: MissionRecord, evidence: string[] = []): MissionReportEntry | null {
   if (!['completed', 'blocked', 'paused', 'cancelled', 'interrupted', 'waiting_approval'].includes(mission.status)) {
     return null;
   }
@@ -37,6 +38,7 @@ export function buildMissionReportEntry(mission: MissionRecord): MissionReportEn
           'mission: no sandbox: test scripts ran with your user permissions and could reach other files, the network, or other processes',
         ]
       : []),
+    ...evidence,
     `mission: ${mission.note}`,
   ];
   return {

@@ -427,11 +427,11 @@ function html(): string {
   return buildViewHtml({ cspSource: 'c', scriptUri: 'main.js', styleUri: 'main.css', nonce: 'n', i18nUri: 'i18n.js' });
 }
 
-test('Settings is split into seven cards with a visible navigation and Back', () => {
+test('Settings is split into exclusive cards with Models separate from Runtime', () => {
   const doc = html();
   const settings = doc.slice(doc.indexOf('id="settingsScreen"'));
   const cards = [...settings.matchAll(/<details class="settings-card" id="(card\w+)"/g)].map((match) => match[1]);
-  assert.deepEqual(cards, ['cardGeneral', 'cardRuntime', 'cardMission', 'cardMemory', 'cardSecurity', 'cardAdvanced', 'cardAbout']);
+  assert.deepEqual(cards, ['cardGeneral', 'cardModels', 'cardRuntime', 'cardMission', 'cardMemory', 'cardSecurity', 'cardAdvanced', 'cardAbout']);
   const nav = settings.slice(settings.indexOf('<nav id="settingsNav"'), settings.indexOf('</nav>'));
   assert.deepEqual([...nav.matchAll(/data-card="(card\w+)"/g)].map((match) => match[1]), cards);
   assert.match(nav, /aria-label="Settings sections"/);
@@ -441,14 +441,21 @@ test('Settings is split into seven cards with a visible navigation and Back', ()
   }
   assert.ok(settings.indexOf('id="backToChat"') < settings.indexOf('id="settingsNav"'), 'Back stays in the sticky header');
   assert.match(doc, /#settingsNav \{ position: sticky;/);
-  // The start form lives in the thread card; Settings keeps the advanced Mission settings.
+  assert.match(settings, /id="cardModels" hidden/);
+  assert.match(settings, /id="cardRuntime" hidden/);
+  assert.ok(settings.indexOf('id="cloudSection"') < settings.indexOf('id="cardRuntime"'), 'cloud models live in Models');
+  assert.ok(settings.indexOf('id="localSection"') > settings.indexOf('id="cardRuntime"'), 'llama-server lives in Runtime');
+  // The complete start grant lives in the thread card; Settings only follows an existing Mission.
   assert.ok(!settings.includes('id="missionStart"'));
-  assert.ok(settings.includes('id="missionConsults"'));
+  assert.ok(!settings.includes('id="missionConsults"'));
   assert.ok(settings.includes('id="missionOpenThread"'));
   // Every section that existed is still there.
   for (const id of ['languageSelect', 'runtimeSelect', 'generationSection', 'cloudSection', 'localSection', 'memorySection', 'missionSection', 'escalationSection', 'generationAdvanced', 'diagnostics', 'aboutFacts']) {
     assert.ok(settings.includes(`id="${id}"`), id);
   }
+  const navigation = readFileSync('media/settingsTabs.js', 'utf8');
+  assert.match(navigation, /cards\[index\]\.hidden = cards\[index\] !== card/);
+  assert.doesNotMatch(navigation, /scrollIntoView/);
 });
 
 test('the Mission card is in the thread, keyboard reachable, and announces with aria-live', () => {
@@ -466,10 +473,26 @@ test('the Mission card is in the thread, keyboard reachable, and announces with 
   assert.match(chat, /id="missionLevelStandard" value="standard" checked> Standard Mission/);
   assert.match(chat, /id="missionLevelVerified" value="verified"> Verified Mission/);
   assert.match(chat, /<div id="missionAcceptanceList" class="file-picker" role="group" aria-label="Acceptance files"><\/div>/);
+  assert.match(chat, /<fieldset id="missionConsultRow" hidden>/);
+  assert.match(chat, /<select id="missionConsults" aria-label="Maximum Meta consultations">/);
+  assert.match(chat, /<option value="0">0 — off<\/option>/);
+  assert.match(chat, /<option value="1" selected>1<\/option>/);
+  assert.match(chat, /id="missionConsultSummary" class="hint" role="status" aria-live="polite"/);
+  assert.ok(chat.indexOf('id="missionConsultRow"') < chat.indexOf('id="missionStart"'), 'the advisory grant is reviewed before authorization');
+  assert.match(doc, /#missionSetup \{ display: flex; flex-direction: column; gap: 12px;/);
+  assert.match(doc, /#missionLevel \{ display: flex; flex-direction: column; gap: 6px; padding: 10px; \}/);
+  assert.match(doc, /#missionVerifiedRow \{ display: flex; flex-direction: column; gap: 9px;/);
+  assert.match(doc, /#missionConsultRow \{ display: flex; flex-direction: column; gap: 8px;/);
+  assert.match(doc, /#missionSandboxWarning \{ padding: 8px 10px; border-left: 3px solid/);
   assert.ok(!/comma-separated/.test(doc));
   // The warnings stay.
   assert.ok(chat.includes('id="missionSandboxWarning"'));
   assert.ok(chat.includes('id="missionDependenciesNote"'));
+  const remote = readFileSync('media/remoteUx.js', 'utf8');
+  assert.match(remote, /function renderMissionGrant\(data\)/);
+  assert.match(remote, /data\.allowCloudEscalation === true && data\.hasKey === true/);
+  assert.match(remote, /Selected: up to \{0\} Meta consultation\(s\) · \{1\} · \{2\}/);
+  assert.match(remote, /renderRuntime\(data\);[\s\S]*renderMissionGrant\(data\);/);
 });
 
 test('the start card offers the detected scripts and test files, and names what will be hashed', async () => {

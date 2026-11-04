@@ -20,11 +20,11 @@ test('default mode is Agent with order Agent, Mission, Chat', () => {
   assert.equal(DEFAULT_CHAT_MODE, 'agent');
   assert.deepEqual(
     CHAT_MODES.map((mode) => mode.id),
-    ['agent', 'chat', 'mission'],
+    ['agent', 'mission', 'chat'],
   );
   assert.deepEqual(
     CHAT_MODES.map((mode) => mode.label),
-    ['Agent', 'Chat only', 'Mission'],
+    ['Agent', 'Mission', 'Chat only'],
   );
   assert.equal(defaultSettings().mode, 'agent');
   assert.equal(validateSettings(undefined).mode, 'agent');
@@ -42,7 +42,7 @@ test('composer defaults to Agent and permission defaults to Ask', () => {
   const agentAt = modeSelect.indexOf('value="agent"');
   const missionAt = modeSelect.indexOf('value="mission"');
   const chatAt = modeSelect.indexOf('value="chat"');
-  assert.ok(agentAt >= 0 && chatAt > agentAt && missionAt > chatAt);
+  assert.ok(agentAt >= 0 && missionAt > agentAt && chatAt > missionAt);
   assert.match(html, /<option value="agent" selected title="Recommended: talks naturally and uses tools when they are needed\.">Agent<\/option>/);
   assert.match(html, /<option value="chat" title="Conversation only, with no tools and no file access\.">Chat only<\/option>/);
   assert.match(html, /<option value="ask" selected>Ask \(safest\)<\/option>/);

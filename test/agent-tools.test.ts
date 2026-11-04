@@ -15,6 +15,7 @@ import {
   validateMoveFileArgs,
   validateReadFileArgs,
   validateRunTestsArgs,
+  validateSearchHistoryArgs,
   validateSearchTextArgs,
   validateSetExecutableArgs,
   validateToolCallList,
@@ -44,6 +45,9 @@ test('per-tool schemas accept exact keys and reject extras', () => {
   assert.throws(() => validateInspectWorkspaceArgs({ dir: '', maxDepth: 99, maxEntries: 500 }), /Invalid/);
   assert.deepEqual(validateFilesystemUsageArgs({}), {});
   assert.throws(() => validateFilesystemUsageArgs({ path: '/' }), /Invalid/);
+  assert.deepEqual(validateSearchHistoryArgs({ queries: ['offline operation'], limit: 3 }), { queries: ['offline operation'], limit: 3 });
+  assert.throws(() => validateSearchHistoryArgs({ queries: [], limit: 3 }), /Invalid/);
+  assert.throws(() => validateSearchHistoryArgs({ queries: ['a', 'b', 'c', 'd'], limit: 3 }), /Invalid/);
   assert.deepEqual(validateCreateDirectoryArgs({ path: 'src/new' }), { path: 'src/new' });
   assert.throws(() => validateCreateDirectoryArgs({ path: '' }), /Invalid/);
   assert.deepEqual(validateMoveFileArgs({ source: 'a', destination: 'b', expectedHash: 'a'.repeat(64) }), { source: 'a', destination: 'b', expectedHash: 'a'.repeat(64) });
@@ -133,6 +137,7 @@ test('tool definitions cover the bounded allowlisted tools and bound output', ()
     'read_file',
     'replace_in_file',
     'run_tests',
+    'search_history',
     'search_text',
     'set_executable',
   ]);

@@ -28,9 +28,11 @@ main {
   top: 0;
   z-index: 2;
   background-color: var(--vscode-sideBar-background);
-  padding: 4px 0;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 4px 0 6px;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .view-title {
@@ -38,7 +40,8 @@ main {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  margin: 8px 0 0;
+  margin: 0;
+  line-height: 1.4;
   color: var(--vscode-sideBarTitle-foreground, var(--vscode-foreground));
   flex: 1 1 auto;
   min-width: 0;
@@ -49,6 +52,7 @@ main {
 
 .view-actions {
   display: flex;
+  align-items: center;
   gap: 4px;
   flex: 0 0 auto;
   min-width: 0;
@@ -62,6 +66,7 @@ main {
   padding: 2px 6px;
   color: var(--vscode-descriptionForeground, var(--vscode-foreground));
   font-size: 12px;
+  margin: 5px 0 3px;
 }
 
 #runIndicator[hidden] {
@@ -147,6 +152,26 @@ button.icon-btn {
 
 button.icon-btn.gear {
   font-size: 15px;
+}
+
+#backToList.is-pending::after {
+  display: none;
+}
+
+#backToList.is-pending {
+  opacity: 1;
+  animation: rame-back-pulse 0.75s ease-in-out infinite alternate;
+}
+
+@keyframes rame-back-pulse {
+  from {
+    color: var(--vscode-foreground);
+    background-color: transparent;
+  }
+  to {
+    color: var(--vscode-button-foreground);
+    background-color: var(--vscode-button-background);
+  }
 }
 
 #runtimeStatus {
@@ -528,6 +553,14 @@ details.scope-details summary {
   font-weight: 600;
 }
 
+details.agent-details[open] > summary,
+details.scope-details[open] > summary,
+#runDetails[open] > summary,
+#memoryHistoryDetails[open] > summary,
+#memoryProposeDetails[open] > summary {
+  margin-bottom: 8px;
+}
+
 button.is-pending {
   opacity: 0.7;
   cursor: progress;
@@ -565,7 +598,7 @@ button.is-pending::after {
 #composerToolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
   min-width: 0;
   max-width: 100%;
@@ -638,9 +671,18 @@ button.is-pending::after {
 section.settings-block {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 0;
+  gap: 10px;
+  padding: 10px 0;
   border-top: 1px solid var(--vscode-panel-border, transparent);
+}
+
+section.settings-block > label {
+  line-height: 1.35;
+}
+
+section.settings-block > .hint {
+  line-height: 1.45;
+  margin-bottom: 2px;
 }
 
 textarea,
@@ -666,6 +708,12 @@ input[type="checkbox"] {
 textarea {
   resize: vertical;
   line-height: 1.4;
+}
+
+#composer {
+  min-height: 64px;
+  max-height: 180px;
+  overflow-y: hidden;
 }
 
 textarea:focus-visible,
@@ -733,9 +781,12 @@ button.secondary:hover {
   padding: 8px;
   background-color: var(--vscode-editor-background);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-  position: sticky;
-  bottom: 8px;
+  position: relative;
   z-index: 5;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 #agentBox[hidden] {
@@ -744,7 +795,14 @@ button.secondary:hover {
 
 #pendingBody {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   word-break: break-word;
+  min-width: 0;
+  max-width: 100%;
+  max-height: min(42vh, 320px);
+  box-sizing: border-box;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 #actionLog {
@@ -793,4 +851,38 @@ button.secondary:hover {
 
 #memoryHistory h5 {
   margin: 6px 0 2px;
+}
+
+#memoryProjectPicker {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+#memoryProjectPicker .hint {
+  margin: 0;
+}
+
+#memoryProposeDetails[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.link-button {
+  display: inline;
+  width: auto;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--vscode-textLink-foreground);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.link-button:hover,
+.link-button:focus-visible {
+  color: var(--vscode-textLink-activeForeground);
+  text-decoration: underline;
 }

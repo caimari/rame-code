@@ -16,6 +16,14 @@ export interface ViewHtmlOptions {
   nonce: string;
   /** Local translation table loaded before the main script (optional). */
   i18nUri?: string;
+  /** Modular Settings navigation loaded before the main script (optional). */
+  settingsTabsUri?: string;
+  /** Composer sizing, Enter-to-send, and follow-tail behavior (optional). */
+  composerUxUri?: string;
+  /** Advisory and delegated Meta cards (loaded after i18n, before the main script). */
+  remoteUxUri?: string;
+  /** Model evidence inside Run details (loaded after i18n, before the main script). */
+  evidenceUxUri?: string;
 }
 
 /** Create a fresh CSP nonce for one webview load. */
@@ -45,6 +53,10 @@ export function buildViewHtml(options: ViewHtmlOptions): string {
   const styleUri = escapeAttr(options.styleUri);
   const nonce = escapeAttr(options.nonce);
   const i18nScript = options.i18nUri ? `<script nonce="${nonce}" src="${escapeAttr(options.i18nUri)}"></script>\n` : '';
+  const settingsTabsScript = options.settingsTabsUri ? `<script nonce="${nonce}" src="${escapeAttr(options.settingsTabsUri)}"></script>\n` : '';
+  const composerUxScript = options.composerUxUri ? `<script nonce="${nonce}" src="${escapeAttr(options.composerUxUri)}"></script>\n` : '';
+  const remoteUxScript = options.remoteUxUri ? `<script nonce="${nonce}" src="${escapeAttr(options.remoteUxUri)}"></script>\n` : '';
+  const evidenceUxScript = options.evidenceUxUri ? `<script nonce="${nonce}" src="${escapeAttr(options.evidenceUxUri)}"></script>\n` : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -60,9 +72,9 @@ main { display: flex; flex-direction: column; gap: 10px; height: 100vh; box-sizi
 #chatScreen { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; }
 #chatScreen[hidden], #settingsScreen[hidden] { display: none; }
 #settingsScreen { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
-.view-header { position: sticky; top: 0; z-index: 2; background-color: var(--vscode-sideBar-background); padding: 4px 0; min-width: 0; overflow: hidden; }
-.view-header .view-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.view-header .view-actions { flex: 0 0 auto; min-width: 0; }
+.view-header { position: sticky; top: 0; z-index: 2; min-height: 36px; box-sizing: border-box; background-color: var(--vscode-sideBar-background); padding: 4px 0 6px; min-width: 0; overflow: visible; }
+.view-header .view-title { flex: 1 1 auto; min-width: 0; margin: 0; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.view-header .view-actions { flex: 0 0 auto; min-width: 0; align-items: center; }
 button.icon-btn { padding: 2px 7px; min-width: 28px; flex: 0 0 auto; font-size: 13px; line-height: 1.4; }
 button.icon-btn.gear { font-size: 15px; }
 #homeSection { display: flex; flex: 1 1 auto; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; overflow-y: auto; }
@@ -77,7 +89,7 @@ button.icon-btn.gear { font-size: 15px; }
 #transcriptSection { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 #composer-wrap { flex: 0 0 auto; padding: 8px 0 0; background-color: var(--vscode-sideBar-background); border-top: 1px solid var(--vscode-panel-border, transparent); display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 #composerCard { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 100%; border: 1px solid var(--vscode-panel-border, transparent); border-radius: 12px; padding: 8px; background-color: var(--vscode-editor-background); }
-#composerToolbar { display: grid; grid-template-columns: 32px auto minmax(64px, 1fr) 96px 32px; gap: 6px; align-items: center; min-width: 0; max-width: 100%; }
+#composerToolbar { display: grid; grid-template-columns: 32px auto minmax(64px, 1fr) 96px 32px; gap: 8px; align-items: center; min-width: 0; max-width: 100%; }
 #composerMeta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
 .chip { display: inline-block; font-size: 12px; line-height: 1.4; padding: 0 7px; border: 0; border-radius: 3px; background: transparent; color: inherit; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip[hidden] { display: none; }
@@ -92,8 +104,10 @@ button.chip { cursor: pointer; font-family: inherit; }
 #resultSection[hidden] { display: none; }
 .turn-error { border-color: var(--vscode-inputValidation-errorBorder, #be1100); }
 .turn-plan { background-color: var(--vscode-editor-background); }
-section.settings-block { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-top: 1px solid var(--vscode-panel-border, transparent); }
+section.settings-block { display: flex; flex-direction: column; gap: 10px; padding: 10px 0; border-top: 1px solid var(--vscode-panel-border, transparent); }
 section.settings-block[hidden] { display: none; }
+section.settings-block > label { line-height: 1.35; }
+section.settings-block > .hint { line-height: 1.45; margin-bottom: 2px; }
 #runtimeStatus { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 #workspaceBadge { font-weight: 600; }
 #workspaceBadge[hidden] { display: none; }
@@ -107,10 +121,18 @@ section.settings-block[hidden] { display: none; }
 #permissionWarning[hidden] { display: none; }
 #runDetails { border: 1px solid var(--vscode-panel-border, transparent); border-radius: 4px; padding: 4px 6px; }
 #runDetails summary { cursor: pointer; font-weight: 600; }
+#modelEvidence { margin-top: 6px; min-width: 0; }
+#modelEvidence p, #modelEvidence li { margin: 2px 0; overflow-wrap: anywhere; }
+#modelEvidence ol { list-style: none; padding-left: 0; margin: 4px 0; }
+#modelEvidence li { border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35)); padding-top: 4px; }
+#modelEvidence .evidence-head { font-weight: 600; }
+#modelEvidence .evidence-link { padding-left: 12px; }
+#modelEvidenceOther[hidden] { display: none; }
 #profileSelect[hidden] { display: none; }
-#agentBox { border: 2px solid var(--vscode-inputValidation-warningBorder, #b89500); border-radius: 6px; padding: 8px; background-color: var(--vscode-editor-background); box-shadow: 0 4px 16px rgba(0,0,0,0.25); position: sticky; bottom: 8px; z-index: 5; min-width: 0; }
+#agentBox { border: 2px solid var(--vscode-inputValidation-warningBorder, #b89500); border-radius: 6px; padding: 8px; background-color: var(--vscode-editor-background); box-shadow: 0 4px 16px rgba(0,0,0,0.25); position: relative; z-index: 5; min-width: 0; max-width: 100%; box-sizing: border-box; overflow: hidden; }
 #agentBox[hidden] { display: none; }
 #agentBox h3 { margin-top: 0; }
+#pendingBody { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; min-width: 0; max-width: 100%; max-height: min(42vh, 320px); box-sizing: border-box; overflow-y: auto; overflow-x: hidden; }
 #agentSection[hidden] { display: none; }
 #consultBox { border: 2px solid var(--vscode-inputValidation-warningBorder, #b89500); border-radius: 6px; padding: 8px; background-color: var(--vscode-editor-background); min-width: 0; }
 #consultBox[hidden] { display: none; }
@@ -120,12 +142,20 @@ details.agent-details { border: 1px solid var(--vscode-panel-border, transparent
 details.agent-details summary { cursor: pointer; font-weight: 600; }
 details.scope-details { border: 1px solid var(--vscode-panel-border, transparent); border-radius: 4px; padding: 4px 6px; }
 details.scope-details summary { cursor: pointer; font-weight: 600; }
+details.agent-details[open] > summary, details.scope-details[open] > summary, #runDetails[open] > summary, #memoryHistoryDetails[open] > summary, #memoryProposeDetails[open] > summary { margin-bottom: 8px; }
 #memoryStatus { margin: 0; padding: 4px 8px; border-left: 3px solid var(--vscode-progressBar-background, #0e70c0); border-radius: 3px; background-color: var(--vscode-editor-background); overflow-wrap: anywhere; }
 #memoryStatus[hidden], #memoryProjectPicker[hidden] { display: none; }
 #memoryStatus[data-state="ok"] { border-left-color: var(--vscode-testing-iconPassed, #73c991); }
 #memoryStatus[data-state="error"] { border-left-color: var(--vscode-inputValidation-errorBorder, #be1100); }
 #memoryStatus[data-state="working"]::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 2px solid var(--vscode-progressBar-background, #0e70c0); border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: rame-spin 0.8s linear infinite; }
 #memoryProjectSelect { max-width: 100%; }
+#memoryProjectPicker { display: flex; flex-direction: column; gap: 7px; }
+#memoryProjectPicker .hint { margin: 0; }
+#memoryIntro { margin: 0 0 10px; padding: 9px 10px; border-left: 3px solid var(--vscode-testing-iconPassed, #73c991); border-radius: 4px; background: var(--vscode-editor-background); }
+#memoryIntro strong { display: block; margin-bottom: 4px; }
+#memoryIntro p { margin: 0; }
+#memoryProject { margin: 0 0 10px; padding: 7px 9px; border: 1px solid var(--vscode-panel-border, transparent); border-radius: 4px; overflow-wrap: anywhere; }
+#memoryProposeDetails[open] { display: flex; flex-direction: column; gap: 7px; }
 #missionAutoStatus[hidden], #missionGrantForm[hidden], #missionConsultRow[hidden] { display: none; }
 #missionMode { max-width: 100%; }
 details.mission-internal-run { border: 1px dashed var(--vscode-panel-border, transparent); border-radius: 4px; padding: 2px 6px; opacity: 0.85; }
@@ -134,6 +164,17 @@ button.is-pending { opacity: 0.75; cursor: progress; }
 button.is-pending::after { content: ""; display: inline-block; width: 10px; height: 10px; margin-left: 6px; border: 2px solid var(--vscode-progressBar-background, #0e70c0); border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: rame-spin 0.8s linear infinite; }
 @keyframes rame-spin { to { transform: rotate(360deg); } }
 .version-chip { font-size: 11px; font-weight: 400; opacity: 0.75; margin-left: 4px; }
+#chatScreen .view-header { flex-wrap: wrap; row-gap: 0; }
+#chatScreen .view-header .view-title { flex-basis: 0; }
+#runtimeBadge { flex: 1 0 100%; order: 3; display: flex; gap: 10px; margin: 0; min-width: 0; overflow: hidden; font-size: 11px; line-height: 1.3; opacity: 0.8; white-space: nowrap; }
+#runtimeBadge span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#runtimeBadge span[data-selected="true"] { font-weight: 600; }
+#runtimeBadge span[data-state="running"], #runtimeBadge span[data-state="connected"] { color: var(--vscode-testing-iconPassed, #73c991); opacity: 1; }
+#runtimeBadge:empty, #runtimeBadge span:empty { display: none; }
+#runIndicator { margin: 5px 0 3px; }
+#backToList.is-pending::after { display: none; }
+#backToList.is-pending { opacity: 1; animation: rame-back-pulse 0.75s ease-in-out infinite alternate; }
+@keyframes rame-back-pulse { from { color: var(--vscode-foreground); background-color: transparent; } to { color: var(--vscode-button-foreground); background-color: var(--vscode-button-background); } }
 #settingsNav { position: sticky; top: 34px; z-index: 2; display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0 6px; background-color: var(--vscode-sideBar-background); border-bottom: 1px solid var(--vscode-panel-border, transparent); }
 #settingsNav button { padding: 2px 8px; font-size: 12px; background: transparent; color: var(--vscode-foreground); border: 1px solid var(--vscode-panel-border, transparent); border-radius: 10px; }
 #settingsNav button[aria-current="true"] { border-color: var(--vscode-focusBorder, #0e70c0); font-weight: 600; }
@@ -141,11 +182,36 @@ details.settings-card { margin: 8px 0; border: 1px solid var(--vscode-panel-bord
 details.settings-card > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 8px 10px; list-style-position: inside; }
 details.settings-card > summary .card-title { font-weight: 600; }
 details.settings-card > summary .card-summary { font-size: 11px; opacity: 0.8; overflow-wrap: anywhere; }
-details.settings-card > .card-body { padding: 0 10px 6px; }
+details.settings-card > .card-body { padding: 8px 12px 12px; }
 details.settings-card section.settings-block:first-child { border-top: 0; }
 .mission-card { border: 1px solid var(--vscode-focusBorder, #0e70c0); border-left-width: 3px; border-radius: 8px; padding: 8px 10px; background-color: var(--vscode-editor-background); display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.mission-card[hidden], #missionSetup[hidden], #missionVerifiedRow[hidden], #missionReport[hidden], #missionStartError[hidden], #missionStartNote[hidden] { display: none; }
+.mission-card[hidden], #missionSetup[hidden], #missionVerifiedRow[hidden], #missionReport[hidden], #missionStartError[hidden], #missionStartNote[hidden], #missionBootstrapNote[hidden] { display: none; }
 .mission-card h3 { margin: 0; }
+#missionSetup { display: flex; flex-direction: column; gap: 12px; padding-top: 4px; }
+#missionSetup > label[for] { font-weight: 600; line-height: 1.35; }
+#missionSetup > .hint { line-height: 1.45; }
+#missionLevel { display: flex; flex-direction: column; gap: 6px; padding: 10px; }
+#missionLevel label { display: flex; align-items: center; gap: 7px; line-height: 1.35; }
+#missionLevel .hint { padding-left: 24px; line-height: 1.45; margin-bottom: 3px; }
+#missionStackNote { padding: 8px 10px; border-left: 3px solid var(--vscode-textLink-foreground, #3794ff); background-color: var(--vscode-textBlockQuote-background, transparent); }
+#missionBootstrapNote { margin: 0; padding: 10px 12px; border-left: 3px solid var(--vscode-textLink-foreground, #3794ff); background-color: var(--vscode-textBlockQuote-background, transparent); line-height: 1.45; }
+#missionTrustedRow { display: flex; align-items: flex-start; gap: 7px; line-height: 1.4; }
+#missionTrustedRow input { flex: 0 0 auto; margin-top: 3px; }
+#missionVerifiedRow { display: flex; flex-direction: column; gap: 9px; padding: 10px; border: 1px solid var(--vscode-panel-border, transparent); border-radius: 6px; }
+#missionVerifiedRow > label[for] { font-weight: 600; }
+#missionAcceptanceFiles { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+#missionSandboxWarning { padding: 8px 10px; border-left: 3px solid var(--vscode-inputValidation-warningBorder, #b89500); background-color: var(--vscode-inputValidation-warningBackground, transparent); }
+#missionConsultRow { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--vscode-panel-border, transparent); border-radius: 6px; margin: 0; min-width: 0; }
+#missionConsultRow > label { display: flex; align-items: flex-start; gap: 7px; line-height: 1.4; }
+#missionConsultRow > label input { flex: 0 0 auto; margin-top: 3px; }
+#missionConsultCountRow { display: grid; grid-template-columns: minmax(0, 1fr) 84px; align-items: center; gap: 8px; }
+#missionConsultSummary { margin: 0; padding: 7px 9px; border-left: 3px solid var(--vscode-textLink-foreground, #3794ff); background-color: var(--vscode-textBlockQuote-background, transparent); overflow-wrap: anywhere; }
+#missionConsultLimits[open] { display: flex; flex-direction: column; gap: 7px; }
+#disclosureBox[hidden], #disclosureContributor[hidden], #disclosureEarlier[hidden], #disclosureDecisionsNote[hidden], #disclosureToolsRow[hidden], #disclosureSharing[hidden] { display: none; }
+#disclosureToolsRow { display: flex; gap: 6px; align-items: flex-start; margin: 6px 0; overflow-wrap: anywhere; }
+#disclosureMessages, #disclosureEarlierMessages { padding-left: 0; list-style: none; margin: 4px 0; }
+#disclosureMessages pre, #disclosureEarlierMessages pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12em; overflow: auto; margin: 2px 0 6px; }
+#escalationActions[hidden], #consultFilesBox[hidden], #delegationFailure[hidden], #consultResult[hidden], #missionRemote[hidden], #localIssueBox[hidden], #localIssueBox button[hidden], #localIssueDelegateWhy[hidden] { display: none; }
 .mission-card.is-blocked { border-color: var(--vscode-inputValidation-errorBorder, #be1100); }
 .mission-blocked { display: flex; flex-direction: column; gap: 6px; border: 2px solid var(--vscode-inputValidation-errorBorder, #be1100); border-radius: 6px; padding: 6px 8px; background-color: var(--vscode-inputValidation-errorBackground, rgba(190, 17, 0, 0.12)); }
 .mission-blocked[hidden], #missionReviewList[hidden], #missionRetryForm[hidden], #missionRetryError[hidden] { display: none; }
@@ -162,6 +228,8 @@ details.settings-card section.settings-block:first-child { border-top: 0; }
 dl.mission-facts { display: grid; grid-template-columns: minmax(80px, max-content) 1fr; gap: 2px 8px; margin: 0; font-size: 12px; }
 dl.mission-facts dt { opacity: 0.8; }
 dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
+.link-button { display: inline; width: auto; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--vscode-textLink-foreground); text-align: left; overflow-wrap: anywhere; }
+.link-button:hover, .link-button:focus-visible { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
 #missionLevel, #missionAcceptanceFiles { border: 1px solid var(--vscode-panel-border, transparent); border-radius: 6px; padding: 4px 8px; margin: 0; min-width: 0; }
 .file-picker { display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow-y: auto; font-size: 12px; }
 .file-picker label { overflow-wrap: anywhere; }
@@ -193,7 +261,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
 #threadList .thread-delete:hover, #threadList .thread-delete:focus-visible { color: var(--vscode-errorForeground, #f48771); background: transparent; }
 @media (max-width: 500px) {
   #composerCard { padding: 6px; border-radius: 10px; }
-  #composerToolbar { grid-template-columns: 32px auto minmax(48px, 1fr) 82px 32px; gap: 4px; }
+  #composerToolbar { grid-template-columns: 32px auto minmax(48px, 1fr) 82px 32px; gap: 6px; }
   #modeSelect { max-width: 82px; }
   #runtimeStatus { max-width: 140px; }
 }
@@ -217,6 +285,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
         <button id="refresh" class="icon-btn" type="button" title="Refresh history" aria-label="Refresh history">&#x21bb;</button>
         <button id="openSettings" class="icon-btn gear" type="button" title="Open Settings" aria-label="Open Settings">&#x2699;</button>
       </div>
+      <p id="runtimeBadge" role="status"><span id="runtimeBadgeLocal"></span><span id="runtimeBadgeCloud"></span></p>
     </header>
     <div id="runIndicator" role="status" aria-live="polite" hidden>
       <span id="runIndicatorDot" aria-hidden="true"></span>
@@ -258,6 +327,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
           <button id="missionCancel" type="button" hidden>Cancel Mission</button>
         </div>
         <div id="missionSetup" hidden>
+          <p id="missionBootstrapNote" class="mission-note" role="status" aria-live="polite" hidden></p>
           <fieldset id="missionLevel">
             <legend>Verification level</legend>
             <label><input type="radio" name="missionLevel" id="missionLevelStandard" value="standard" checked> Standard Mission</label>
@@ -286,6 +356,34 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
           </div>
           <p class="hint" id="missionSandboxWarning" role="note">Not a sandbox: test scripts run with your user permissions and can reach other files, the network, or other processes. RAME Code only checks the paths its own tools use. Use autonomous workspace only for a project you trust.</p>
           <p class="hint">The permission covers only this Mission, this project, and the local model. Autonomous workspace never leaves the project through RAME's tools, never touches .git, .env, keys, or credentials, runs no shell, runs only the allowlisted tests of the current package.json (a changed package.json asks again), and still asks before deleting, moving, or changing project memory.</p>
+          <fieldset id="missionConsultRow" hidden>
+            <legend>Meta Advisory</legend>
+            <div id="missionConsultCountRow">
+              <label for="missionConsults">Maximum consultations for this Mission</label>
+              <select id="missionConsults" aria-label="Maximum Meta consultations">
+                <option value="0">0 — off</option>
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+              </select>
+            </div>
+            <p id="missionConsultSummary" class="hint" role="status" aria-live="polite"></p>
+            <p class="hint">Advice only: Glimmer keeps every tool. Meta receives no file contents and cannot execute actions.</p>
+            <details id="missionConsultLimits">
+              <summary>Advisory limits</summary>
+              <label for="missionLimitRequestBytes">Bytes per request, at most (empty = 12000)</label>
+              <input id="missionLimitRequestBytes" type="number" min="1000" max="24000" step="1" placeholder="12000">
+              <label for="missionLimitTotalBytes">Total bytes sent, at most (empty = 12000 × consultations)</label>
+              <input id="missionLimitTotalBytes" type="number" min="1000" max="120000" step="1" placeholder="12000 × n">
+              <label for="missionLimitOutputTokens">Output tokens per answer, at most (empty = 2048)</label>
+              <input id="missionLimitOutputTokens" type="number" min="256" max="8192" step="1" placeholder="2048">
+              <label for="missionLimitTotalTokens">Remote token budget, at most (empty = 14048 × consultations)</label>
+              <input id="missionLimitTotalTokens" type="number" min="1000" max="200000" step="1" placeholder="14048 × n">
+              <p class="hint">RAME refuses before sending anything that would exceed these limits and never raises them itself.</p>
+            </details>
+          </fieldset>
           <div class="row">
             <button id="missionStart" type="button">Authorize and start</button>
           </div>
@@ -309,6 +407,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
             <p id="missionRetryError" class="mission-error" role="alert" hidden></p>
           </div>
         </section>
+        <dl id="missionRemote" class="mission-facts" aria-label="Remote advice and causal recovery" hidden></dl>
         <details id="missionAdvancedVerification" hidden>
           <summary>Advanced verification</summary>
           <ul id="missionAdvancedList"></ul>
@@ -328,20 +427,64 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
         <p id="resultBody" class="result-body"></p>
         <div id="resultHostRecord"></div>
       </section>
-      <section id="escalationBox" aria-labelledby="escalation-heading" hidden>
-        <h3 id="escalation-heading">Cloud escalation</h3>
-        <p id="escalationReason" class="hint"></p>
+      <section id="disclosureBox" role="dialog" aria-modal="false" aria-labelledby="disclosure-heading" hidden>
+        <h3 id="disclosure-heading">Review what would be sent to Meta</h3>
+        <p id="disclosureHint" class="hint"></p>
+        <p id="disclosureContributor" class="hint" hidden>This is a Contributor model: under Meta's terms it may use what you send. Approvals given for standard models do not apply to it.</p>
+        <ol id="disclosureMessages"></ol>
+        <details id="disclosureEarlier" hidden>
+          <summary id="disclosureEarlierSummary"></summary>
+          <ol id="disclosureEarlierMessages"></ol>
+        </details>
+        <p id="disclosureDecisionsNote" class="hint" hidden></p>
+        <dl id="disclosureDecisions" class="mission-facts"></dl>
+        <label id="disclosureToolsRow" class="checkbox-row" hidden><input id="disclosureTools" type="checkbox"> <span>Also let Meta receive tool results (file contents, searches, test output) in this thread until VS Code restarts. Values that look like secrets are redacted.</span></label>
+        <p id="disclosureWithholdHint" class="hint"></p>
         <div class="row">
-          <button id="escalateApprove" type="button">Send this request to Meta</button>
+          <button id="disclosureInclude" type="button">Send with this context</button>
+          <button id="disclosureWithhold" type="button">Send without it</button>
+          <button id="disclosureCancel" type="button">Cancel</button>
+        </div>
+      </section>
+      <p id="disclosureSharing" class="hint" hidden><span id="disclosureSharingText"></span> <button id="disclosureStop" type="button">Stop sharing with Meta</button></p>
+      <section id="localIssueBox" aria-labelledby="local-issue-heading" hidden>
+        <h3 id="local-issue-heading">Muse Glimmer did not answer</h3>
+        <p id="localIssueHint" class="hint"></p>
+        <div class="row">
+          <button id="localIssueStart" type="button" hidden>Start Muse Glimmer</button>
+          <button id="localIssueSettings" type="button">Open runtime settings</button>
+          <button id="localIssueDelegate" type="button" disabled hidden>Run this request with Spark</button>
+        </div>
+        <p id="localIssueDelegateWhy" class="hint" hidden></p>
+      </section>
+      <section id="escalationBox" role="dialog" aria-modal="false" aria-labelledby="escalation-heading" hidden>
+        <h3 id="escalation-heading">Run this request with Spark — Spark directs the agent</h3>
+        <p id="escalationReason" class="hint"></p>
+        <dl id="escalationFacts" class="mission-facts"></dl>
+        <div class="row" id="escalationActions">
+          <button id="escalateApprove" type="button">Run this request with Spark</button>
           <button id="escalateDismiss" type="button">Dismiss</button>
+        </div>
+        <p id="delegationFailure" class="mission-error" role="alert" hidden></p>
+        <div class="row">
+          <button id="delegationRunLocal" type="button" hidden>Run this request with Glimmer</button>
         </div>
       </section>
       <section id="consultBox" role="dialog" aria-modal="false" aria-labelledby="consult-heading" hidden>
-        <h3 id="consult-heading">Ask Meta for advice? — review the exact text</h3>
+        <h3 id="consult-heading">Ask Spark for advice — Glimmer remains in control</h3>
         <p id="consultReason" class="hint"></p>
-        <p class="hint">Only this text is sent, once, with no file contents and no tools. The answer is used as untrusted hints by a new local run, which still asks before any write and must pass the tests.</p>
+        <dl id="consultFacts" class="mission-facts"></dl>
+        <p class="hint">Only this exact text is sent, once. Spark gets no tools and cannot change anything; Glimmer keeps proposing every action, which still needs your approval and must pass the tests. File contents are sent only if you include them below.</p>
         <pre id="consultPayload"></pre>
         <p id="consultMeta" class="hint"></p>
+        <details id="consultFilesBox">
+          <summary>Include exact file contents (optional)</summary>
+          <div id="consultFiles" class="file-picker" role="group" aria-label="Files this run read"></div>
+          <div class="row">
+            <button id="consultIncludeFiles" type="button">Use the selected files</button>
+          </div>
+        </details>
+        <p id="consultResult" class="mission-error" role="alert" hidden></p>
         <div class="row">
           <button id="consultApprove" type="button">Send this text to Meta</button>
           <button id="consultDismiss" type="button">Dismiss</button>
@@ -367,6 +510,22 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
           <h3 id="action-log-heading">Action log</h3>
           <ul id="actionLog"></ul>
         </section>
+        <details id="modelEvidence">
+          <summary>Model evidence — recorded by RAME Code</summary>
+          <div id="modelEvidenceNow"></div>
+          <div id="modelEvidenceMission"></div>
+          <div id="modelEvidenceNote"></div>
+          <ol id="modelEvidenceList"></ol>
+          <details id="modelEvidenceOther" hidden>
+            <summary id="modelEvidenceOtherSummary"></summary>
+            <ol id="modelEvidenceOtherList"></ol>
+          </details>
+          <details id="recoveryLog">
+            <summary id="recoveryLogSummary"></summary>
+            <p id="recoveryLogNote" class="hint"></p>
+            <ol id="recoveryLogList"></ol>
+          </details>
+        </details>
       </details>
     </div>
     <footer id="composer-wrap">
@@ -385,8 +544,8 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
           <label for="modeSelect">Mode</label>
           <select id="modeSelect" aria-label="Mode">
             <option value="agent" selected title="Recommended: talks naturally and uses tools when they are needed.">Agent</option>
-            <option value="chat" title="Conversation only, with no tools and no file access.">Chat only</option>
             <option value="mission" title="Multi-task work with a plan that can be resumed.">Mission</option>
+            <option value="chat" title="Conversation only, with no tools and no file access.">Chat only</option>
           </select>
           <button id="send" type="button" title="Send message" aria-label="Send message">&#x2191;</button>
           <button id="cancel" type="button" title="Stop current run" aria-label="Stop current run" hidden>&#x25A0;</button>
@@ -425,6 +584,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
     </header>
     <nav id="settingsNav" aria-label="Settings sections">
       <button type="button" data-card="cardGeneral">General</button>
+      <button type="button" data-card="cardModels">Models</button>
       <button type="button" data-card="cardRuntime">Runtime</button>
       <button type="button" data-card="cardMission">Mission</button>
       <button type="button" data-card="cardMemory">Project memory</button>
@@ -446,8 +606,8 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
       </section>
       </div>
     </details>
-    <details class="settings-card" id="cardRuntime">
-      <summary><span class="card-title">Runtime</span> <span class="card-summary" id="summaryRuntime"></span></summary>
+    <details class="settings-card" id="cardModels" hidden>
+      <summary><span class="card-title">Models</span> <span class="card-summary" id="summaryModels"></span></summary>
       <div class="card-body">
       <section class="settings-block" aria-labelledby="runtime-heading">
         <h3 id="runtime-heading">Runtime</h3>
@@ -476,6 +636,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
         <div class="row">
           <button id="saveKey" type="button">Save key</button>
           <button id="clearKey" type="button">Clear key</button>
+          <button id="testMetaConnection" type="button">Test connection</button>
         </div>
         <p class="hint">Muse Code subscription credentials are not reused. Sent to the extension host only when you click Save key. Stored only in VS Code SecretStorage; this view only ever learns whether a key exists.</p>
         <h4>Available compatible Meta models</h4>
@@ -487,6 +648,11 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
         <p id="catalogStatus" class="hint" role="status">Fallback catalog. Save a key or refresh to load live models.</p>
         <p class="hint">Only muse-spark and muse-wonder chat models are shown, newest-first as returned. Contributor variants are labeled Contributor (data may be used) and are never selected silently.</p>
       </section>
+      </div>
+    </details>
+    <details class="settings-card" id="cardRuntime" hidden>
+      <summary><span class="card-title">Runtime</span> <span class="card-summary" id="summaryRuntime"></span></summary>
+      <div class="card-body">
       <section class="settings-block" id="localSection" aria-labelledby="local-heading">
         <h3 id="local-heading">Local runtime</h3>
         <p id="localStatus" role="status">Local runtime is stopped.</p>
@@ -504,8 +670,8 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
         <input id="contextSize" type="number" min="1024" max="262144" step="1024" value="32768">
         <label for="localPort">Port (loopback only)</label>
         <input id="localPort" type="number" min="1" max="65535" step="1" value="8775">
-        <label for="idleTimeout">Idle timeout (seconds, 0 disables)</label>
-        <input id="idleTimeout" type="number" min="0" max="86400" step="60" value="600">
+        <label for="idleTimeout">Idle timeout (minutes, 0 disables)</label>
+        <input id="idleTimeout" type="number" min="0" max="1440" step="1" value="15">
         <label for="externalEndpoint">External loopback endpoint (optional, not owned)</label>
         <input id="externalEndpoint" type="text" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8775">
         <div class="row">
@@ -518,11 +684,11 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
           <button id="selectExternal" type="button">Use external endpoint</button>
           <button id="clearExternal" type="button">Clear external endpoint</button>
         </div>
-        <p class="hint">The server binds to 127.0.0.1 only and is spawned directly with an argument array (no shell). Stopping here stops only the process started by RAME Code.</p>
+        <p class="hint">Bound to 127.0.0.1 and launched without a shell. Closing a terminal does not stop it. Timeout 0 keeps it running while VS Code stays open; reloading or closing VS Code stops RAME Code's server.</p>
       </section>
       </div>
     </details>
-    <details class="settings-card" id="cardMission">
+    <details class="settings-card" id="cardMission" hidden>
       <summary><span class="card-title">Mission</span> <span class="card-summary" id="summaryMission"></span></summary>
       <div class="card-body">
       <section class="settings-block" id="missionSection" aria-labelledby="mission-heading">
@@ -543,25 +709,25 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
         </div>
         <p class="hint">Authorize, follow, pause, or cancel a Mission from its card in the Mission thread.</p>
         <h4 id="mission-advanced-heading">Advanced</h4>
-        <div id="missionConsultRow" hidden>
-          <label for="missionConsults">Meta consultations allowed for the next Mission you authorize (0 = none)</label>
-          <input id="missionConsults" type="number" min="0" max="5" step="1" value="0">
-          <p class="hint">Only after a capability stop, only with the cloud model shown when you authorize, and never more than this number.</p>
-        </div>
         <p class="hint">RAME Code chains bounded internal runs (12 model steps each) by itself and saves a checkpoint after each. A task is done only when an allowlisted test passes after its last change; several runs in a row without verifiable progress stop the Mission as blocked. A reload never repeats an action whose result is unknown.</p>
       </section>
       </div>
     </details>
-    <details class="settings-card" id="cardMemory">
+    <details class="settings-card" id="cardMemory" hidden>
       <summary><span class="card-title">Project memory</span> <span class="card-summary" id="summaryMemory"></span></summary>
       <div class="card-body">
       <section class="settings-block" id="memorySection" aria-labelledby="memory-heading">
         <h3 id="memory-heading">Project memory</h3>
-        <div id="memoryProjectPicker" hidden>
-          <label for="memoryProjectSelect">Project</label>
-          <select id="memoryProjectSelect" aria-label="Project"></select>
+        <div id="memoryIntro">
+          <strong>Used automatically by Agent and Mission.</strong>
+          <p class="hint">Approved decisions for the working folder are added automatically. Nothing needs to be selected here.</p>
         </div>
-        <p id="memoryProject" class="hint" role="status">No project selected.</p>
+        <p id="memoryProject" role="status">No folder selected for this Settings view.</p>
+        <div id="memoryProjectPicker" hidden>
+          <label for="memoryProjectSelect">View another open folder</label>
+          <select id="memoryProjectSelect" aria-label="View another open folder"></select>
+          <p class="hint">This only changes this Settings view; it never changes a thread or merges memories.</p>
+        </div>
         <p id="memoryStatus" role="status" aria-live="polite" hidden></p>
         <div id="memoryPendingCard" role="dialog" aria-modal="false" aria-labelledby="memory-pending-heading" hidden>
           <h4 id="memory-pending-heading">Pending memory change — review the exact change</h4>
@@ -580,7 +746,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
           <div id="memoryHistory"></div>
         </details>
         <details id="memoryProposeDetails">
-          <summary>Propose a decision</summary>
+          <summary>Advanced: add a decision manually</summary>
           <label for="memoryKey">Key</label>
           <input id="memoryKey" type="text" autocomplete="off" spellcheck="false" placeholder="shipping.free_threshold_eur">
           <label for="memoryValueType">Type</label>
@@ -600,7 +766,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
       </section>
       </div>
     </details>
-    <details class="settings-card" id="cardSecurity">
+    <details class="settings-card" id="cardSecurity" hidden>
       <summary><span class="card-title">Security</span> <span class="card-summary" id="summarySecurity"></span></summary>
       <div class="card-body">
       <section class="settings-block" id="escalationSection" aria-labelledby="escalation-settings-heading">
@@ -610,11 +776,11 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
       </section>
       <section class="settings-block" aria-labelledby="privacy-heading">
         <h3 id="privacy-heading">Privacy / Security</h3>
-        <p class="hint">The API key stays in VS Code SecretStorage and this view receives only true/false. Chat sends the active thread\u2019s bounded history plus your new message; Mission sends only your new message. Agent may read and change active-workspace files and run allowlisted tests only under the selected permission profile and policy boundary. Meta Billing/Usage is authoritative for cost; token counts below are observed usage, and any dollar figure is an estimate.</p>
+        <p class="hint">The API key stays in VS Code SecretStorage and this view receives only true/false. Agent and Chat send recent active-thread history and may recover a bounded set of relevant older excerpts. Other threads are never sent. When moving from local to Meta, extra older excerpts and host records stay local. Mission planning sends only your new message. Agent may read and change active-workspace files and run allowlisted tests only under the selected permission profile and policy boundary. Meta Billing/Usage is authoritative for cost; token counts below are observed usage, and any dollar figure is an estimate.</p>
       </section>
       </div>
     </details>
-    <details class="settings-card" id="cardAdvanced">
+    <details class="settings-card" id="cardAdvanced" hidden>
       <summary><span class="card-title">Advanced</span> <span class="card-summary" id="summaryAdvanced"></span></summary>
       <div class="card-body">
       <section class="settings-block" id="generationAdvanced" aria-labelledby="output-heading">
@@ -635,7 +801,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
       </section>
       </div>
     </details>
-    <details class="settings-card" id="cardAbout">
+    <details class="settings-card" id="cardAbout" hidden>
       <summary><span class="card-title">About</span> <span class="card-summary" id="summaryAbout"></span></summary>
       <div class="card-body">
       <section class="settings-block" aria-labelledby="about-heading">
@@ -647,7 +813,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
     </details>
   </div>
 </main>
-${i18nScript}<script nonce="${nonce}" src="${scriptUri}"></script>
+${i18nScript}${settingsTabsScript}${composerUxScript}${remoteUxScript}${evidenceUxScript}<script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
 }

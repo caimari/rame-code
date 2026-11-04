@@ -2,7 +2,7 @@
   "name": "rame-code",
   "displayName": "RAME Code",
   "description": "Local-first coding agent powered by Meta Muse with explicit permissions and host-verified evidence.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "author": "Antoni Caimari Caldés",
   "publisher": "caimari",

@@ -31,8 +31,8 @@ export const DEFAULT_CHAT_MODE: ChatModeId = AGENT_MODE_ID;
 
 export const CHAT_MODES: readonly ChatModeOption[] = [
   { id: AGENT_MODE_ID, label: 'Agent' },
-  { id: CHAT_MODE_ID, label: 'Chat only' },
   { id: MISSION_MODE_ID, label: 'Mission' },
+  { id: CHAT_MODE_ID, label: 'Chat only' },
 ];
 
 export const SPARK_MODEL_ID = 'muse-spark-1.3' as const;

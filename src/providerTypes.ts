@@ -6,6 +6,7 @@
  * imports and keeping the controllers free of the vscode API.
  */
 
+import type { ConsultOffer, DelegationFailure, DelegationOffer, LocalIssue } from './remoteAuthority.js';
 import type { AgentAuditLog } from './agentAudit.js';
 import type { PendingAgentAction } from './agentApproval.js';
 import type { AllowedTestCommand } from './agentCommands.js';
@@ -24,6 +25,9 @@ import type {
   ReasoningLevel,
 } from './generationSettings.js';
 import type { MissionRunner } from './missionRunner.js';
+import type { CloudDisclosureOffer, CloudRun, DisclosureState } from './cloudDisclosure.js';
+import type { LocalLaunchFacts, ModelEvidenceStore } from './modelEvidence.js';
+import type { ContinuityLogStore } from './continuityLog.js';
 import type {
   MissionGrant,
   MissionLease,
@@ -129,19 +133,30 @@ export interface ProviderHost {
   acceptanceController: AbortController | null;
   hostPromptText: string | null;
   pinnedRunRoot: string | null;
-  consultOffer: {
-    threadId: string;
-    root: string;
-    task: string;
-    reason: string;
-    payload: string;
-    model: string;
-    digest: string;
-    createdAt: number;
-    generation: number;
-  } | null;
+  /** What the user disclosed to Meta per thread, the open disclosure card, and the Meta run in progress. */
+  cloudDisclosure: DisclosureState;
+  cloudDisclosureOffer: CloudDisclosureOffer | null;
+  cloudRun: CloudRun | null;
+  /** Per thread, this session only: may Meta receive Agent tool results (absent = not asked yet). */
+  cloudToolGrants: Map<string, boolean>;
+  /** The Meta API key's revision: an opaque id that changes when the key is saved or cleared (metaRecipient.ts). */
+  metaCredential: string;
+  consultOffer: ConsultOffer | null;
+  /** A delegated run waiting for approval, and the last one that failed at Meta. */
+  delegationOffer: DelegationOffer | null;
+  delegationFailure: DelegationFailure | null;
+  /** The last failed local request and which actions it allows. */
+  localIssue: LocalIssue | null;
+  /** Meta answered in this session with the stored key (a stored key alone is not a connection). */
+  cloudConfirmed: boolean;
+  /** The local endpoint that answered in this session, if any. */
+  localConfirmed: string | null;
+  /** The delegated run in progress, if any. */
+  delegatedRun: { threadId: string; root: string | null; text: string; mode: string } | null;
   cascadeVerification: { threadId: string } | null;
   localProps: { endpoint: string; props: LocalServerProps } | null;
+  /** What RAME passed to the llama-server it launched; null when it launched none. */
+  localLaunch: LocalLaunchFacts | null;
   missionRecovery: Promise<number>;
 
   // ----- Services -----
@@ -150,6 +165,9 @@ export interface ProviderHost {
   readonly memory: DecisionStore;
   readonly missions: MissionStore;
   readonly audit: AgentAuditLog;
+  readonly modelEvidence: ModelEvidenceStore;
+  /** What earlier context each request recovered, by reference and hash (continuityLog.ts). */
+  readonly continuityLog: ContinuityLogStore;
   readonly agentRunner: AgentRunner;
   readonly chatRunner: ChatRunner;
   readonly missionRunner: MissionRunner;
@@ -206,4 +224,5 @@ export interface ProviderHost {
   liveArtifactHashes(scopeId: string, fs: AgentFs): Promise<Record<string, string | null>>;
   updateActiveMission(change: (mission: MissionRecord) => MissionResult<MissionRecord>): Promise<boolean>;
   sendMessage(rawText: string, rawMode: string, rawRuntime: string): Promise<void>;
+  executeSend(threadId: string, text: string, mode: string, provider: ProviderId, agentTarget?: { root: string; label: string }): Promise<void>;
 }

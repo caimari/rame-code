@@ -244,7 +244,8 @@ test('invalid advice is not used and no local run starts; a run that ends with a
       Response.json({ choices: [{ message: { role: 'assistant', content: JSON.stringify({ ...ADVICE, writeFile: 'x' }) }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
     const before = h.model.requests.length;
     await h.provider.approveConsult(offered.digest);
-    assert.match(h.last().status, /^The Meta advice could not be used \(The advice does not have exactly diagnosis, steps, and checks\.\)/);
+    // Classified, not retried, and offered again for a new approval only.
+    assert.match(h.last().status, /^The Meta advice failed \(invalid or incomplete response\)\. Nothing was retried and nothing changed\./);
     assert.equal(h.model.requests.length, before, 'no local run started');
     const last = h.last().turns.at(-1) as { text: string; hostRecord: string[] };
     assert.equal(last.text, 'Cascade stopped before the local verification run.');

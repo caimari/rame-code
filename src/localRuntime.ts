@@ -35,7 +35,7 @@ export const LOCAL_RUNTIME_SUGGESTIONS: Readonly<LocalRuntimeSettings> = {
   modelId: 'local-glimmer',
   contextSize: 32768,
   port: 8775,
-  idleTimeoutSec: 600,
+  idleTimeoutSec: 900,
 };
 
 export const MIN_CONTEXT_SIZE = 1024;

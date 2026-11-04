@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { buildViewHtml, createViewNonce } from '../src/viewHtml.js';
@@ -63,6 +64,7 @@ test('unified document is one view with internal navigation hooks', () => {
     'apiKey',
     'saveKey',
     'clearKey',
+    'testMetaConnection',
     'cloudSection',
     'localSection',
     'escalationSection',
@@ -90,6 +92,9 @@ test('unified document is one view with internal navigation hooks', () => {
     assert.ok(html.includes(`id="${id}"`), `missing #${id}`);
   }
   assert.ok(html.includes('Available compatible Meta models'));
+  assert.ok(html.includes('Idle timeout (minutes, 0 disables)'));
+  assert.match(html, /id="idleTimeout"[^>]*max="1440"[^>]*step="1"[^>]*value="15"/);
+  assert.ok(html.includes('Closing a terminal does not stop it.'));
 });
 
 test('unified document keeps strict CSP and local assets only', () => {
@@ -124,6 +129,18 @@ test('unified document keeps strict CSP and local assets only', () => {
   assert.equal(createViewNonce().length > 0, true);
 });
 
+test('optional composer UX module loads locally before the main view script', () => {
+  const html = buildViewHtml({
+    cspSource: 'vscode-webview://test',
+    scriptUri: 'main.js',
+    styleUri: 'main.css',
+    composerUxUri: 'composerUx.js',
+    nonce: 'n',
+  });
+  assert.ok(html.indexOf('src="composerUx.js"') > 0);
+  assert.ok(html.indexOf('src="composerUx.js"') < html.indexOf('src="main.js"'));
+});
+
 test('chat header is compact with icon buttons and stays visible at 220px', () => {
   const html = document();
   // Title plus three compact icon buttons with accessible names.
@@ -139,9 +156,11 @@ test('chat header is compact with icon buttons and stays visible at 220px', () =
   assert.ok(!html.includes('>New thread</button>'));
   assert.ok(!html.includes('>Refresh</button>'));
   assert.ok(!html.includes('>Settings</button>'));
-  // Header stays visible, does not overflow, and carries a narrow rule.
+  // Header stays visible; the row itself cannot clip controls, while the
+  // title alone ellipsizes horizontally in a narrow sidebar.
   assert.match(html, /\.view-header\s*\{[^}]*position:\s*sticky/);
-  assert.match(html, /\.view-header\s*\{[^}]*overflow:\s*hidden/);
+  assert.match(html, /\.view-header\s*\{[^}]*overflow:\s*visible/);
+  assert.match(html, /\.view-header \.view-title\s*\{[^}]*overflow:\s*hidden/);
   assert.match(html, /button\.icon-btn/);
   assert.match(html, /@media\s*\(max-width:\s*260px\)/);
 });
@@ -156,6 +175,21 @@ test('settings is a separate screen with a prominent back button', () => {
   assert.match(html, /id="openSettings"[^>]*aria-label="Open Settings"/);
   // Sections toggle via [hidden]; no stacked Chat+Settings presentation.
   assert.match(html, /\.screen\[hidden\]\s*\{\s*display:\s*none/);
+});
+
+test('a long approval remains reachable without trapping the whole card or creating horizontal scroll', () => {
+  const html = document();
+  const css = readFileSync('media/main.css', 'utf8');
+  for (const source of [html, css]) {
+    assert.match(source, /#agentBox\s*\{[^}]*position:\s*relative/);
+    assert.doesNotMatch(source, /#agentBox\s*\{[^}]*position:\s*sticky/);
+    assert.match(source, /#agentBox\s*\{[^}]*max-width:\s*100%/);
+    assert.match(source, /#agentBox\s*\{[^}]*overflow:\s*hidden/);
+    assert.match(source, /#pendingBody\s*\{[^}]*max-height:\s*min\(42vh,\s*320px\)/);
+    assert.match(source, /#pendingBody\s*\{[^}]*overflow-y:\s*auto/);
+    assert.match(source, /#pendingBody\s*\{[^}]*overflow-x:\s*hidden/);
+    assert.match(source, /#pendingBody\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  }
 });
 
 test('composer keeps mode, collapses agent boundaries, warns on workspace-full', () => {

@@ -1,3 +1,4 @@
+import { MetaHttpError } from './metaFailures.js';
 import { withBoundedRequest } from './boundedRequest.js';
 import {
   CLOUD_AUTO_OUTPUT_TOKENS,
@@ -179,7 +180,8 @@ export async function createMissionPlan(
   const payload = parseResponsePayload(rawPayload);
   if (!response.ok) {
     const detail = payload.error?.message?.trim();
-    throw new Error(
+    throw new MetaHttpError(
+      response.status,
       detail
         ? `Meta Model API returned HTTP ${response.status}: ${detail}`
         : `Meta Model API returned HTTP ${response.status}.`,
@@ -219,7 +221,8 @@ export async function createChatCompletion(
   const payload = parseResponsePayload(rawPayload);
   if (!response.ok) {
     const detail = payload.error?.message?.trim();
-    throw new Error(
+    throw new MetaHttpError(
+      response.status,
       detail
         ? `Meta Model API returned HTTP ${response.status}: ${detail}`
         : `Meta Model API returned HTTP ${response.status}.`,
@@ -259,7 +262,8 @@ export async function createCascadeAdvice(
   const payload = parseResponsePayload(rawPayload);
   if (!response.ok) {
     const detail = payload.error?.message?.trim();
-    throw new Error(
+    throw new MetaHttpError(
+      response.status,
       detail
         ? `Meta Model API returned HTTP ${response.status}: ${detail}`
         : `Meta Model API returned HTTP ${response.status}.`,
@@ -300,7 +304,8 @@ export async function createMissionPlanWithUsage(
   const payload = parseResponsePayload(rawPayload);
   if (!response.ok) {
     const detail = payload.error?.message?.trim();
-    throw new Error(
+    throw new MetaHttpError(
+      response.status,
       detail
         ? `Meta Model API returned HTTP ${response.status}: ${detail}`
         : `Meta Model API returned HTTP ${response.status}.`,

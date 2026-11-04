@@ -113,10 +113,6 @@
   var connectionEl = el('connection');
   var runtimeStateEl = el('runtimeState');
   var scopeNoticeEl = el('scopeNotice');
-  var escalationBox = el('escalationBox');
-  var escalationReasonEl = el('escalationReason');
-  var escalateApproveBtn = el('escalateApprove');
-  var escalateDismissBtn = el('escalateDismiss');
   var profileSelectEl = el('profileSelect');
   var profileDescEl = el('profileDesc');
   var permissionChipEl = el('permissionChip');
@@ -132,14 +128,6 @@
   var runtimeNoticeTextEl = el('runtimeNoticeText');
   var runtimeNoticeSettingsBtn = el('runtimeNoticeSettings');
   var agentBox = el('agentBox');
-  var consultBoxEl = el('consultBox');
-  var consultReasonEl = el('consultReason');
-  var consultPayloadEl = el('consultPayload');
-  var consultMetaEl = el('consultMeta');
-  var consultApproveBtn = el('consultApprove');
-  var consultDismissBtn = el('consultDismiss');
-  // The exact consultation the host showed; approval echoes only its digest.
-  var consultShown = null;
   var pendingToolEl = el('pendingTool');
   var pendingTargetsEl = el('pendingTargets');
   var pendingBodyEl = el('pendingBody');
@@ -154,6 +142,7 @@
   var apiKeyEl = el('apiKey');
   var saveKeyBtn = el('saveKey');
   var clearKeyBtn = el('clearKey');
+  var testMetaConnectionBtn = el('testMetaConnection');
   var cloudSectionEl = el('cloudSection');
   var localSectionEl = el('localSection');
   var escalationSectionEl = el('escalationSection');
@@ -462,6 +451,7 @@
     }
     btn.disabled = true;
     btn.classList.add('is-pending');
+    btn.setAttribute('aria-busy', 'true');
     btn.textContent = label;
     if (pendingButtons.indexOf(btn) === -1) {
       pendingButtons.push(btn);
@@ -483,6 +473,7 @@
       // one Agent tool left the same Approve button disabled for the next
       // independent, hash-bound action while Reject remained available.
       btn.disabled = false;
+      btn.setAttribute('aria-busy', 'false');
       btn.dataset.origLabel = '';
     });
     pendingButtons = [];
@@ -520,7 +511,7 @@
   // with the activity folded; any write, test, memory change, or cascade →
   // the result card with its record shown.
   var MODE_NAMES = { agent: 'Agent', chat: 'Chat only', mission: 'Mission' };
-  var READ_ONLY_TOOLS = ['list_files', 'inspect_workspace', 'filesystem_usage', 'search_text', 'read_file', 'read_decisions'];
+  var READ_ONLY_TOOLS = ['list_files', 'inspect_workspace', 'filesystem_usage', 'search_history', 'search_text', 'read_file', 'read_decisions', 'context_continuity'];
 
   function replyKind(turn) {
     var record = Array.isArray(turn.hostRecord) ? turn.hostRecord : [];
@@ -645,7 +636,7 @@
           errAction.textContent = t('Open Settings');
           errAction.setAttribute('aria-label', t('Open Settings to start the local model'));
           errAction.addEventListener('click', function () {
-            vscode.postMessage({ type: 'navigate', screen: 'settings' });
+            openSettingsCard('cardRuntime');
           });
           card.appendChild(errAction);
         }
@@ -704,6 +695,9 @@
         btn.setAttribute('aria-current', 'true');
       }
       btn.addEventListener('click', function () {
+        if (!markPending(btn, title)) {
+          return;
+        }
         viewingDraft = false;
         vscode.postMessage({ type: 'openThread', threadId: thread.id });
       });
@@ -800,6 +794,27 @@
         return String(connection);
     }
   }
+
+  function cloudConnectionText(data) {
+    var state = data && data.remote && data.remote.runtime
+      ? data.remote.runtime.cloud
+      : (data && data.hasKey ? 'configured' : 'not-configured');
+    if (state === 'connected') {
+      return t('Connection verified — Meta API responded in this session');
+    }
+    if (state === 'configured') {
+      return t('Key stored — live connection not yet verified');
+    }
+    return t('Not connected — API key required');
+  }
+
+  function openSettingsCard(cardId) {
+    if (window.RAME_SETTINGS_TABS && typeof window.RAME_SETTINGS_TABS.activate === 'function') {
+      window.RAME_SETTINGS_TABS.activate(cardId);
+    }
+    vscode.postMessage({ type: 'navigate', screen: 'settings' });
+  }
+  window.RAME_OPEN_SETTINGS_CARD = openSettingsCard;
 
   function formatUsage(label, usage) {
     if (!usage) {
@@ -1187,7 +1202,7 @@
       localPortEl.value = String(settings.port);
     }
     if (idleTimeoutEl && typeof settings.idleTimeoutSec === 'number') {
-      idleTimeoutEl.value = String(settings.idleTimeoutSec);
+      idleTimeoutEl.value = String(settings.idleTimeoutSec / 60);
     }
   }
 
@@ -1398,7 +1413,7 @@
     if (!memory.selectedPath) {
       var placeholder = document.createElement('option');
       placeholder.value = '';
-      placeholder.textContent = t('Choose a project…');
+      placeholder.textContent = t('Choose a folder…');
       placeholder.disabled = true;
       placeholder.selected = true;
       memoryProjectSelectEl.appendChild(placeholder);
@@ -1430,7 +1445,7 @@
       return;
     }
     renderMemoryProjects(memory);
-    setText(memoryProjectEl, memory.project ? tf('Project: {0}', memory.project) : t('No project selected.'));
+    setText(memoryProjectEl, memory.project ? tf('Memory shown for: {0}', memory.project) : t('No folder selected for this Settings view.'));
     clearChildren(memoryDecisionsEl);
     (memory.decisions || []).forEach(function (d) {
       memoryDecisionsEl.appendChild(
@@ -1573,7 +1588,16 @@
       return { text: MISSION_PHASE_LABELS[key], state: live.phase };
     }
     if (outcome === 'completed') {
-      return data.runKind === 'mission-plan' ? { text: MISSION_PHASE_LABELS.no_plan, state: 'error' } : { text: 'Completed', state: 'completed' };
+      if (data.runKind === 'mission-plan') {
+        var hasPlanTurn = Array.isArray(data.turns) && data.turns.some(function (turn) {
+          return turn && turn.kind === 'plan';
+        });
+        var savedMission = hasPlanTurn && String(data.status || '').indexOf('Saved as a Mission with ') !== -1;
+        return savedMission
+          ? { text: MISSION_PHASE_LABELS.plan_ready, state: 'plan_ready' }
+          : { text: MISSION_PHASE_LABELS.no_plan, state: 'error' };
+      }
+      return { text: 'Completed', state: 'completed' };
     }
     if (outcome === 'cancelled') {
       return { text: 'Cancelled', state: 'cancelled' };
@@ -1914,40 +1938,42 @@
     factRow(aboutFactsEl, t('Public version'), about.version);
     factRow(aboutFactsEl, t('Build revision'), about.revision);
     factRow(aboutFactsEl, t('Channel'), t(about.channel === 'release' ? 'release' : 'candidate'));
+    factRow(aboutFactsEl, t('Author'), 'Antoni Caimari Caldés');
+    var repository = factRow(aboutFactsEl, t('Repository'), 'https://github.com/caimari/rame-code');
+    if (repository) {
+      repository.textContent = '';
+      var repositoryButton = document.createElement('button');
+      repositoryButton.type = 'button';
+      repositoryButton.className = 'link-button';
+      repositoryButton.textContent = 'https://github.com/caimari/rame-code';
+      repositoryButton.addEventListener('click', function () {
+        vscode.postMessage({ type: 'openRepository' });
+      });
+      repository.appendChild(repositoryButton);
+    }
   }
 
   function renderSettingsSummaries(data) {
     setText(el('summaryGeneral'), tf('Language: {0}', language === 'es' ? 'Español' : 'English'));
-    var runtimeLine = runtimeDisplayName(data.runtime, data.cloudModel || '');
+    var modelLine = runtimeDisplayName(data.runtime, data.cloudModel || '');
+    if (data.runtime === 'cloud') {
+      modelLine += ' · ' + t(data.hasKey ? 'key saved' : 'no key');
+    }
+    setText(el('summaryModels'), modelLine);
+    var runtimeLine = t(data.local && data.local.lifecycle === 'running' ? 'running' : data.externalLocalEndpoint ? 'external endpoint' : 'stopped');
     if (data.runtime === 'local') {
-      runtimeLine += ' · ' + t(data.local && data.local.lifecycle === 'running' ? 'running' : data.externalLocalEndpoint ? 'external endpoint' : 'stopped');
-    } else {
-      runtimeLine += ' · ' + t(data.hasKey ? 'key saved' : 'no key');
+      runtimeLine = runtimeDisplayName(data.runtime, data.cloudModel || '') + ' · ' + runtimeLine;
     }
     setText(el('summaryRuntime'), runtimeLine);
     var mission = data.memory && data.memory.mission ? data.memory.mission : null;
     setText(el('summaryMission'), mission ? tf('{0} — {1}', mission.goal.slice(0, 60), t(MISSION_STATUS_LABELS[mission.status] || mission.status)) : t('No Mission'));
     var memory = data.memory || {};
-    setText(el('summaryMemory'), memory.project ? tf('{0} · {1} decision(s) in force', memory.project, (memory.decisions || []).length) : t('No project selected.'));
+    setText(el('summaryMemory'), memory.project ? tf('{0} · {1} decision(s) in force', memory.project, (memory.decisions || []).length) : t('No folder selected for this Settings view.'));
     setText(el('summarySecurity'), tf('Permission: {0} · Cloud escalation {1}', shortProfileName(data.agentProfile || 'ask'), t(data.allowCloudEscalation ? 'on' : 'off')));
     var diagnostics = data.local && data.local.diagnostics ? String(data.local.diagnostics).split('\n')[0] : '';
     setText(el('summaryAdvanced'), diagnostics ? diagnostics.slice(0, 80) : t('Output limits and diagnostics'));
     var about = data.about || { version: 'unknown', channel: 'candidate' };
     setText(el('summaryAbout'), tf('v{0} · {1}', about.version, t(about.channel === 'release' ? 'release' : 'candidate')));
-  }
-
-  function renderConsult(consult) {
-    consultShown = consult && typeof consult.digest === 'string' ? consult : null;
-    if (consultBoxEl) {
-      consultBoxEl.hidden = consultShown === null;
-    }
-    setText(consultReasonEl, consultShown ? tf('Why: the local run stopped because {0}.', consultShown.reason) : '');
-    // The payload is shown exactly as it would be sent, never translated.
-    setText(consultPayloadEl, consultShown ? consultShown.payload : '');
-    setText(
-      consultMetaEl,
-      consultShown ? tf('Model: Meta {0} | {1} characters | Digest: {2} — one use.', consultShown.model, consultShown.payload.length, consultShown.digest.slice(0, 16)) : ''
-    );
   }
 
   function readMaxOutput(input) {
@@ -1956,7 +1982,6 @@
       return null;
     }
     var value = Number(raw);
-    // Invalid numbers go to the host as-is so it can refuse them with a message.
     return Number.isInteger(value) ? value : -1;
   }
 
@@ -2007,7 +2032,7 @@
     renderHomeVsConversation();
     showScreen(data.screen);
     setText(connectionEl, connectionText(data.connection));
-    setText(settingsConnectionEl, connectionText(data.connection));
+    setText(settingsConnectionEl, cloudConnectionText(data));
     setText(statusEl, tHost(data.status));
     setText(settingsStatusEl, tHost(data.status));
     setText(scopeNoticeEl, tHost(data.notice || ''));
@@ -2034,12 +2059,10 @@
       formatUsage('Local total', data.usageLocal) +
       t(' (Meta Billing/Usage is authoritative; no balance is shown.)');
     setText(usageEl, usageLine);
-    var esc = data.escalation || { pending: false, reason: '' };
-    if (escalationBox) {
-      escalationBox.hidden = !esc.pending;
+    // Advisory and delegated Meta cards (media/remoteUx.js).
+    if (window.RAME_REMOTE) {
+      window.RAME_REMOTE.render(data);
     }
-    setText(escalationReasonEl, tHost(esc.reason || ''));
-    renderConsult(data.consult || null);
     renderLocal(data);
     renderAgent(data);
     renderGeneration(data);
@@ -2071,22 +2094,24 @@
 
   if (backToListBtn) {
     backToListBtn.addEventListener('click', function () {
+      if (!markPending(backToListBtn, '\u2190')) {
+        return;
+      }
       viewingDraft = false;
       closePermissionMenu();
-      renderHomeVsConversation();
       vscode.postMessage({ type: 'backToList' });
     });
   }
 
   if (runtimeStatusEl) {
     runtimeStatusEl.addEventListener('click', function () {
-      vscode.postMessage({ type: 'navigate', screen: 'settings' });
+      openSettingsCard('cardModels');
     });
   }
 
   if (runtimeNoticeSettingsBtn) {
     runtimeNoticeSettingsBtn.addEventListener('click', function () {
-      vscode.postMessage({ type: 'navigate', screen: 'settings' });
+      openSettingsCard('cardRuntime');
     });
   }
 
@@ -2191,36 +2216,8 @@
     });
   }
 
-  if (escalateApproveBtn) {
-    escalateApproveBtn.addEventListener('click', function () {
-      vscode.postMessage({ type: 'escalateApprove' });
-    });
-  }
-
-  if (consultApproveBtn) {
-    consultApproveBtn.addEventListener('click', function () {
-      if (consultShown && markPending(consultApproveBtn, t('Sending…'))) {
-        if (consultDismissBtn) {
-          consultDismissBtn.disabled = true;
-          pendingButtons.push(consultDismissBtn);
-        }
-        vscode.postMessage({ type: 'consultApprove', digest: consultShown.digest });
-      }
-    });
-  }
-
-  if (consultDismissBtn) {
-    consultDismissBtn.addEventListener('click', function () {
-      if (consultShown && markPending(consultDismissBtn, t('Dismissing…'))) {
-        vscode.postMessage({ type: 'consultDismiss' });
-      }
-    });
-  }
-
-  if (escalateDismissBtn) {
-    escalateDismissBtn.addEventListener('click', function () {
-      vscode.postMessage({ type: 'escalateDismiss' });
-    });
+  if (window.RAME_REMOTE) {
+    window.RAME_REMOTE.init({ vscode: vscode, t: t, tf: tf, tHost: tHost, markPending: markPending, hold: function (b) { b.disabled = true; pendingButtons.push(b); } });
   }
 
   if (saveKeyBtn) {
@@ -2247,6 +2244,16 @@
     });
   }
 
+  if (testMetaConnectionBtn) {
+    testMetaConnectionBtn.addEventListener('click', function () {
+      if (!markPending(testMetaConnectionBtn, t('Testing…'))) {
+        return;
+      }
+      setText(settingsStatusEl, t('Testing…'));
+      vscode.postMessage({ type: 'testMetaConnection' });
+    });
+  }
+
   function readLocalForm(type) {
     return {
       type: type || 'updateLocalSettings',
@@ -2257,7 +2264,7 @@
       modelId: localModelIdEl ? localModelIdEl.value : '',
       contextSize: contextSizeEl ? Number(contextSizeEl.value) : NaN,
       port: localPortEl ? Number(localPortEl.value) : NaN,
-      idleTimeoutSec: idleTimeoutEl ? Number(idleTimeoutEl.value) : NaN,
+      idleTimeoutSec: idleTimeoutEl ? Number(idleTimeoutEl.value) * 60 : NaN,
     };
   }
 
@@ -2355,6 +2362,7 @@
         revision: live.revision,
         mode: missionModeEl && missionModeEl.value === 'autonomous-workspace' ? 'autonomous-workspace' : 'supervised',
         maxConsultations: Number.isInteger(consults) && consults >= 0 && consults <= 5 ? consults : 0,
+        advisoryLimits: consults > 0 && window.RAME_REMOTE ? window.RAME_REMOTE.advisoryLimits() : null,
         trustedProject: Boolean(missionTrustedEl && missionTrustedEl.checked),
         acceptanceCommand: acceptanceCommand,
         acceptanceFiles: acceptanceFiles,
@@ -2450,29 +2458,15 @@
       }
     });
   }
-  // Settings navigation: open the card, bring it into view, focus its title.
-  if (settingsNavEl) {
-    var navButtons = settingsNavEl.querySelectorAll('button[data-card]');
-    for (var ni = 0; ni < navButtons.length; ni++) {
-      (function (navBtn) {
-        navBtn.addEventListener('click', function () {
-          var card = el(navBtn.getAttribute('data-card') || '');
-          if (!card) {
-            return;
-          }
-          card.open = true;
-          for (var nj = 0; nj < navButtons.length; nj++) {
-            navButtons[nj].setAttribute('aria-current', navButtons[nj] === navBtn ? 'true' : 'false');
-          }
-          if (typeof card.scrollIntoView === 'function') {
-            card.scrollIntoView({ block: 'start' });
-          }
-          var summary = card.querySelector('summary');
-          if (summary) {
-            summary.focus();
-          }
-        });
-      })(navButtons[ni]);
+  if (settingsNavEl && window.RAME_SETTINGS_TABS) {
+    window.RAME_SETTINGS_TABS.init(settingsNavEl);
+    var modelsTabButton = settingsNavEl.querySelector('button[data-card="cardModels"]');
+    if (modelsTabButton) {
+      modelsTabButton.addEventListener('click', function () {
+        // Re-probe /props when the user returns to Models so a newly started
+        // Glimmer server immediately exposes its verified reasoning levels.
+        vscode.postMessage({ type: 'refresh' });
+      });
     }
   }
   // The Mission clock and the start-confirmation timeout move without a host message.
@@ -2649,6 +2643,7 @@
       vscode.setState({ composerDraft: composerEl.value });
     });
   }
+  window.RAME_COMPOSER_UX && window.RAME_COMPOSER_UX.init(composerEl, sendBtn, conversationSectionEl, threadListEl, newThreadBtn);
 
   if (profileSelectEl) {
     profileSelectEl.addEventListener('change', function () {

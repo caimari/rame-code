@@ -15,12 +15,13 @@ import {
 test('settings use versioned keys and safe defaults with escalation OFF', () => {
   assert.equal(RAME_SETTINGS_KEY, 'rameCode.settings.v1');
   assert.equal(RAME_USAGE_KEY, 'rameCode.usage.v1');
-  assert.equal(SETTINGS_VERSION, 1);
+  assert.equal(SETTINGS_VERSION, 2);
 
   const defaults = defaultSettings();
   assert.equal(defaults.provider, 'cloud');
   assert.equal(defaults.mode, 'agent');
   assert.equal(defaults.allowCloudEscalation, false);
+  assert.equal(defaults.local.idleTimeoutSec, 15 * 60);
 
   // Unknown input collapses to the same safe defaults.
   const validated = validateSettings(undefined);
@@ -34,6 +35,12 @@ test('settings use versioned keys and safe defaults with escalation OFF', () => 
     validateSettings({ allowCloudEscalation: true }).allowCloudEscalation,
     true,
   );
+});
+
+test('v1 ten-minute default migrates once, but a v2 ten-minute choice is preserved', () => {
+  const local = { ...suggestedLocalSettings(), idleTimeoutSec: 600 };
+  assert.equal(validateSettings({ version: 1, local }).local.idleTimeoutSec, 900);
+  assert.equal(validateSettings({ version: 2, local }).local.idleTimeoutSec, 600);
 });
 
 test('settings validation keeps valid choices and drops unknown fields', () => {
@@ -92,6 +99,7 @@ test('suggestions are offered separately from stored defaults', () => {
   const suggestions = suggestedLocalSettings();
   assert.match(suggestions.executablePath, /llama-server/);
   assert.equal(suggestions.port, 8775);
+  assert.equal(suggestions.idleTimeoutSec, 15 * 60);
   // Mutating the suggestion copy never affects later calls.
   suggestions.port = 1;
   assert.equal(suggestedLocalSettings().port, 8775);

@@ -23,6 +23,7 @@ import {
 } from '../src/metaCatalog.js';
 import { suggestedLocalSettings, validateSettings } from '../src/settingsStore.js';
 import { EMPTY_USAGE } from '../src/usage.js';
+import { readFileSync } from 'node:fs';
 
 const PROBE = 'probe-secret-value-xyz-123';
 
@@ -135,6 +136,12 @@ test('atomic start carries the exact visible settings in one message', () => {
       return true;
     },
   );
+});
+
+test('local timeout is displayed in minutes and sent to the host in seconds', () => {
+  const script = readFileSync('media/main.js', 'utf8');
+  assert.match(script, /idleTimeoutEl\.value = String\(settings\.idleTimeoutSec \/ 60\)/);
+  assert.match(script, /idleTimeoutSec: idleTimeoutEl \? Number\(idleTimeoutEl\.value\) \* 60 : NaN/);
 });
 
 test('catalog parsing is bounded, redacted, filtered, and ordered', () => {

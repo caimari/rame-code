@@ -113,6 +113,11 @@ test('Meta: reasoning_effort and the manual maximum on every step, tool_choice a
       );
     };
     await h.provider.sendMessage('List the workspace again and again.', 'agent', 'cloud');
+    // The first Agent run with Meta in a session asks about tool results; they are allowed here.
+    const card = (h.last().remote as { disclosure: { digest: string } | null }).disclosure;
+    assert.ok(card);
+    h.send({ type: 'disclosureDecide', digest: card.digest, choice: 'include', toolResults: true });
+    await h.waitFor((state) => fakeCloud.requests.length === MAX_AGENT_STEPS && !state.running, 20000);
     assert.equal(fakeCloud.requests.length, MAX_AGENT_STEPS);
     for (const request of fakeCloud.requests) {
       assert.equal(request.body.tool_choice, 'auto', 'Meta documents only tool_choice auto');
@@ -121,7 +126,7 @@ test('Meta: reasoning_effort and the manual maximum on every step, tool_choice a
       assert.equal('chat_template_kwargs' in request.body, false);
     }
     const last = fakeCloud.requests[MAX_AGENT_STEPS - 1]?.body.messages as Array<{ role: string; content: string; tool_call_id?: string }>;
-    assert.ok(last.some((m) => m.role === 'system' && /This is the last model step of the budget of 12/.test(m.content)));
+    assert.ok(last.some((m) => m.role === 'system' && /This is the last model step of the budget of 12, and any tool call on it will be refused by RAME Code\./.test(m.content)), 'Meta keeps tool_choice auto, so the instruction says what the host really does');
     const toolResults = last.filter((m) => m.role === 'tool');
     assert.equal(toolResults.length, (MAX_AGENT_STEPS - 1) * 4, 'every earlier tool result is still in the last request');
     assert.equal(toolResults[0]?.tool_call_id, 'c1-0');
@@ -147,9 +152,9 @@ test('a request that cannot fit the local context is refused before sending, wit
 
 test('when the free context is smaller than the budget, the budget shrinks visibly and the input is untouched', async () => {
   await withHarness({}, async (h) => {
-    // A context a little larger than the Agent's fixed prompt and tools (about
-    // 3,400 tokens since replace_in_file), so the free space is below 4096.
-    h.model.props = glimmerProps(4500);
+    // A context a little larger than the Agent's fixed prompt and 13 tools,
+    // including bounded history recovery, so the free space is below 4096.
+    h.model.props = glimmerProps(5500);
     h.model.enqueue({ kind: 'json', body: assistantText('Done. Files changed: none.') });
     await h.provider.sendMessage('Say hello.', 'agent', 'local');
     const sent = h.model.requests[0]?.max_completion_tokens as number;

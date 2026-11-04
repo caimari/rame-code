@@ -21,6 +21,7 @@ import {
 import { isAutoAllowed, type AgentProfileId, type AgentToolName } from './agentProfiles.js';
 import { truncateToolOutput, type ValidatedToolCall } from './agentTools.js';
 import { addUsage, EMPTY_USAGE, type ProviderUsage } from './usage.js';
+import { selectNewestByCharacterBudget } from './contextBudget.js';
 
 export type AgentOutcome =
   | 'done'
@@ -86,6 +87,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 export const MAX_AGENT_HISTORY_MESSAGES = 20;
+export const MAX_AGENT_HISTORY_CHARS = 12_000;
 export const MAX_AGENT_GOAL_LENGTH = 8000;
 
 /**
@@ -99,17 +101,29 @@ export function buildAgentMessages(
   history: AgentChatMessage[],
   goal: string,
   extra: AgentChatMessage[] = [],
+  historyLimits: { maxMessages: number; maxChars: number } = {
+    maxMessages: MAX_AGENT_HISTORY_MESSAGES,
+    maxChars: MAX_AGENT_HISTORY_CHARS,
+  },
+  /** Recovered older context: placed before the history, never after the request. */
+  continuity: AgentChatMessage[] = [],
 ): AgentChatMessage[] {
   if (goal.length > MAX_AGENT_GOAL_LENGTH) {
     throw new Error(`The request is longer than ${MAX_AGENT_GOAL_LENGTH} characters; nothing was sent.`);
   }
-  const omitted = Math.max(0, history.length - MAX_AGENT_HISTORY_MESSAGES);
-  const boundedHistory = history.slice(-MAX_AGENT_HISTORY_MESSAGES);
+  const boundedHistory = selectNewestByCharacterBudget(
+    history,
+    (message) => message.content,
+    historyLimits.maxChars,
+    historyLimits.maxMessages,
+  );
+  const omitted = Math.max(0, history.length - boundedHistory.length);
   return [
     { role: 'system', content: buildAgentSystemPrompt(workspaceLabel) },
     ...(omitted > 0
-      ? [{ role: 'system' as const, content: `RAME Code left out the ${omitted} oldest message(s) of this thread; only the most recent ${MAX_AGENT_HISTORY_MESSAGES} are included.` }]
+      ? [{ role: 'system' as const, content: `RAME Code left out ${omitted} older message(s) after applying the current model's context budget; ${boundedHistory.length} recent message(s) are included.` }]
       : []),
+    ...continuity,
     ...boundedHistory,
     { role: 'user', content: goal },
     ...extra,

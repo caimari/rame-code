@@ -17,6 +17,7 @@ import { currentFileHash } from './agentController.js';
 import { memoryScopeForUi } from './memoryController.js';
 import {
   assessRun,
+  awaitBootstrapVerification,
   blockMission,
   buildAutoTaskPrompt,
   buildTaskPrompt,
@@ -45,15 +46,19 @@ import {
   unregisterLiveMissionLease,
 } from './missionRuntime.js';
 import { buildMissionReportEntry } from './missionReport.js';
+import { missionEvidenceLines } from './modelEvidence.js';
+import { consultForMission } from './missionAdvice.js';
+import { chooseAdvisoryLimits, type ChosenAdvisoryLimits } from './missionAdvisoryLimits.js';
+import { markUnrecoverable } from './missionVerifiers.js';
 import {
   buildMissionLiveView,
   buildMissionView,
   buildPlanningMissionLiveView,
 } from './missionViews.js';
-import { ACCEPTANCE_ENVIRONMENT_FILES } from './projectAdapters/npmProjectAdapter.js';
+import { ACCEPTANCE_ENVIRONMENT_FILES, listAcceptanceCandidates } from './projectAdapters/npmProjectAdapter.js';
 import { createCascadeAdvice } from './meta-provider.js';
 import { providerToRuntime } from './settingsStore.js';
-import { appendAssistantTurn } from './threadStore.js';
+import { appendHostNoteTurn } from './threadStore.js';
 import { redactKeyFromText } from './webviewMessages.js';
 
 import type { AgentFs } from './agentHost.js';
@@ -216,7 +221,7 @@ export async function startMission(
   missionId: string,
   expectedRevision: number,
   mode: MissionGrant['mode'],
-  escalation: { maxConsultations: number } | null,
+  escalation: { maxConsultations: number; limits?: ChosenAdvisoryLimits | null } | null,
   trustedProject = false,
   acceptance: { commandId: string; files: string[] } | null = null,
 ): Promise<void> {
@@ -234,6 +239,12 @@ export async function startMission(
   }
   // The test commands are bound to the exact package.json they come from now.
   const testContext = await host.testCommandContext(scope.root);
+  const bootstrap = testContext.packageJsonRaw.length === 0 || testContext.allowlist.length === 0;
+  if (bootstrap && acceptance !== null) {
+    host.status = 'This empty project needs a bootstrap stage first. Its tests do not exist yet, so nothing was frozen or authorized.';
+    await host.postState();
+    return;
+  }
   // The user's acceptance check is frozen now: its command and its files by hash.
   let frozen: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }> } | null = null;
   if (acceptance !== null) {
@@ -271,7 +282,12 @@ export async function startMission(
         escalation:
           escalation === null
             ? null
-            : { model: host.selectedCloudModel(), maxConsultations: escalation.maxConsultations, maxOutputTokens: MISSION_CONSULT_OUTPUT_TOKENS },
+            : {
+                model: host.selectedCloudModel(),
+                maxConsultations: escalation.maxConsultations,
+                // Never raised later; RAME Code only counts against them.
+                ...chooseAdvisoryLimits(escalation.maxConsultations, { maxOutputTokens: MISSION_CONSULT_OUTPUT_TOKENS, ...escalation.limits }),
+              },
         tests:
           mode === 'autonomous-workspace'
             ? {
@@ -281,6 +297,7 @@ export async function startMission(
               }
             : null,
         acceptance: frozen,
+        bootstrap,
       },
       Date.now(),
     ),
@@ -539,6 +556,12 @@ export async function runMissionAutonomous(
       // The manifest the tests ran against: a blocking verifier recovers only under the same one.
       const runContext = await host.testCommandContext(scope.root);
       const conditions = runContext.packageJsonRaw.length > 0 ? hashContent(runContext.packageJsonRaw) : '';
+      const bootstrapCandidates = current?.grant?.bootstrap === true ? await listAcceptanceCandidates(scope.fs) : [];
+      const bootstrapReady =
+        current?.grant?.bootstrap === true &&
+        runContext.packageJsonRaw.length > 0 &&
+        runContext.allowlist.length > 0 &&
+        bootstrapCandidates.length > 0;
       const observation: RunObservation = {
         outcome: outcome.outcome,
         writes: outcome.writes ?? [],
@@ -560,12 +583,45 @@ export async function runMissionAutonomous(
           return result;
         }
         next = result.value.next;
+        if (bootstrapReady) {
+          const waiting = awaitBootstrapVerification(
+            result.value.mission,
+            runContext.allowlist.map((entry) => entry.id),
+            bootstrapCandidates,
+            Date.now(),
+          );
+          if (!waiting.ok) {
+            return waiting;
+          }
+          return { ok: true, value: waiting.value };
+        }
         // Back to a runnable state between internal runs.
         result.value.mission.status = 'active';
         return { ok: true, value: result.value.mission };
       });
       if (!recorded) {
         ended = 'The Mission checkpoint could not be saved; stopping before the next run.';
+        break;
+      }
+      if (bootstrapReady) {
+        ended = 'Scaffold created. Review and authorize the verification stage; nothing else ran.';
+        break;
+      }
+      // A blocking verifier that can no longer run can never recover: show it and stop.
+      let unrecoverable = '';
+      await updateActiveMission(host, (draft) => {
+        const notes = draft.auto === null ? [] : markUnrecoverable(draft.auto.blockers, runContext.allowlist.map((entry) => entry.id));
+        const task = currentTask(draft);
+        for (const line of notes) {
+          if (task) {
+            draft.evidence.push({ taskId: task.id, kind: 'note', text: line.slice(0, 300), at: Date.now() });
+          }
+        }
+        unrecoverable = notes[0] ?? '';
+        return { ok: true, value: draft };
+      });
+      if (unrecoverable.length > 0) {
+        await updateActiveMission(host, (draft) => blockMission(draft, `${unrecoverable}.`, Date.now()));
         break;
       }
       if (next === 'continue' && (assessment as RunAssessment | null)?.blockedByVerifier === true) {
@@ -653,89 +709,14 @@ export async function runMissionAutonomous(
  * exited 0; any other stop gets a short status note instead.
  */
 export function appendMissionReport(host: ProviderHost, mission: MissionRecord): void {
-  const entry = buildMissionReportEntry(mission);
+  const entry = buildMissionReportEntry(mission, missionEvidenceLines(host.modelEvidence.state, mission.threadId, mission.id));
   if (entry === null) {
     return;
   }
   const current = host.store.get(mission.threadId);
   if (current) {
-    host.store.save(appendAssistantTurn(current, entry.title, undefined, entry.hostRecord));
+    host.store.save(appendHostNoteTurn(current, entry.title, entry.hostRecord));
   }
-}
-
-/**
- * Mission escalation: only within the grant (model, count, output budget)
- * and only after a capability stop. The advice is quoted as untrusted data
- * in the next internal run; it never acts.
- */
-export async function consultForMission(
-  host: ProviderHost,
-  missionId: string,
-  reason: string,
-  hostRecord: string[],
-  scopeId: string,
-): Promise<void> {
-  const mission = host.missions.get(missionId);
-  const grant = mission?.grant ?? null;
-  if (mission === null || grant === null || grant.escalation === null || grant.escalation.used >= grant.escalation.maxConsultations || !host.settings.allowCloudEscalation) {
-    return;
-  }
-  const apiKey = await host.getApiKey();
-  if (!apiKey) {
-    return;
-  }
-  const escalation = grant.escalation;
-  const task = currentTask(mission);
-  const payload = buildConsultPayload({
-    task: `${mission.goal}\nCurrent task: ${task?.title ?? ''}`,
-    reason,
-    hostRecord,
-    decisions: host.memory.listCurrentDecisions(scopeId).map((entry) => ({ key: entry.key, value: entry.value, version: entry.version })),
-  });
-  // Counted before the call: a consultation that fails still used its slot.
-  const counted = await host.missions.update(missionId, mission.revision, (draft) => {
-    if (draft.grant?.escalation) {
-      draft.grant.escalation.used += 1;
-    }
-    return { ok: true, value: draft };
-  });
-  if (!counted.ok) {
-    return;
-  }
-  if (host.activeMission !== null && host.activeMission.id === missionId) {
-    host.activeMission = { id: counted.value.id, revision: counted.value.revision };
-  }
-  let note: string;
-  let advice = '';
-  try {
-    const result = await host.chatRunner.start(async ({ signal }) =>
-      createCascadeAdvice({
-        apiKey,
-        model: escalation.model,
-        payload,
-        schema: cascadeAdviceSchema,
-        generation: { maxCompletionTokens: escalation.maxOutputTokens, reasoning: null, reasoningParam: null },
-        signal,
-      }),
-    );
-    host.recordUsage('cloud', result.usage);
-    const parsed = validateCascadeAdvice(JSON.parse(result.content) as unknown);
-    advice = formatAdvisory(escalation.model, parsed);
-    note = `Meta ${escalation.model} consulted (${escalation.used + 1}/${escalation.maxConsultations}, in ${result.usage.inputTokens} / out ${result.usage.outputTokens} tokens); advice kept as untrusted data`;
-  } catch (error) {
-    const detail = redactKeyFromText(error instanceof Error ? error.message : 'Unknown error.', apiKey).replace(/\s+/g, ' ').slice(0, 160);
-    note = `Meta ${escalation.model} consultation ${escalation.used + 1}/${escalation.maxConsultations} not used (${detail})`;
-  }
-  await updateActiveMission(host, (draft) => {
-    const current = currentTask(draft);
-    if (current) {
-      draft.evidence.push({ taskId: current.id, kind: 'note', text: note.slice(0, 300), at: Date.now() });
-    }
-    if (draft.auto !== null) {
-      draft.auto.pendingAdvice = advice.slice(0, 4000);
-    }
-    return { ok: true, value: draft };
-  });
 }
 
 /**

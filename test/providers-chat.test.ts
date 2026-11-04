@@ -38,8 +38,8 @@ function planPayload() {
   };
 }
 
-test('modes offer Agent, Chat only, and Mission with their models', () => {
-  assert.deepEqual(CHAT_MODES.map((mode) => mode.id), ['agent', 'chat', 'mission']);
+test('modes offer Agent, Mission, and Chat only with their models', () => {
+  assert.deepEqual(CHAT_MODES.map((mode) => mode.id), ['agent', 'mission', 'chat']);
   assert.deepEqual(CHAT_MODELS.map((model) => model.id), [
     'muse-spark-1.3',
     'local-glimmer',

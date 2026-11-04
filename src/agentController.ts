@@ -79,8 +79,6 @@ const SETTINGS_MEMORY_THREAD = 'settings';
 const WORKSPACE_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'apply_patch', 'replace_in_file', 'create_directory', 'move_file', 'delete_file', 'set_executable',
 ]);
-/** Earlier thread messages longer than this are shortened with a visible marker. */
-const AGENT_HISTORY_TEXT_LIMIT = 4000;
 /** How many characters of the approval card body the webview previews. */
 const APPROVAL_PREVIEW_CHARS = 2000;
 
@@ -108,16 +106,7 @@ export function capProfile(profile: AgentProfileId, cap: AgentProfileId | null):
   return order.indexOf(cap) < order.indexOf(profile) ? cap : profile;
 }
 
-/** Shorten earlier thread text with a marker instead of cutting it silently. */
-export function historyText(text: string): string {
-  if (text.length <= AGENT_HISTORY_TEXT_LIMIT) {
-    return text;
-  }
-  return (
-    `${text.slice(0, AGENT_HISTORY_TEXT_LIMIT)}\n` +
-    `…[RAME Code shortened this earlier message: ${text.length - AGENT_HISTORY_TEXT_LIMIT} characters left out]`
-  );
-}
+export { historyText } from './agentHistoryText.js';
 
 // ---------------------------------------------------------------------------
 // 2. Agent approval

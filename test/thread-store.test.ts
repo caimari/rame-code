@@ -67,6 +67,10 @@ test('validateThreadRecord accepts a valid record and rejects key material', () 
   assert.ok(parsed);
   assert.equal(parsed?.title, 'Greeting work');
 
+  const bound = validateThreadRecord({ ...valid, workspaceRoot: '/workspace/project' });
+  assert.equal(bound?.workspaceRoot, '/workspace/project');
+  assert.equal(validateThreadRecord({ ...valid, workspaceRoot: '' }), null);
+
   // Any extra field — including an apiKey — rejects the whole record.
   assert.equal(
     validateThreadRecord({ ...valid, apiKey: 'secret-that-must-not-appear' }),
@@ -125,10 +129,11 @@ test('loadThreads validates, sorts most-recent-first, and bounds to 50', () => {
 });
 
 test('create/append/upsert keep threads independent and bounded', () => {
-  const thread = createThread('  Ship the onboarding flow.  ', { now: 5000, id: 't-new1' });
+  const thread = createThread('  Ship the onboarding flow.  ', { now: 5000, id: 't-new1', workspaceRoot: '/workspace/shop' });
   assert.equal(thread.id, 't-new1');
   assert.equal(thread.title, 'Ship the onboarding flow.');
   assert.equal(thread.turns.length, 1);
+  assert.equal(thread.workspaceRoot, '/workspace/shop');
 
   const withSecond = appendUserTurn(thread, 'A second independent mission.', 6000);
   assert.equal(withSecond.turns.length, 2);

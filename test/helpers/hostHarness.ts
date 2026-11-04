@@ -151,7 +151,17 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
       const headers = new Headers(init?.headers);
       fakeCloud.requests.push({ url, authorization: headers.get('Authorization') ?? '', body });
-      return Promise.resolve(fakeCloud.handler(body));
+      const handler = fakeCloud.handler;
+      // Like the real fetch: an abort rejects a request that is still pending.
+      return new Promise<Response>((resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(new DOMException('Aborted', 'AbortError'));
+          return;
+        }
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        Promise.resolve(handler(body)).then(resolve, reject);
+      });
     }
     blockedFetches.push(url);
     return Promise.reject(new Error('Non-loopback request refused by the test harness.'));

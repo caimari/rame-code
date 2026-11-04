@@ -222,6 +222,8 @@ export function describeAgentCall(call: ValidatedToolCall): {
       const id = String((call.args as Record<string, unknown>).commandId ?? '');
       return { targets: [id], body, preconditions: {} };
     }
+    case 'search_history':
+      return { targets: ['persisted thread history'], body, preconditions: {} };
     case 'read_decisions':
       return { targets: ['project memory'], body, preconditions: {} };
     case 'propose_decision':

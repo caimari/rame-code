@@ -14,6 +14,10 @@
  *   and settings snapshots never include secrets.
  */
 
+import type { ChosenAdvisoryLimits } from './missionAdvisoryLimits.js';
+import { sanitizeEvidenceView, type ModelEvidenceView } from './modelEvidence.js';
+import { sanitizeContinuityLogView, type ContinuityLogView } from './continuityLog.js';
+import { parseRemoteMessage, sanitizeMissionRemote, sanitizeRemoteView, type MissionRemoteView, type RemoteMessage, type RemoteView } from './remoteViews.js';
 import { isAgentProfileId } from './agentProfiles.js';
 import { isReasoningChoice, REASONING_LEVELS } from './generationSettings.js';
 import type { LocalRuntimeSettings, LocalRuntimeStatus } from './localRuntime.js';
@@ -127,6 +131,14 @@ export interface RefreshModelsMessage {
   type: 'refreshModels';
 }
 
+export interface TestMetaConnectionMessage {
+  type: 'testMetaConnection';
+}
+
+export interface OpenRepositoryMessage {
+  type: 'openRepository';
+}
+
 export interface StartLocalMessage {
   type: 'startLocal';
   executablePath: string;
@@ -152,9 +164,7 @@ export interface ClearExternalEndpointMessage {
   type: 'clearExternalEndpoint';
 }
 
-export interface EscalateApproveMessage {
-  type: 'escalateApprove';
-}
+export type { EscalateApproveMessage } from './remoteViews.js';
 
 export interface EscalateDismissMessage {
   type: 'escalateDismiss';
@@ -234,10 +244,34 @@ export interface MissionStartMessage {
   acceptanceFiles: string[];
   /** One click of "Authorize and start"; the host confirms it by this id. */
   requestId?: string;
+  /** Advisory limits the user chose; a null field keeps the default. */
+  advisoryLimits?: ChosenAdvisoryLimits | null;
 }
 
 /** Pattern of a view-generated start request id. */
 const REQUEST_ID_PATTERN = /^req_[0-9a-z]{6,40}$/;
+
+/** Every required key, and otherwise only optional ones. */
+function hasKeysAmong(record: Record<string, unknown>, required: readonly string[], optional: readonly string[]): boolean {
+  return required.every((key) => Object.prototype.hasOwnProperty.call(record, key)) && Object.keys(record).every((key) => required.includes(key) || optional.includes(key));
+}
+
+/** Absent, null, or exactly the four limits, each an integer or null; ranges are the store's. */
+function isChosenLimits(value: unknown): boolean {
+  if (value === undefined || value === null) {
+    return true;
+  }
+  const keys = ['maxRequestBytes', 'maxTotalBytes', 'maxOutputTokens', 'maxTotalTokens'];
+  return (
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    hasExactKeys(value as Record<string, unknown>, keys) &&
+    keys.every((key) => {
+      const entry = (value as Record<string, unknown>)[key];
+      return entry === null || (typeof entry === 'number' && Number.isInteger(entry) && entry >= 0 && entry <= 1_000_000);
+    })
+  );
+}
 
 export interface MissionControlMessage {
   type: 'missionResume' | 'missionPause' | 'missionCancel';
@@ -287,11 +321,13 @@ export type ViewInboundMessage =
   | UseSuggestionsMessage
   | SelectCloudModelMessage
   | RefreshModelsMessage
+  | TestMetaConnectionMessage
+  | OpenRepositoryMessage
   | StartLocalMessage
   | StopLocalMessage
   | SelectExternalEndpointMessage
   | ClearExternalEndpointMessage
-  | EscalateApproveMessage
+  | RemoteMessage
   | EscalateDismissMessage
   | SetAgentProfileMessage
   | ApproveAgentActionMessage
@@ -331,6 +367,14 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
+function parseRemoteOrFail(record: Record<string, unknown>): RemoteMessage | null {
+  try {
+    return parseRemoteMessage(record);
+  } catch (error) {
+    return fail((error as Error).message);
+  }
+}
+
 /**
  * Parse an untrusted webview `postMessage` payload. Throws a generic
  * `Error` whose text never contains received values.
@@ -340,6 +384,10 @@ export function parseViewInboundMessage(raw: unknown): ViewInboundMessage {
     fail('Invalid view message.');
   }
   const record = raw as Record<string, unknown>;
+  const remote = parseRemoteOrFail(record);
+  if (remote !== null) {
+    return remote;
+  }
   switch (record.type) {
     case 'ready':
       if (!hasExactKeys(record, ['type'])) fail('Invalid ready message.');
@@ -487,6 +535,16 @@ export function parseViewInboundMessage(raw: unknown): ViewInboundMessage {
         fail('Invalid refreshModels message.');
       }
       return { type: 'refreshModels' };
+    case 'testMetaConnection':
+      if (!hasExactKeys(record, ['type'])) {
+        fail('Invalid testMetaConnection message.');
+      }
+      return { type: 'testMetaConnection' };
+    case 'openRepository':
+      if (!hasExactKeys(record, ['type'])) {
+        fail('Invalid openRepository message.');
+      }
+      return { type: 'openRepository' };
     case 'startLocal':
       if (
         !hasExactKeys(record, [
@@ -538,11 +596,6 @@ export function parseViewInboundMessage(raw: unknown): ViewInboundMessage {
         fail('Invalid clearExternalEndpoint message.');
       }
       return { type: 'clearExternalEndpoint' };
-    case 'escalateApprove':
-      if (!hasExactKeys(record, ['type'])) {
-        fail('Invalid escalateApprove message.');
-      }
-      return { type: 'escalateApprove' };
     case 'escalateDismiss':
       if (!hasExactKeys(record, ['type'])) {
         fail('Invalid escalateDismiss message.');
@@ -664,12 +717,9 @@ export function parseViewInboundMessage(raw: unknown): ViewInboundMessage {
       return { type: 'selectMemoryProject', path: record.path as string };
     case 'missionStart':
       if (
-        !(
-          hasExactKeys(record, ['type', 'missionId', 'revision', 'mode', 'maxConsultations', 'trustedProject', 'acceptanceCommand', 'acceptanceFiles']) ||
-          (hasExactKeys(record, ['type', 'missionId', 'revision', 'mode', 'maxConsultations', 'trustedProject', 'acceptanceCommand', 'acceptanceFiles', 'requestId']) &&
-            typeof record.requestId === 'string' &&
-            REQUEST_ID_PATTERN.test(record.requestId))
-        ) ||
+        !hasKeysAmong(record, ['type', 'missionId', 'revision', 'mode', 'maxConsultations', 'trustedProject', 'acceptanceCommand', 'acceptanceFiles'], ['requestId', 'advisoryLimits']) ||
+        (record.requestId !== undefined && (typeof record.requestId !== 'string' || !REQUEST_ID_PATTERN.test(record.requestId))) ||
+        !isChosenLimits(record.advisoryLimits) ||
         typeof record.trustedProject !== 'boolean' ||
         typeof record.acceptanceCommand !== 'string' ||
         record.acceptanceCommand.length > 128 ||
@@ -700,6 +750,7 @@ export function parseViewInboundMessage(raw: unknown): ViewInboundMessage {
         acceptanceCommand: record.acceptanceCommand as string,
         acceptanceFiles: [...(record.acceptanceFiles as string[])],
         ...(typeof record.requestId === 'string' ? { requestId: record.requestId } : {}),
+        ...(record.advisoryLimits !== undefined && record.advisoryLimits !== null ? { advisoryLimits: { ...(record.advisoryLimits as ChosenAdvisoryLimits) } } : {}),
       };
     case 'missionResume':
     case 'missionPause':
@@ -778,7 +829,7 @@ export function toThreadSummaries(threads: ChatThread[]): ThreadSummary[] {
 }
 
 export const CHAT_SCOPE_NOTICE =
-  'Chat sends the active thread\u2019s recent history (bounded, most recent first) plus your new message. Other threads are never sent.';
+  'Chat sends the active thread\u2019s recent history, a bounded host-selected set of relevant older excerpts, and your new message. Other threads are never sent. Older local excerpts are withheld when switching to Meta.';
 export const MISSION_SCOPE_NOTICE =
   'Mission sends only your new message to Meta Model API. Earlier thread content is never sent as context.';
 export const AGENT_SCOPE_NOTICE =
@@ -885,6 +936,12 @@ export interface ViewStateMessage {
   runKind: RunKind;
   /** Public version and build of this extension. */
   about: AboutView;
+  /** Advisory and delegated Meta paths, beyond the exact consult text. */
+  remote: RemoteView;
+  /** Model evidence for the active thread (modelEvidence.ts), re-validated here. */
+  modelEvidence: ModelEvidenceView;
+  /** Recovered context for the active thread, by reference and hash (continuityLog.ts). */
+  continuityLog: ContinuityLogView;
 }
 
 export type RunKind = 'mission-plan' | 'mission-run' | 'other' | null;
@@ -922,12 +979,23 @@ export interface MissionLiveView {
   canResume: boolean;
   canCancel: boolean;
   /** Choices for the start card, only while the Mission can be authorized. */
-  setup: { testCommands: string[]; candidates: string[]; environmentFiles: string[]; packageJsonHash: string } | null;
+  setup: {
+    testCommands: string[];
+    candidates: string[];
+    environmentFiles: string[];
+    packageJsonHash: string;
+    /** Empty-project first authorization. */
+    bootstrap: boolean;
+    /** Scaffold created; a second authorization must review its tests. */
+    awaitingVerification: boolean;
+  } | null;
   /** The last start request of this window and what the host made of it. */
   startRequest: { requestId: string; state: 'authorizing' | 'started' | 'failed'; error: string } | null;
   report: MissionFinalReport | null;
   /** Only for a blocked Mission: why, how far it got, and which tests never ran. */
   blocked: { reason: string; runs: number; lastProgress: string; testsNotRun: string[] } | null;
+  /** Mission Advisory consultations and the causal recovery state. */
+  remote: MissionRemoteView | null;
   /** The host's record of the Mission, newest last, for "Review". */
   review: string[];
   note: string;
@@ -1306,6 +1374,9 @@ export function buildViewStateMessage(options: {
   missionLive?: MissionLiveView | null;
   runKind?: RunKind;
   about?: AboutView;
+  remote?: RemoteView;
+  modelEvidence?: ModelEvidenceView;
+  continuityLog?: ContinuityLogView;
 }): ViewStateMessage {
   // The provider-level runtime is the source of truth; the cloud model is
   // a validated subordinate selection. Mismatched/arbitrary combinations
@@ -1359,6 +1430,9 @@ export function buildViewStateMessage(options: {
     missionLive: sanitizeMissionLive(options.missionLive ?? null),
     runKind: options.runKind === 'mission-plan' || options.runKind === 'mission-run' || options.runKind === 'other' ? options.runKind : null,
     about: sanitizeAbout(options.about),
+    remote: sanitizeRemoteView(options.remote),
+    modelEvidence: sanitizeEvidenceView(options.modelEvidence),
+    continuityLog: sanitizeContinuityLogView(options.continuityLog),
   };
 }
 
@@ -1440,6 +1514,8 @@ function sanitizeMissionLive(value: unknown): MissionLiveView | null {
             candidates: strings(setup.candidates, 80, 512),
             environmentFiles: strings(setup.environmentFiles, 8, 64),
             packageJsonHash: text(setup.packageJsonHash, 64),
+            bootstrap: setup.bootstrap === true,
+            awaitingVerification: setup.awaitingVerification === true,
           },
     startRequest:
       request === null || typeof request.requestId !== 'string' || !['authorizing', 'started', 'failed'].includes(request.state as string)
@@ -1468,6 +1544,7 @@ function sanitizeMissionLive(value: unknown): MissionLiveView | null {
             testsNotRun: strings((record.blocked as Record<string, unknown>).testsNotRun, 16, 128),
           },
     review: strings(record.review, 40, 300),
+    remote: sanitizeMissionRemote(record.remote),
     note: text(record.note, 500),
   };
 }
@@ -1522,7 +1599,7 @@ function sanitizeViewLocalSettings(value: unknown): LocalRuntimeSettings {
     modelId: 'local-glimmer',
     contextSize: 32768,
     port: 8775,
-    idleTimeoutSec: 600,
+    idleTimeoutSec: 900,
   };
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return fallback;
@@ -1542,7 +1619,7 @@ function sanitizeViewLocalSettings(value: unknown): LocalRuntimeSettings {
     modelId: str('modelId').length > 0 ? str('modelId').slice(0, 128) : 'local-glimmer',
     contextSize: num('contextSize', 32768),
     port: num('port', 8775),
-    idleTimeoutSec: num('idleTimeoutSec', 600),
+    idleTimeoutSec: num('idleTimeoutSec', 900),
   };
 }
 

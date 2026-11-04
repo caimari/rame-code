@@ -182,7 +182,7 @@ test('a local failure never reaches Meta silently and a pending escalation canno
     h.model.enqueue({ kind: 'hang' });
     const run = h.provider.sendMessage('Another local request.', 'agent', 'local');
     await h.waitFor(() => h.model.requests.length === 2);
-    await h.provider.approveEscalation();
+    await h.provider.approveEscalation((h.last().remote as { delegation: { digest: string } }).delegation.digest);
     assert.deepEqual(blockedFetches, [], 'escalation must not start while another run is active');
     assert.equal(h.last().escalation.pending, true, 'the escalation stays available for later');
     h.provider.cancelRequest();
@@ -229,6 +229,23 @@ test('the selected folder among several is the one the Agent works in', async ()
     await run;
     const toolMessage = (h.model.requests[1]?.messages as Array<{ role: string; content: string }>).find((m) => m.role === 'tool');
     assert.match(toolMessage?.content ?? '', /content:\nsecond/);
+  });
+});
+
+test('a thread remembers its selected open folder and does not ask again', async () => {
+  await withHarness({ folders: 2 }, async (h) => {
+    const second = path.join(h.root, 'ws1');
+    fakeWindow.quickPickAnswer = (items: unknown[]) =>
+      (items as Array<{ description: string }>).find((item) => item.description === second);
+    h.model.enqueue(
+      { kind: 'json', body: assistantText('First reply.') },
+      { kind: 'json', body: assistantText('Second reply.') },
+    );
+    await h.provider.sendMessage('Work in the second project.', 'agent', 'local');
+    await h.provider.sendMessage('Continue in the same project.', 'agent', 'local');
+    assert.equal(fakeWindow.quickPickCalls, 1, 'the project is selected once per thread');
+    const stored = h.memento.get('rameCode.threads.v1') as Array<{ workspaceRoot?: string }>;
+    assert.equal(stored[0]?.workspaceRoot, second);
   });
 });
 
@@ -436,6 +453,11 @@ test('the API key never reaches view state, persisted state, or the transcript',
       new Response(JSON.stringify({ error: { message: `Invalid key ${key} supplied` } }), { status: 401, headers: { 'Content-Type': 'application/json' } });
     try {
       await h.provider.sendMessage('Hello cloud agent.', 'agent', 'cloud');
+      // The first Agent run with Meta in a session asks about tool results (cloudDisclosureHost.ts).
+      const card = (h.last().remote as { disclosure: { digest: string } | null }).disclosure;
+      assert.ok(card);
+      h.send({ type: 'disclosureDecide', digest: card.digest, choice: 'include', toolResults: false });
+      await h.waitFor((state) => fakeCloud.requests.length === 1 && !state.running);
       await h.provider.sendMessage('Hello cloud chat.', 'chat', 'cloud');
     } finally {
       fakeCloud.handler = null;

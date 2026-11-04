@@ -22,6 +22,8 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 
+import { ADVISORY_DATA_CLASSES } from './remoteAuthority.js';
+import { checkAdvisoryLimits, storedAdvisoryLimits, type AdvisoryLimits } from './missionAdvisoryLimits.js';
 import {
   blockingVerifierPrompt,
   parseBlockingVerifiers,
@@ -67,7 +69,13 @@ export interface MissionGrant {
   mode: 'supervised' | 'autonomous-workspace';
   grantedAt: number;
   /** Optional advice from Meta when a run stops for a capability reason; null = none. */
-  escalation: { model: string; maxConsultations: number; maxOutputTokens: number; used: number } | null;
+  /**
+   * Advisory consultations only ("used" counts attempts that were sent),
+   * the valid answers received, and the data classes they may carry. It
+   * never authorizes a delegated run.
+   */
+  /** Advisory only; its limits are fixed at authorization (missionAdvisoryLimits.ts). */
+  escalation: ({ model: string; maxConsultations: number; used: number; validResponses: number; dataClasses: string[]; sentBytes: number; usedTokens: number } & AdvisoryLimits) | null;
   /**
    * Autonomous only: the user marked this project as trusted, and the test
    * commands it may run without a card, bound to the package.json they come
@@ -83,6 +91,12 @@ export interface MissionGrant {
    * change them; the host itself runs the check before `completed`.
    */
   acceptance: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }> } | null;
+  /**
+   * First stage for an empty project. It may scaffold files, but it has no
+   * test grant and can never complete a task. The host stops it as soon as
+   * it can present newly created tests for a second, explicit authorization.
+   */
+  bootstrap?: true;
 }
 
 /** Tools an autonomous-workspace grant runs without a card. Never delete, move, chmod, or memory writes. */
@@ -90,6 +104,7 @@ export const AUTONOMOUS_TOOLS: readonly string[] = [
   'list_files',
   'inspect_workspace',
   'filesystem_usage',
+  'search_history',
   'search_text',
   'read_file',
   'read_decisions',
@@ -181,6 +196,8 @@ export interface MissionRecord {
   grant: MissionGrant | null;
   auto: MissionAutoState | null;
   lease: MissionLease | null;
+  /** The scaffold exists; nothing runs until the user reviews and authorizes its tests. */
+  awaitingVerification?: true;
 }
 
 export type MissionResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -238,7 +255,8 @@ function parseGrant(raw: unknown, missionId: string, scopeId: string): MissionGr
     raw.provider !== 'local' ||
     !isBoundedString(raw.model, 128) ||
     (raw.mode !== 'supervised' && raw.mode !== 'autonomous-workspace') ||
-    !isCount(raw.grantedAt)
+    !isCount(raw.grantedAt) ||
+    (raw.bootstrap !== undefined && raw.bootstrap !== true)
   ) {
     return undefined;
   }
@@ -252,12 +270,26 @@ function parseGrant(raw: unknown, missionId: string, scopeId: string): MissionGr
       e.maxConsultations > 5 ||
       !isCount(e.maxOutputTokens) ||
       e.maxOutputTokens > 32768 ||
+      storedAdvisoryLimits(e, e.maxConsultations) === null ||
+      (e.sentBytes !== undefined && !isCount(e.sentBytes)) ||
+      (e.usedTokens !== undefined && !isCount(e.usedTokens)) ||
       !isCount(e.used) ||
-      e.used > e.maxConsultations
+      e.used > e.maxConsultations ||
+      (e.validResponses !== undefined && (!isCount(e.validResponses) || e.validResponses > e.used)) ||
+      (e.dataClasses !== undefined && (!Array.isArray(e.dataClasses) || e.dataClasses.length > 8 || e.dataClasses.some((entry) => !isBoundedString(entry, 160))))
     ) {
       return undefined;
     }
-    escalation = { model: e.model, maxConsultations: e.maxConsultations, maxOutputTokens: e.maxOutputTokens, used: e.used };
+    escalation = {
+      model: e.model,
+      maxConsultations: e.maxConsultations,
+      ...(storedAdvisoryLimits(e, e.maxConsultations) as AdvisoryLimits),
+      sentBytes: isCount(e.sentBytes) ? e.sentBytes : 0,
+      usedTokens: isCount(e.usedTokens) ? e.usedTokens : 0,
+      used: e.used,
+      validResponses: isCount(e.validResponses) ? e.validResponses : 0,
+      dataClasses: Array.isArray(e.dataClasses) ? (e.dataClasses as string[]) : [...ADVISORY_DATA_CLASSES],
+    };
   }
   let tests: MissionGrant['tests'] = null;
   if (raw.tests !== null && raw.tests !== undefined) {
@@ -275,7 +307,8 @@ function parseGrant(raw: unknown, missionId: string, scopeId: string): MissionGr
     }
     tests = { trustedProject: true, packageJsonHash: t.packageJsonHash, commandIds: [...(t.commandIds as string[])] };
   }
-  if (raw.mode === 'autonomous-workspace' && tests === null) {
+  const bootstrap = raw.bootstrap === true;
+  if (raw.mode === 'autonomous-workspace' && tests === null && !bootstrap) {
     return undefined;
   }
   let acceptance: MissionGrant['acceptance'] = null;
@@ -300,7 +333,21 @@ function parseGrant(raw: unknown, missionId: string, scopeId: string): MissionGr
       files: (a.files as Array<{ path: string; hash: string }>).map((f) => ({ path: f.path, hash: f.hash })),
     };
   }
-  return { missionId, scopeId, provider: 'local', model: raw.model, mode: raw.mode, grantedAt: raw.grantedAt, escalation, tests, acceptance };
+  if (bootstrap && acceptance !== null) {
+    return undefined;
+  }
+  return {
+    missionId,
+    scopeId,
+    provider: 'local',
+    model: raw.model,
+    mode: raw.mode,
+    grantedAt: raw.grantedAt,
+    escalation,
+    tests,
+    acceptance,
+    ...(bootstrap ? { bootstrap: true as const } : {}),
+  };
 }
 
 function parseAuto(raw: unknown): MissionAutoState | null | undefined {
@@ -411,7 +458,7 @@ function parseMission(raw: unknown): MissionRecord | null {
   const grant = parseGrant(raw.grant, raw.id, raw.scopeId);
   const auto = parseAuto(raw.auto);
   const lease = parseLease(raw.lease);
-  if (grant === undefined || auto === undefined || lease === undefined) {
+  if (grant === undefined || auto === undefined || lease === undefined || (raw.awaitingVerification !== undefined && raw.awaitingVerification !== true)) {
     return null;
   }
   return {
@@ -433,6 +480,7 @@ function parseMission(raw: unknown): MissionRecord | null {
     grant,
     auto,
     lease,
+    ...(raw.awaitingVerification === true ? { awaitingVerification: true as const } : {}),
   };
 }
 
@@ -609,6 +657,11 @@ export class MissionStore {
       if (mission.status !== 'active' && mission.status !== 'waiting_approval') {
         continue;
       }
+      // A bootstrap Mission deliberately waits here for a second user
+      // authorization. Reloading cannot turn that safe pause into a crash.
+      if (mission.awaitingVerification === true) {
+        continue;
+      }
       // Another live window is driving it: that run is not lost.
       if (mission.lease !== null && isLeaseAlive(mission.lease)) {
         continue;
@@ -683,6 +736,9 @@ export function canRunTask(mission: MissionRecord): MissionResult<MissionTask> {
   }
   if (mission.status === 'waiting_approval') {
     return { ok: false, error: 'This Mission is waiting for an approval in its current run.' };
+  }
+  if (mission.awaitingVerification === true) {
+    return { ok: false, error: 'Review the scaffolded project and authorize its verification stage before this Mission continues.' };
   }
   if (mission.taskRunsUsed >= mission.maxTaskRuns) {
     return { ok: false, error: `This Mission used all ${mission.maxTaskRuns} task runs of its budget.` };
@@ -836,11 +892,13 @@ export function grantMission(
   grant: {
     model: string;
     mode: MissionGrant['mode'];
-    escalation: { model: string; maxConsultations: number; maxOutputTokens: number } | null;
+    escalation: ({ model: string; maxConsultations: number } & AdvisoryLimits) | null;
     /** Autonomous only: the user marked the project trusted; the test commands and the package.json they come from. */
     tests: { trustedProject: boolean; packageJsonHash: string; commandIds: string[] } | null;
     /** The user's frozen acceptance check, or null for none. */
     acceptance?: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }> } | null;
+    /** Empty-project first stage; never carries tests or frozen acceptance. */
+    bootstrap?: boolean;
   },
   now: number,
 ): MissionResult<MissionRecord> {
@@ -850,16 +908,20 @@ export function grantMission(
   if (grant.model.length === 0 || grant.model.length > 128) {
     return { ok: false, error: 'The Mission grant needs the local model id.' };
   }
+  const bootstrap = grant.bootstrap === true;
   if (grant.mode === 'autonomous-workspace' && (grant.tests === null || grant.tests.trustedProject !== true)) {
     return {
       ok: false,
       error: 'Autonomous workspace is only for a project you mark as trusted: its test scripts run with your permissions and RAME Code is not an operating-system sandbox.',
     };
   }
-  if (grant.tests !== null && !/^[0-9a-f]{64}$/.test(grant.tests.packageJsonHash)) {
+  if (!bootstrap && grant.tests !== null && !/^[0-9a-f]{64}$/.test(grant.tests.packageJsonHash)) {
     return { ok: false, error: 'Autonomous workspace needs a readable package.json to bind its test commands to.' };
   }
   const acceptance = grant.acceptance ?? null;
+  if (bootstrap && acceptance !== null) {
+    return { ok: false, error: 'A bootstrap Mission cannot freeze tests that do not exist yet. Review and authorize them in the second stage.' };
+  }
   if (
     acceptance !== null &&
     (acceptance.commandId.length === 0 ||
@@ -871,8 +933,12 @@ export function grantMission(
     return { ok: false, error: 'The acceptance check needs an allowlisted command and 1 to 20 existing files to freeze.' };
   }
   const escalation = grant.escalation;
-  if (escalation !== null && (escalation.maxConsultations < 1 || escalation.maxConsultations > 5 || escalation.maxOutputTokens < 256 || escalation.maxOutputTokens > 32768)) {
-    return { ok: false, error: 'Mission escalation allows 1 to 5 consultations and 256 to 32768 output tokens.' };
+  if (escalation !== null && (escalation.maxConsultations < 1 || escalation.maxConsultations > 5)) {
+    return { ok: false, error: 'Mission escalation allows 1 to 5 consultations.' };
+  }
+  const limitError = escalation === null ? null : checkAdvisoryLimits(escalation);
+  if (limitError !== null) {
+    return { ok: false, error: limitError };
   }
   mission.grant = {
     missionId: mission.id,
@@ -881,16 +947,18 @@ export function grantMission(
     model: grant.model,
     mode: grant.mode,
     grantedAt: now,
-    escalation: escalation === null ? null : { ...escalation, used: 0 },
+    escalation: escalation === null ? null : { ...escalation, used: 0, validResponses: 0, dataClasses: [...ADVISORY_DATA_CLASSES], sentBytes: 0, usedTokens: 0 },
     tests:
-      grant.mode === 'autonomous-workspace' && grant.tests !== null
+      !bootstrap && grant.mode === 'autonomous-workspace' && grant.tests !== null
         ? { trustedProject: true, packageJsonHash: grant.tests.packageJsonHash, commandIds: grant.tests.commandIds.slice(0, 16) }
         : null,
     acceptance:
       acceptance === null
         ? null
         : { commandId: acceptance.commandId, packageJsonHash: acceptance.packageJsonHash, files: acceptance.files.map((file) => ({ path: file.path, hash: file.hash })) },
+    ...(bootstrap ? { bootstrap: true as const } : {}),
   };
+  delete mission.awaitingVerification;
   if (grant.mode === 'autonomous-workspace') {
     // Safety ceiling for chained runs; the normal stop is verification or no progress.
     mission.maxTaskRuns = Math.max(mission.maxTaskRuns, Math.min(MAX_AUTO_MISSION_RUNS, mission.tasks.length * MAX_AUTO_RUNS_PER_TASK));
@@ -909,7 +977,45 @@ export function grantMission(
     blockers: mission.auto?.blockers ?? [],
     recoveries: mission.auto?.recoveries ?? [],
   };
-  mission.note = `Mission authorized (${grant.mode === 'autonomous-workspace' ? 'autonomous workspace' : 'supervised'}, local ${grant.model}${escalation ? `, up to ${escalation.maxConsultations} Meta consultation(s)` : ', no escalation'}).`;
+  mission.note = bootstrap
+    ? `Bootstrap stage authorized (${grant.mode === 'autonomous-workspace' ? 'autonomous workspace' : 'supervised'}, local ${grant.model}). RAME Code may scaffold the project, but it cannot run tests or complete the Mission before a second authorization.`
+    : `Mission authorized (${grant.mode === 'autonomous-workspace' ? 'autonomous workspace' : 'supervised'}, local ${grant.model}${escalation ? `, up to ${escalation.maxConsultations} Meta consultation(s)` : ', no escalation'}).`;
+  return { ok: true, value: mission };
+}
+
+/**
+ * End an empty-project bootstrap as soon as verifiable tests exist. The
+ * first grant is revoked; the newly created files are not trusted or frozen
+ * until the user explicitly authorizes the second stage.
+ */
+export function awaitBootstrapVerification(
+  mission: MissionRecord,
+  testCommands: readonly string[],
+  candidates: readonly string[],
+  now: number,
+): MissionResult<MissionRecord> {
+  if (mission.grant?.bootstrap !== true) {
+    return { ok: false, error: 'This Mission is not in its bootstrap stage.' };
+  }
+  if (testCommands.length === 0 || candidates.length === 0) {
+    return { ok: false, error: 'The bootstrap stage has not produced both an allowlisted test command and a reviewable test file.' };
+  }
+  const task = currentTask(mission);
+  if (task === null) {
+    return { ok: false, error: 'This Mission has no current task.' };
+  }
+  mission.evidence.push(
+    evidence(
+      task.id,
+      'note',
+      `bootstrap scaffold ready: review ${testCommands.slice(0, 4).join(', ')} and ${candidates.slice(0, 6).join(', ')} before verification authorization`,
+      now,
+    ),
+  );
+  mission.grant = null;
+  mission.awaitingVerification = true;
+  mission.status = 'active';
+  mission.note = 'Scaffold created. Review the new test command and files, then authorize the verification stage. Nothing runs until you do.';
   return { ok: true, value: mission };
 }
 
@@ -1051,7 +1157,7 @@ export function assessRun(mission: MissionRecord, observation: RunObservation): 
   const changed = observation.writes.length > 0 || observation.lastTest !== null;
   const progress = changed && signature !== (auto?.lastSignature ?? '');
   // A test that failed blocks every task until that same test passes again.
-  const verifierUpdate = updateVerifiers(auto?.blockers ?? [], auto?.recoveries ?? [], observation.verifiers ?? [], observation.conditions ?? '', (auto?.runs ?? 0) + 1, 'agent');
+  const verifierUpdate = updateVerifiers(auto?.blockers ?? [], auto?.recoveries ?? [], observation.verifiers ?? [], observation.conditions ?? '', (auto?.runs ?? 0) + 1, 'agent', mission.id);
   const cleanRun = observation.outcome === 'done' && observation.uncertain === 0 && !needs;
   const verified = cleanRun && verifierUpdate.blockers.length === 0;
   const parts: string[] = [];
@@ -1092,6 +1198,7 @@ export function recordVerifierRecheck(
     conditions,
     mission.auto.runs,
     'host',
+    mission.id,
   );
   mission.auto.blockers = update.blockers;
   mission.auto.recoveries = update.recoveries;
@@ -1235,11 +1342,20 @@ export function buildAutoTaskPrompt(
 ): string {
   const auto = mission.auto;
   const parts = [buildTaskPrompt(mission, { autonomous: true })];
+  if (mission.grant?.bootstrap === true) {
+    parts.push(
+      'BOOTSTRAP STAGE FOR AN EMPTY PROJECT. Create the smallest safe project scaffold needed for the Mission: implementation files, package.json with an allowlisted verification script, and at least one project test or acceptance test. ' +
+        'You cannot run tests in this stage and you cannot complete the Mission. Do not claim success. The host will stop automatically once it can show the new test command and test files to the user for a separate authorization. ' +
+        'Do not touch .git, .env, credentials, or anything outside this project.',
+    );
+  }
   const tests = testCommands.length > 0 ? testCommands.join(', ') : 'none';
-  parts.push(
-    `Autonomous Mission: internal run ${(auto?.runs ?? 0) + 1}. RAME Code starts the next internal run by itself; do not wait for anyone to say "continue". ` +
-      `The host accepts this task only when an allowlisted test passes after your last change and nothing is uncertain (allowlisted tests: ${tests}). Run it before your final report.`,
-  );
+  if (mission.grant?.bootstrap !== true) {
+    parts.push(
+      `Autonomous Mission: internal run ${(auto?.runs ?? 0) + 1}. RAME Code starts the next internal run by itself; do not wait for anyone to say "continue". ` +
+        `The host accepts this task only when an allowlisted test passes after your last change and nothing is uncertain (allowlisted tests: ${tests}). Run it before your final report.`,
+    );
+  }
   const task = currentTask(mission);
   if (auto !== null && auto.runs > 0 && task !== null) {
     // Earlier internal runs are not replayed as conversation: this
@@ -1294,8 +1410,10 @@ export function buildAutoTaskPrompt(
     }
     lines.push(`- Pending: task "${task.title}". Done when: ${task.successCriterion}${after.length > 0 ? `. Then: ${after.join(', ')}` : ''}.`);
     lines.push(
-      `- Do now: do not list, inspect, or search the workspace again. Read only the file you will change (replace_in_file needs its exact current text and sha256), ` +
-        `make the smallest change that meets the task, run ${testCommands[0] ?? 'the allowlisted test'}, then report. Explore again only if one of these steps fails, and say why.`,
+      mission.grant?.bootstrap === true
+        ? '- Do now: create the missing implementation, package.json verification script, and reviewable test file. Do not run tests or claim completion; the host will pause for authorization.'
+        : `- Do now: do not list, inspect, or search the workspace again. Read only the file you will change (replace_in_file needs its exact current text and sha256), ` +
+          `make the smallest change that meets the task, run ${testCommands[0] ?? 'the allowlisted test'}, then report. Explore again only if one of these steps fails, and say why.`,
     );
     if (auto.noProgressStreak >= MAX_NO_PROGRESS_RUNS - 1) {
       lines.push('- This is the last internal run before the host blocks the Mission for lack of progress.');

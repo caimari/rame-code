@@ -63,11 +63,12 @@ import {
   applyPatchViaFs,
   checkReplacement,
 } from './agentController.js';
-import {
-  buildConsultPayload,
-  consultDigest,
-  type LocalStopKind,
-} from './cascade.js';
+import { type LocalStopKind } from './cascade.js';
+import { agentContinuity } from './agentContinuity.js';
+import { threadForRun } from './cloudDisclosureHost.js';
+import { contextSelectionBudget, selectedTurnIndexes } from './contextBudget.js';
+import { recordedHistorySearch } from './continuityLogHost.js';
+import { offerConsult } from './remoteController.js';
 import { checkUserStatement } from './decisionSource.js';
 import {
   describeProposal,
@@ -83,7 +84,8 @@ import {
   NO_HOST_ACTIONS_LINE,
   sanitizeAgentReply,
 } from './hostRecord.js';
-import { LocalAgentModelProvider, MetaAgentModelProvider } from './modelProviders/agentProvider.js';
+import { LocalAgentModelProvider } from './modelProviders/agentProvider.js';
+import { guardedMetaAgent } from './cloudEgress.js';
 import {
   frozenPaths,
   grantAllows,
@@ -95,6 +97,8 @@ import {
 } from './projectMemory.js';
 import type { ProviderId } from './settingsStore.js';
 import { RAME_AUDIT_KEY } from './settingsStore.js';
+import type { EvidenceApproval } from './modelEvidence.js';
+import { beginRun, markFinal, recordAgentAction, recordAgentStep } from './modelEvidenceRecorder.js';
 import {
   appendAssistantTurn,
   appendErrorTurn,
@@ -338,6 +342,9 @@ async function executeAgentTool(
   allowlist: AllowedTestCommand[],
   signal: AbortSignal,
   workspaceId: string,
+  threadId: string,
+  provider: ProviderId,
+  historySearchState: { calls: number },
   canonicalRoot?: string | null,
 ): Promise<string> {
   if (signal.aborted) {
@@ -350,6 +357,14 @@ async function executeAgentTool(
       return executeInspectWorkspace(fs, call, canonicalRoot ?? null);
     case 'filesystem_usage':
       return executeFilesystemUsage(fs);
+    case 'search_history': {
+      historySearchState.calls += 1;
+      if (historySearchState.calls > 2) {
+        return 'History search limit reached for this run (2 calls). Continue with the excerpts already returned.';
+      }
+      const args = call.args as unknown as { queries: string[]; limit: number };
+      return recordedHistorySearch(host, threadId, provider, args);
+    }
     case 'search_text':
       return executeSearchText(fs, call, canonicalRoot ?? null);
     case 'read_file':
@@ -649,35 +664,6 @@ function missionGrantAllows(
   return grantAllows(host.missions.get(auto.missionId), { missionId: auto.missionId, scopeId, provider, model }, tool, test);
 }
 
-function offerConsult(
-  host: ProviderHost,
-  input: { threadId: string; root: string; task: string; reason: string; hostRecord: string[]; scopeId: string },
-): void {
-  if (!host.settings.allowCloudEscalation) {
-    host.status = `${host.status} Asking Meta for advice needs cloud escalation ON in Settings; nothing was sent.`;
-    return;
-  }
-  const model = host.selectedCloudModel();
-  const payload = buildConsultPayload({
-    task: input.task,
-    reason: input.reason,
-    hostRecord: input.hostRecord,
-    decisions: host.memory.listCurrentDecisions(input.scopeId).map((entry) => ({ key: entry.key, value: entry.value, version: entry.version })),
-  });
-  host.consultOffer = {
-    threadId: input.threadId,
-    root: input.root,
-    task: input.task,
-    reason: input.reason,
-    payload,
-    model,
-    digest: consultDigest(payload, model, input.threadId),
-    createdAt: Date.now(),
-    generation: host.agentGeneration,
-  };
-  host.status = `${host.status} You can ask Meta ${model} for advice with the exact text shown, or dismiss.`;
-}
-
 /** Bounded Agent run with the explicitly selected provider only. */
 export async function sendAgent(
   host: ProviderHost,
@@ -749,12 +735,15 @@ export async function sendAgent(
       throw new Error('The local runtime is not running and no external endpoint is selected.');
     }
   }
-  const thread = host.store.get(threadId);
+  const thread = threadForRun(host, threadId, provider, text);
   const history: AgentChatMessage[] = [];
+  // The thread turn each history message comes from, for the continuity boundary.
+  const historyTurn: number[] = [];
+  let current = -1;
   if (thread) {
     const missionRun = host.missionAuto !== null;
     let hostSegment = false;
-    for (const turn of thread.turns) {
+    for (const [turnIndex, turn] of thread.turns.entries()) {
       if (missionRun) {
         if (turn.kind === 'user') {
           hostSegment = turn.host === true;
@@ -765,12 +754,15 @@ export async function sendAgent(
       }
       if (turn.kind === 'user') {
         history.push({ role: 'user', content: historyText(turn.text) });
+        historyTurn.push(turnIndex);
       } else if (turn.kind === 'assistant') {
         const prose = assistantHistoryText(turn.text);
         if (prose.length > 0) {
           history.push({ role: 'assistant', content: historyText(prose) });
+          historyTurn.push(turnIndex);
         }
         if (turn.hostRecord) {
+          historyTurn.push(-1);
           history.push({
             role: 'system',
             content:
@@ -782,13 +774,26 @@ export async function sendAgent(
       }
     }
   }
+  // send() has already persisted the current user turn for crash recovery.
+  // buildAgentMessages adds the goal explicitly, so avoid sending it twice.
+  const lastHistory = history.at(-1);
+  if (lastHistory?.role === 'user' && lastHistory.content === historyText(text)) {
+    history.pop();
+    current = historyTurn.pop() as number;
+  }
   const fs = host.agentFsFor(workspaceId);
   const heldCanonicalRoot = await host.heldCanonicalRoot(workspaceId, fs);
+  const contextBudget = contextSelectionBudget(generation.profile.contextWindow);
+  // buildAgentMessages makes this same selection at every step.
+  const recentIndexes = selectedTurnIndexes(history, historyTurn, contextBudget.recentChars, contextBudget.recentTurns).add(current);
   const extra: AgentChatMessage[] = [];
   const memoryScope = { scopeId: scopeIdForRoot(heldCanonicalRoot), label: path.basename(target.root) };
+  const continuity = agentContinuity(host, { threadId, thread, text, provider, model, contextWindow: generation.profile.contextWindow, recentIndexes, scopeId: memoryScope.scopeId, label: memoryScope.label });
   const runTools = [...buildAgentToolDefinitions(), ...buildMemoryToolDefinitions()];
-  extra.push({ role: 'system', content: `${MEMORY_RULES_TEXT}\n${await host.memorySnapshotText(memoryScope, fs)}` });
+  // Before the history and the request, like the recovered context.
+  const lead: AgentChatMessage[] = [...continuity.promptMessages, { role: 'system', content: `${MEMORY_RULES_TEXT}\n${await host.memorySnapshotText(memoryScope, fs)}` }];
   let workspaceWrites = 0;
+  const historySearchState = { calls: 0 };
   const seenReadResults = new Map<string, { digest: string; step: number }>();
   let repeatedReads = 0;
   let actNudged = false;
@@ -796,8 +801,13 @@ export async function sendAgent(
   const changedFiles = new Set<string>();
   const testRuns: Array<{ commandId: string; exitCode: number | null; writes: number; at: number; outputDigest: string }> = [];
   const memoryProposals = new Map<string, MemoryProposal>();
-  const hostRecord: string[] = [];
+  const hostRecord: string[] = continuity.hostRecordLine ? [continuity.hostRecordLine] : [];
+  // Model evidence: the inference each tool call came from, and how the host allowed its action.
+  const evidenceRun = beginRun(host, threadId);
+  let inference: { id: string | null; calls: ValidatedToolCall[] | null } = { id: null, calls: null };
+  let approvedBy: { digest: string; approval: EvidenceApproval } | null = null;
   const recordHostAction = (call: ValidatedToolCall, targets: string[], outcome: string): void => {
+    recordAgentAction(host, threadId, inference.id, inference.calls, call, outcome, approvedBy);
     if (hostRecord.length < MAX_HOST_RECORD_LINES) {
       const tgt = targets.join(', ').slice(0, 120);
       const line = `\u2022 ${call.tool}${tgt.trim().length > 0 ? ` ${tgt}` : ''} \u2192 ${outcome}`;
@@ -856,8 +866,11 @@ export async function sendAgent(
             'what you did, files changed (or none), tests/checks run and their result, and what remains unfinished.',
         });
       }
-      const toolChoice = lastStep && provider === 'local' ? 'none' : 'auto';
-      const messages = buildAgentMessages(workspaceId, history, text, extra);
+      const toolChoice = lastStep ? 'none' : 'auto';
+      const messages = buildAgentMessages(workspaceId, history, text, extra, {
+        maxMessages: contextBudget.recentTurns,
+        maxChars: contextBudget.recentChars,
+      }, lead);
       const estimateBody = { messages, tools: runTools };
       let stepRequest: ReturnType<ProviderHost['generationRequest']>;
       try {
@@ -883,7 +896,7 @@ export async function sendAgent(
       let completion: AgentCompletion;
       try {
         const modelProvider = provider === 'cloud'
-          ? new MetaAgentModelProvider(apiKey)
+          ? guardedMetaAgent(host, threadId, text, apiKey)
           : new LocalAgentModelProvider(host.localEndpoint() as string);
         completion = await modelProvider.complete({
           model,
@@ -894,6 +907,7 @@ export async function sendAgent(
           toolChoice,
         });
         host.recordUsage(modelProvider.id, completion.usage);
+        inference = { id: recordAgentStep(host, threadId, evidenceRun, provider, model, { completion }), calls: completion.toolCalls };
         if (modelProvider.id === 'local') {
           host.armIdleShutdown();
         }
@@ -901,6 +915,7 @@ export async function sendAgent(
           calibration = { chars: JSON.stringify(estimateBody).length, tokens: completion.usage.inputTokens };
         }
       } catch (error) {
+        inference = { id: recordAgentStep(host, threadId, evidenceRun, provider, model, { error }), calls: null };
         if (!isAgentToolProtocolError(error)) {
           throw error;
         }
@@ -1030,8 +1045,15 @@ export async function sendAgent(
           host.lastAgentOutcome = { threadId, outcome: 'done', hostRecord: [...hostRecord], report: prose.slice(0, 1200) };
           const record = hostRecord.length > 0 ? hostRecord : [NO_HOST_ACTIONS_LINE];
           host.store.save(
-            appendAssistantTurn(current, `${prefix}${fitTurnText(prose, MAX_ASSISTANT_TEXT_LENGTH - prefix.length)}`, undefined, record),
+            appendAssistantTurn(
+              current,
+              `${prefix}${fitTurnText(prose, MAX_ASSISTANT_TEXT_LENGTH - prefix.length)}`,
+              undefined,
+              record,
+              { provider, model },
+            ),
           );
+          markFinal(host, threadId, inference.id);
         }
         // pushAgentLog is a no-op in the original; kept inline.
         void profile;
@@ -1040,11 +1062,13 @@ export async function sendAgent(
         return 'done';
       }
       for (const call of completion.toolCalls) {
+        approvedBy = null;
         if (signal.aborted) {
           throw new DOMException('Aborted', 'AbortError');
         }
         const testContext = await host.testCommandContext(workspaceId);
-        const gate = policyGateForCall(call, testContext.allowlist);
+        const bootstrap = host.missionAuto !== null && host.missions.get(host.missionAuto.missionId)?.grant?.bootstrap === true;
+        const gate = policyGateForCall(call, bootstrap ? [] : testContext.allowlist);
         if (!gate.ok) {
           recordBlockedProposal(host, call, provider, threadId, workspaceId, gate.error);
           recordHostAction(call, describeAgentCall(call).targets, `blocked by policy: ${gate.error}`);
@@ -1244,6 +1268,7 @@ export async function sendAgent(
             continue agentSteps;
           }
           if (choice.kind !== 'approve') {
+            recordAgentAction(host, threadId, inference.id, inference.calls, call, 'rejected by user', null);
             approvedPending = null;
             host.memory.discardProposals({ threadId });
             const current = host.store.get(threadId);
@@ -1278,6 +1303,7 @@ export async function sendAgent(
             return 'policy-stop';
           }
         }
+        approvedBy = { digest, approval: approvedPending ? 'human' : isAutoAllowed(profile, call.tool) ? 'profile' : 'mission-grant' };
         const journalId = `act-${digest.slice(0, 12)}`;
         if (host.activeMission !== null) {
           const journaled = await host.updateActiveMission((mission) =>
@@ -1299,7 +1325,18 @@ export async function sendAgent(
           resultText =
             memoryProposal !== null
               ? await commitModelProposal(host, memoryProposal, approvedPending, threadId, provider)
-              : await executeAgentTool(host, call, fs, testContext.allowlist, signal, workspaceId, heldCanonicalRoot);
+              : await executeAgentTool(
+                  host,
+                  call,
+                  fs,
+                  testContext.allowlist,
+                  signal,
+                  workspaceId,
+                  threadId,
+                  provider,
+                  historySearchState,
+                  heldCanonicalRoot,
+                );
         } catch (error) {
           if (
             (error instanceof Error && error.name === 'AbortError') ||
@@ -1461,7 +1498,7 @@ export async function sendAgent(
     host.lastAgentOutcome = { ...host.lastAgentOutcome, capabilityReason };
   }
   if (provider === 'local' && capabilityReason !== null && host.cascadeVerification === null && host.activeMission === null) {
-    offerConsult(host, { threadId, root: target.root, task: text, reason: capabilityReason, hostRecord: [...hostRecord], scopeId: memoryScope.scopeId });
+    offerConsult(host, { threadId, root: target.root, task: text, reason: capabilityReason, hostRecord: [...hostRecord], scopeId: memoryScope.scopeId, verifier: lastTest });
   }
   void steps;
   void buildAgentSystemPrompt;

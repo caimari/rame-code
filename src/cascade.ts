@@ -34,6 +34,8 @@ export interface ConsultInput {
   reason: string;
   hostRecord: readonly string[];
   decisions: ReadonlyArray<{ key: string; value: unknown; version: number }>;
+  /** The failing check that motivated the consultation: its command and exit code only. */
+  verifier?: { commandId: string; exitCode: number | null } | null;
 }
 
 function oneLine(text: string, max: number): string {
@@ -52,6 +54,7 @@ export function buildConsultPayload(input: ConsultInput): string {
     'A local coding agent could not finish a task in a software project. You cannot see the files and you cannot run tools.',
     `Task:\n${input.task.trim().slice(0, MAX_CONSULT_TASK_CHARS)}`,
     `Why the local run stopped: ${oneLine(input.reason, 400)}`,
+    ...(input.verifier ? [`Failing check: ${oneLine(input.verifier.commandId, 80)} exit=${input.verifier.exitCode ?? 'unknown'} (its output is not included)`] : []),
     `What the local run did (host record; file contents are not included):\n${record.length > 0 ? record.join('\n') : '- nothing ran'}`,
     `Project decisions in force (authorized by the user):\n${decisions.length > 0 ? decisions.join('\n') : '- none'}`,
     'Return only the requested JSON: a short diagnosis, up to 6 concrete steps the local agent can take with its own file and test tools, and up to 4 checks that prove the result.',

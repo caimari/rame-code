@@ -68,6 +68,38 @@ export interface AssistantTurn {
    * model's text so the webview can show them as host-written.
    */
   hostRecord?: string[];
+  /** Provider/model that authored this reply, for explicit model handoff. */
+  origin?: ModelOrigin;
+  /** Written by RAME Code itself (a record or report), never by a model. */
+  host?: true;
+}
+
+export interface ModelOrigin {
+  provider: 'local' | 'cloud';
+  model: string;
+}
+
+function isValidOriginModel(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^[\p{L}\p{N}][\p{L}\p{N} ._:/@+()-]{0,127}$/u.test(value)
+  );
+}
+
+/**
+ * The stored label for a model id. Settings accept any local id up to 128
+ * characters, so characters outside the provenance pattern become "_" and a
+ * leading non-alphanumeric run is dropped: a reply is never lost over its
+ * label, and the same id always maps to the same label.
+ */
+export function originModelLabel(model: string): string {
+  const label = model
+    .normalize('NFC')
+    .replace(/[^\p{L}\p{N} ._:/@+()-]/gu, '_')
+    .replace(/^[^\p{L}\p{N}]+/u, '')
+    .slice(0, 128)
+    .trimEnd();
+  return isValidOriginModel(label) ? label : 'unknown';
 }
 
 export interface ErrorTurn {
@@ -83,6 +115,8 @@ export interface ChatThread {
   title: string;
   createdAt: number;
   updatedAt: number;
+  /** User-selected open VS Code folder for subsequent runs in this thread. */
+  workspaceRoot?: string;
   turns: ThreadTurn[];
 }
 
@@ -230,10 +264,8 @@ function validateErrorTurn(value: unknown): ErrorTurn | null {
 function validateAssistantTurn(value: unknown): AssistantTurn | null {
   if (
     !isRecord(value) ||
-    !(
-      hasExactKeys(value, ['kind', 'text', 'timestamp']) ||
-      hasExactKeys(value, ['kind', 'text', 'timestamp', 'hostRecord'])
-    )
+    !['kind', 'text', 'timestamp'].every((key) => Object.prototype.hasOwnProperty.call(value, key)) ||
+    !Object.keys(value).every((key) => ['kind', 'text', 'timestamp', 'hostRecord', 'origin', 'host'].includes(key))
   ) {
     return null;
   }
@@ -253,9 +285,29 @@ function validateAssistantTurn(value: unknown): AssistantTurn | null {
   if (!isValidTimestamp(value.timestamp)) {
     return null;
   }
-  return 'hostRecord' in value
-    ? { kind: 'assistant', text: value.text, timestamp: value.timestamp, hostRecord: [...(value.hostRecord as string[])] }
-    : { kind: 'assistant', text: value.text, timestamp: value.timestamp };
+  if (
+    'origin' in value &&
+    (!isRecord(value.origin) ||
+      !hasExactKeys(value.origin, ['provider', 'model']) ||
+      (value.origin.provider !== 'local' && value.origin.provider !== 'cloud') ||
+      !isValidOriginModel(value.origin.model))
+  ) {
+    return null;
+  }
+  if ('host' in value && (value.host !== true || 'origin' in value)) {
+    return null;
+  }
+  const turn: AssistantTurn = { kind: 'assistant', text: value.text, timestamp: value.timestamp };
+  if ('hostRecord' in value) {
+    turn.hostRecord = [...(value.hostRecord as string[])];
+  }
+  if ('origin' in value) {
+    turn.origin = { ...(value.origin as ModelOrigin) };
+  }
+  if (value.host === true) {
+    turn.host = true;
+  }
+  return turn;
 }
 
 function validateTurn(value: unknown): ThreadTurn | null {
@@ -296,9 +348,15 @@ export function validateThreadRecord(value: unknown): ChatThread | null {
     return null;
   }
   const hasTitle = Object.prototype.hasOwnProperty.call(value, 'title');
-  const allowed = hasTitle
-    ? ['id', 'title', 'createdAt', 'updatedAt', 'turns']
-    : ['id', 'createdAt', 'updatedAt', 'turns'];
+  const hasWorkspaceRoot = Object.prototype.hasOwnProperty.call(value, 'workspaceRoot');
+  const allowed = [
+    'id',
+    ...(hasTitle ? ['title'] : []),
+    'createdAt',
+    'updatedAt',
+    ...(hasWorkspaceRoot ? ['workspaceRoot'] : []),
+    'turns',
+  ];
   if (!hasExactKeys(value, allowed)) {
     return null;
   }
@@ -309,6 +367,15 @@ export function validateThreadRecord(value: unknown): ChatThread | null {
     return null;
   }
   if (!Array.isArray(value.turns) || value.turns.length === 0) {
+    return null;
+  }
+  if (
+    hasWorkspaceRoot &&
+    (typeof value.workspaceRoot !== 'string' ||
+      value.workspaceRoot.trim().length === 0 ||
+      value.workspaceRoot.length > 4096 ||
+      value.workspaceRoot.includes('\0'))
+  ) {
     return null;
   }
   const turns: ThreadTurn[] = [];
@@ -333,13 +400,17 @@ export function validateThreadRecord(value: unknown): ChatThread | null {
   } else {
     title = deriveTitle(firstUserText(turns) ?? '');
   }
-  return {
+  const parsed: ChatThread = {
     id: value.id,
     title,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     turns,
   };
+  if (hasWorkspaceRoot) {
+    parsed.workspaceRoot = (value.workspaceRoot as string).trim();
+  }
+  return parsed;
 }
 
 /**
@@ -372,18 +443,27 @@ function randomSuffix(): string {
 /** Create a new thread whose first turn is the submitted mission text. */
 export function createThread(
   missionText: string,
-  options?: { now?: number; id?: string; mode?: UserTurn['mode'] },
+  options?: { now?: number; id?: string; mode?: UserTurn['mode']; workspaceRoot?: string },
 ): ChatThread {
   const now = options?.now ?? Date.now();
   const id = options?.id ?? `t-${now.toString(36)}-${randomSuffix()}`;
   const text = missionText.trim();
-  return {
+  const thread: ChatThread = {
     id,
     title: deriveTitle(text),
     createdAt: now,
     updatedAt: now,
     turns: [options?.mode !== undefined ? { kind: 'user', text, timestamp: now, mode: options.mode } : { kind: 'user', text, timestamp: now }],
   };
+  if (options?.workspaceRoot !== undefined) {
+    thread.workspaceRoot = options.workspaceRoot;
+  }
+  return thread;
+}
+
+/** Bind one thread to an explicitly selected open workspace folder. */
+export function bindThreadWorkspace(thread: ChatThread, workspaceRoot: string): ChatThread {
+  return { ...thread, workspaceRoot };
 }
 
 /** Append a validated user turn, returning a new thread record. */
@@ -431,11 +511,20 @@ export function appendPlanTurn(
  * Append a conversational assistant reply, returning a new thread record.
  * `hostRecord` (Agent runs) is stored beside the text, never inside it.
  */
+/** Append a note RAME Code wrote itself (a record or report): never a model reply. */
+export function appendHostNoteTurn(thread: ChatThread, text: string, hostRecord: string[], now?: number): ChatThread {
+  const next = appendAssistantTurn(thread, text, now, hostRecord);
+  const turns = [...next.turns];
+  turns[turns.length - 1] = { ...(turns[turns.length - 1] as AssistantTurn), host: true };
+  return { ...next, turns };
+}
+
 export function appendAssistantTurn(
   thread: ChatThread,
   text: string,
   now?: number,
   hostRecord?: string[],
+  origin?: ModelOrigin,
 ): ChatThread {
   const timestamp = now ?? Date.now();
   const turn: AssistantTurn = { kind: 'assistant', text: fitTurnText(text, MAX_ASSISTANT_TEXT_LENGTH), timestamp };
@@ -444,6 +533,12 @@ export function appendAssistantTurn(
       throw new Error('Invalid host record.');
     }
     turn.hostRecord = [...hostRecord];
+  }
+  if (origin !== undefined) {
+    if (origin.provider !== 'local' && origin.provider !== 'cloud') {
+      throw new Error('Invalid model origin.');
+    }
+    turn.origin = { provider: origin.provider, model: originModelLabel(origin.model) };
   }
   return {
     ...thread,
@@ -508,9 +603,9 @@ export class ThreadStore {
   }
 
   /** Create, persist, and return a new thread for the given mission text. */
-  create(missionText: string, mode?: UserTurn['mode']): ChatThread {
+  create(missionText: string, mode?: UserTurn['mode'], workspaceRoot?: string): ChatThread {
     const now = this.clock();
-    const thread = createThread(missionText, { now, mode });
+    const thread = createThread(missionText, { now, mode, workspaceRoot });
     this.threads = upsertThread(this.threads, thread);
     this.persist();
     return thread;

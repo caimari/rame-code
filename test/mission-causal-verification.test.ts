@@ -16,7 +16,7 @@ import test from 'node:test';
 
 import { buildAgentSystemPrompt } from '../src/agentModel.js';
 import { MISSION_STATE_KEY, type MissionRecord } from '../src/missionStore.js';
-import { parseBlockingVerifiers, parseVerifierRecoveries, updateVerifiers } from '../src/missionVerifiers.js';
+import { blockerId, parseBlockingVerifiers, parseVerifierRecoveries, updateVerifiers } from '../src/missionVerifiers.js';
 import { assistantText, HostHarness, toolCallReply, type PostedState } from './helpers/hostHarness.js';
 
 const sha = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
@@ -35,8 +35,13 @@ const lastUser = (h: HostHarness, index: number): string =>
 
 test('a failing command blocks until that same command passes after the last change, under the same manifest', () => {
   const opened = updateVerifiers([], [], [{ commandId: 'npm:check', exitCode: 1, afterLastWrite: true }], 'pkg1', 1, 'agent');
-  assert.deepEqual(opened.blockers, [{ commandId: 'npm:check', conditions: 'pkg1', sinceRun: 1, failures: 1 }]);
-  assert.match(opened.notes[0] as string, /^verifier npm:check failed \(exit 1\) in internal run 1/);
+  const id = blockerId('npm:check', 'pkg1', 1);
+  assert.match(id, /^blk_[0-9a-f]{16}$/);
+  assert.equal(blockerId('npm:check', 'pkg1', 1), id, 'the same failure keeps the same id');
+  assert.deepEqual(opened.blockers, [
+    { id, commandId: 'npm:check', conditions: 'pkg1', sinceRun: 1, failures: 1, originalExit: 1, state: 'open', stateReason: '', advisoryAttempts: 0, validResponses: 0 },
+  ]);
+  assert.match(opened.notes[0] as string, new RegExp(`^verifier npm:check failed \\(exit 1\\) in internal run 1 \\[${id}\\]`));
   // Another passing test does not clear it.
   const other = updateVerifiers(opened.blockers, [], [{ commandId: 'npm:test', exitCode: 0, afterLastWrite: true }], 'pkg1', 2, 'agent');
   assert.equal(other.blockers.length, 1);
@@ -47,7 +52,8 @@ test('a failing command blocks until that same command passes after the last cha
   // Passing under another manifest does not count.
   const moved = updateVerifiers(opened.blockers, [], [{ commandId: 'npm:check', exitCode: 0, afterLastWrite: true }], 'pkg2', 2, 'agent');
   assert.equal(moved.blockers.length, 1);
-  assert.match(moved.notes[0] as string, /package\.json changed since it failed; that does not count/);
+  assert.match(moved.notes[0] as string, /package\.json changed since it failed \[blk_[0-9a-f]{16}\]; that does not count/);
+  assert.equal(moved.blockers[0]?.state, 'conditions-changed', 'shown, not silent');
   // The last result of a command in the run is what counts.
   const flaky = updateVerifiers(opened.blockers, [], [
     { commandId: 'npm:check', exitCode: 0, afterLastWrite: true },
@@ -57,11 +63,12 @@ test('a failing command blocks until that same command passes after the last cha
   // Recovery, then the same failure again: the recovery is invalidated, not erased.
   const recovered = updateVerifiers(opened.blockers, [], [{ commandId: 'npm:check', exitCode: 0, afterLastWrite: true }], 'pkg1', 3, 'host');
   assert.equal(recovered.blockers.length, 0);
-  assert.match(recovered.notes[0] as string, /^verifier npm:check recovered in internal run 3 \(re-run by the host\): it passed after the last change under the conditions it failed in \(blocking since run 1\)/);
+  assert.match(recovered.notes[0] as string, new RegExp(`^verifier npm:check recovered in internal run 3 \\(re-run by the host\\) \\[${id}\\]: it passed after the last change under the conditions it failed in \\(blocking since run 1\\)`));
   const again = updateVerifiers([], recovered.recoveries, [{ commandId: 'npm:check', exitCode: 2, afterLastWrite: true }], 'pkg1', 5, 'agent');
   assert.equal(again.blockers.length, 1);
-  assert.deepEqual(again.recoveries, [{ commandId: 'npm:check', conditions: 'pkg1', run: 3, invalidatedInRun: 5 }]);
-  assert.match(again.notes.join('\n'), /failed again after its recovery in internal run 3: that recovery is invalidated/);
+  assert.deepEqual(again.recoveries, [{ blockerId: id, commandId: 'npm:check', conditions: 'pkg1', run: 3, invalidatedInRun: 5 }]);
+  assert.match(again.notes.join('\n'), new RegExp(`failed again after its recovery in internal run 3 \\[${id}\\]: that recovery is invalidated`));
+  assert.notEqual(again.blockers[0]?.id, id, 'the new failure is a new blocker');
   // Persisted state round-trips; malformed state is refused, never guessed.
   assert.deepEqual(parseBlockingVerifiers(JSON.parse(JSON.stringify(again.blockers))), again.blockers);
   assert.deepEqual(parseVerifierRecoveries(JSON.parse(JSON.stringify(again.recoveries))), again.recoveries);
@@ -108,11 +115,11 @@ test('a premature return is refused: npm:check failed, npm:test passing does not
     assert.equal(record.status, 'completed', record.note);
     assert.equal(record.auto?.runs, 3, 'run 2 was not accepted on npm:test alone');
     const notes = notesOf(h);
-    assert.match(notes, /verifier npm:check failed \(exit 1\) in internal run 1: tasks are accepted only after npm:check itself passes after the last change/);
+    assert.match(notes, /verifier npm:check failed \(exit 1\) in internal run 1 \[blk_[0-9a-f]{16}\]: tasks are accepted only after npm:check itself passes after the last change/);
     assert.match(notes, /internal run 2 \(done\): npm:test exit=0; blocking: npm:check/);
     assert.match(notes, /• run_tests npm:check → exit=1 \(re-run by the host: blocking verifier\)/);
     assert.match(notes, /• run_tests npm:check → exit=0 \(re-run by the host: blocking verifier\)/);
-    assert.match(notes, /verifier npm:check recovered in internal run 3 \(re-run by the host\)/);
+    assert.match(notes, /verifier npm:check recovered in internal run 3 \(re-run by the host\) \[blk_[0-9a-f]{16}\]/);
     assert.deepEqual(record.auto?.blockers, []);
     // Run 3 was told which verifier blocks.
     assert.match(lastUser(h, 5), /BLOCKING VERIFIER: npm:check \(failing since internal run 1\)\. The host accepts this task only after each of them passes after your last change; another passing test does not count\./);
@@ -134,7 +141,7 @@ test('a correct return: the agent fixes the cause and runs the failing verifier 
     assert.equal(record.status, 'completed', record.note);
     assert.equal(record.auto?.runs, 2);
     const notes = notesOf(h);
-    assert.match(notes, /verifier npm:check recovered in internal run 2: it passed after the last change/);
+    assert.match(notes, /verifier npm:check recovered in internal run 2 \[blk_[0-9a-f]{16}\]: it passed after the last change/);
     assert.ok(!/re-run by the host/.test(notes));
   });
 });
@@ -154,7 +161,7 @@ test('a recovered verifier that fails again in a later task is reopened, and its
     assert.equal(record.status, 'completed', record.note);
     assert.deepEqual(record.tasks.map((task) => task.status), ['completed', 'completed']);
     const notes = notesOf(h);
-    assert.match(notes, /verifier npm:check failed again after its recovery in internal run 2: that recovery is invalidated/);
+    assert.match(notes, /verifier npm:check failed again after its recovery in internal run 2 \[blk_[0-9a-f]{16}\]: that recovery is invalidated/);
     assert.deepEqual(record.auto?.recoveries.map((entry) => [entry.run, entry.invalidatedInRun]), [[2, 3], [4, null]]);
   }, 2);
 });

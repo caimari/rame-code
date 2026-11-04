@@ -114,6 +114,20 @@ electron-builder, cita las páginas que uses y no cambies ningún archivo.
 
 > **Advertencia sobre Workspace full y la terminal.** Workspace full deja que los parches y las pruebas permitidas se ejecuten sin preguntar, pero nunca lo hace con los comandos de terminal: cada `run_command` sigue esperando tu aprobación. Ningún cambio de perfil ni de modelo autoriza un comando en silencio: activar la terminal es un ajuste aparte y solo se aplica con un modelo local. Una sola línea de comandos puede cambiar archivos fuera del proyecto, instalar programas o conectarse a Internet. Los comandos encadenados (`&&`, `;`, tuberías), `$(...)`, los scripts (`./setup.sh`, `npm run …`, `python tool.py`) y los instaladores pueden hacer mucho más de lo que muestra la línea: la tarjeta avisa de ellos, pero lee la línea y aprueba solo lo que entiendas.
 
+#### Cuando Meta Cloud está seleccionado en Agent
+
+El runtime seleccionado, no los indicadores verdes de conexión, decide qué modelo recibe la petición. Si está seleccionado **Meta Model API — Cloud (`muse-spark-1.3`)**, Spark continúa dirigiendo Agent aunque la cabecera también indique que Glimmer local está conectado. RAME muestra entonces **Review what would be sent to Meta** antes de que salga contexto local elegible. La casilla adicional controla si Meta puede recibir también los resultados de las herramientas que Spark pida ejecutar a RAME —contenido de archivos, búsquedas y salida de pruebas— para ese hilo, clase de tratamiento, revisión de credencial y sesión de VS Code; los valores reconocibles como secretos se censuran mediante patrones, que no pueden detectar todos los datos sensibles.
+
+- **Casilla marcada:** permite que esos resultados censurados lleguen a Meta bajo las condiciones mostradas.
+- **Casilla desmarcada:** las herramientas todavía pueden ejecutarse según el perfil local, pero sus resultados se sustituyen antes de la siguiente petición a Meta.
+- **Send with this context:** envía el contexto nuevo mostrado y el material autorizado anteriormente bajo las mismas condiciones.
+- **Send without it:** mantiene en local el contexto nuevo ofrecido; Meta todavía puede recibir la petición actual, sus respuestas anteriores y material autorizado previamente bajo las mismas condiciones.
+- **Cancel:** no envía la petición.
+
+`web_search`, `web_fetch` y `run_command` son herramientas exclusivas de modelos locales y no se ofrecen a Spark. Para probar web o terminal, cancela la divulgación cloud, selecciona un runtime local de Glimmer/Ollama/LM Studio, confirma que la inferencia local responde, activa explícitamente la herramienta y repite la petición de Agent. Una revisión futura de la interfaz debería explicar esta incompatibilidad entre modelo y herramienta antes de abrir una tarjeta de divulgación cloud que no corresponde a la intención del usuario.
+
+El 4 de noviembre de 2026, el build candidato `e383ea4.src.48ae3cd77018` completó dos inferencias reales de Chat puro con `muse-spark-1.3`; RAME registró el consentimiento, proveedor, modelo, respuestas observadas y uso de tokens. Esto valida únicamente la conexión directa de Chat con Meta. La matriz completa de divulgación y fallos sigue cubierta por el grabador Meta simulado, y los resultados de herramientas de Agent cloud, Delegated, planificación de Mission y Advisory todavía requieren validación independiente con el proveedor real.
+
 ### Misión
 
 Usa **Misión** cuando el resultado necesite más de una respuesta del modelo: crear una aplicación pequeña, terminar tareas relacionadas, repetir pruebas tras los cambios o continuar después de una recarga.

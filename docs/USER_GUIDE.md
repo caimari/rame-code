@@ -112,6 +112,20 @@ documentation, cite the pages you used, and do not change any file.
 
 > **Warning about Workspace full and the terminal.** Workspace full lets patches and allowlisted tests run without asking, but it never does that for terminal commands: each `run_command` still waits for your approval. No change of profile or model authorizes a command silently: turning the terminal on is a separate setting, and it only applies to a local model. A single command line can change files outside the project, install software or reach the internet. Chained commands (`&&`, `;`, pipes), `$(...)`, scripts (`./setup.sh`, `npm run …`, `python tool.py`) and installers can do much more than the line shows: the card warns about them, but read the line and approve only what you understand.
 
+#### When Meta Cloud is selected in Agent
+
+The selected runtime, not the green connection indicators, decides which model receives the request. If **Meta Model API — Cloud (`muse-spark-1.3`)** is selected, Spark still directs Agent even when the header also says that Glimmer local is connected. RAME then shows **Review what would be sent to Meta** before eligible local context leaves the machine. The extra checkbox controls whether Meta may also receive the results of tools Spark asks RAME to run — file contents, searches and test output — for that thread, processing class, credential revision and VS Code session; recognised secret-like values are redacted by patterns, which cannot catch every sensitive value.
+
+- **Checkbox selected:** allow those redacted tool results to reach Meta under the displayed conditions.
+- **Checkbox clear:** tools may still run under the local permission profile, but their results are replaced before the next request to Meta.
+- **Send with this context:** send the newly displayed context as well as material already authorized under the same conditions.
+- **Send without it:** keep the newly offered context local; Meta can still receive the current request, its earlier replies and material authorized previously under the same conditions.
+- **Cancel:** send no request.
+
+`web_search`, `web_fetch` and `run_command` are local-model-only tools and are not offered to Spark. To test web or terminal access, cancel the cloud disclosure, select a local Glimmer/Ollama/LM Studio runtime, confirm that local inference responds, enable the tool explicitly and repeat the Agent request. A future interface revision should explain this model/tool mismatch before opening an unrelated cloud disclosure card.
+
+On 2026-11-04, candidate build `e383ea4.src.48ae3cd77018` completed two real Chat-only inferences with `muse-spark-1.3`; RAME recorded consent, provider, model, observed responses and token usage. This validates the direct Meta Chat connection only. The complete disclosure/failure matrix remains covered by the simulated Meta recorder, and cloud Agent tool results, Delegated, Mission planning and Advisory still require separate real-provider validation.
+
 ### Mission
 
 Use **Mission** when the result needs more than one model turn: creating a small application, completing related tasks, repeatedly testing after changes, or continuing after a reload.

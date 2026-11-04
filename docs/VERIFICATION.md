@@ -12,7 +12,7 @@ This page is for reviewers, judges and anyone who wants to check what RAME Code 
 | **SIMULATED** | Produced with scripted model replies or a simulated Meta API inside the automated tests. It shows exactly what the host does with those actions. It says nothing about how often a real model would take them, or how well. |
 | **RECORDED** | A replay of an earlier REAL run from stored evidence. Replaying is not running the model again. |
 
-A SIMULATED result is never presented as a REAL run with Glimmer or Meta. Every result on this page is SIMULATED.
+A SIMULATED result is never presented as a REAL run with Glimmer or Meta. The automated results on this page are SIMULATED. A separate [public evidence bundle](../evidence/real-mission-supervised/README.md) is a sanitized RECORDED extraction from one historical REAL supervised local-Glimmer Mission; it is not a rerun or proof of the current commit.
 
 ## Reproduce in three commands
 

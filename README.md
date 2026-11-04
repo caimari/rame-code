@@ -2,11 +2,24 @@
 
 **A local-first VS Code coding agent born at the Meta Global AI Developer Hackathon, powered by Meta Muse models and built around explicit permissions and host-verified evidence.**
 
-[Official website](https://ramecode.com/) · [**English user guide**](docs/USER_GUIDE.md) · [Guía de usuario en español](docs/USER_GUIDE.es.md) · [How to verify it](docs/VERIFICATION.md) · [Versión en español](README.es.md) · [Changelog](CHANGELOG.md) · [License](LICENSE)
+[Official website](https://ramecode.com/) · [**For judges: claims and evidence**](docs/JUDGES.md) · [English user guide](docs/USER_GUIDE.md) · [How to verify it](docs/VERIFICATION.md) · [Public evidence](evidence/README.md) · [Versión en español](README.es.md) · [Changelog](CHANGELOG.md) · [License](LICENSE)
 
 RAME Code is an independent open-source project started from scratch during the [Meta Global AI Developer Hackathon 2026](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details). It runs as a VS Code extension and supports both a local Muse Glimmer runtime and Meta Model API cloud models.
 
-Version `0.1.0` is the first public preview. It is suitable for evaluation on disposable projects. It is not yet a production security boundary.
+Version `0.1.0` is the latest release. This branch contains the `0.2.0` preview candidate documented below. It is suitable for controlled evaluation on disposable projects, but it is not yet a production security boundary.
+
+## Six things to see first
+
+| Capability | What RAME does |
+| --- | --- |
+| Governed memory | Only the user can authorize a durable project decision; versions and provenance remain visible, and linked verified files can become stale when a decision changes. |
+| Verifiable Missions | The host—not the model—runs frozen acceptance and decides whether a Mission completed. |
+| Exact authority | One-use approvals bind the exact action, thread, provider, workspace and relevant file preconditions. |
+| Local Muse runtime | The extension can launch and stop its own loopback `llama-server`; Ollama is optional, not required. |
+| Controlled Meta disclosure | Before eligible local context goes to Meta, RAME shows the bounded payload and binds the decision to its recipient conditions. |
+| Honest evidence | REAL, SIMULATED and RECORDED results are separated, with explicit statements of what each result does not prove. |
+
+Start with [the claims-to-evidence table](docs/JUDGES.md). It links one supervised local-Glimmer Mission, the reproducible simulated sabotage battery and the current limitations.
 
 ## Follow the build
 

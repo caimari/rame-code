@@ -12,7 +12,7 @@ Esta página es para revisores, jurado y cualquiera que quiera comprobar lo que 
 | **SIMULATED** | Se produjo con respuestas de modelo guionizadas o con una API de Meta simulada, dentro de las pruebas automáticas. Muestra exactamente qué hace el host con esas acciones. No dice nada de con qué frecuencia las intentaría un modelo real ni de lo bien que lo haría. |
 | **RECORDED** | Reproducción de una ejecución REAL anterior a partir de la evidencia guardada. Reproducir no es volver a ejecutar el modelo. |
 
-Un resultado SIMULATED nunca se presenta como una ejecución REAL con Glimmer o con Meta. Todos los resultados de esta página son SIMULATED.
+Un resultado SIMULATED nunca se presenta como una ejecución REAL con Glimmer o con Meta. Los resultados automatizados de esta página son SIMULATED. Un [paquete público separado](../evidence/real-mission-supervised/README.md) es una extracción RECORDED y saneada de una Mission histórica REAL, supervisada y con Glimmer local; no es otra ejecución ni una prueba del commit actual.
 
 ## Reproducirlo con tres órdenes
 

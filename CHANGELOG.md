@@ -10,6 +10,7 @@ Candidate for 0.2.0. It introduces a modularized core, governed project memory, 
 
 ### Added
 
+- English and Spanish "For judges" claim-to-evidence tables, a public evidence index, and a sanitized RECORDED extraction from one historical REAL supervised local-Glimmer Mission. The bundle preserves its historical dirty-build identity, the 36/37 inference-count discrepancy and the limits of an `n=1` disposable-project run; it is not presented as proof of the current commit.
 - Practical English and Spanish user guides covering the three modes, Mission authorization and verification, empty-folder bootstrap, project memory, optional cloud use, privacy and current limitations.
 - User-authorized, versioned project decisions with provenance and history.
 - Verified-file bindings that become stale when a referenced decision changes.

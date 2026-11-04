@@ -1,0 +1,54 @@
+{
+  "schema": "rame-public-evidence/v1",
+  "label": "RECORDED extraction from REAL run",
+  "capturedAt": "2026-11-03",
+  "extractedAt": "2026-11-04",
+  "candidate": {
+    "version": "0.2.0",
+    "build": "eb89d04-dirty.src.568a25d1d810",
+    "channel": "candidate",
+    "installedVsixSha256": "a9e21321269a222e94f182469397b9e7fe43618c0622c3810988af75274fbaba"
+  },
+  "mission": {
+    "grant": "supervised",
+    "provider": "local-glimmer",
+    "internalRuns": 4,
+    "changedFiles": ["src/calculator.js"],
+    "initialAcceptance": {"command": "npm:check", "exitCode": 1},
+    "finalUnitCheck": {"command": "npm:test", "exitCode": 0, "testsPassed": 2},
+    "finalAcceptance": {"command": "npm:check", "exitCode": 0, "frozenFilesIntact": true},
+    "completedByHost": true,
+    "metaConsultationsAllowed": 0,
+    "metaConsultationsAnswered": 0
+  },
+  "runtime": {
+    "server": "llama-server",
+    "managedByRame": true,
+    "network": "loopback",
+    "configuredGgufBasename": "Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
+    "contextConfirmedByProps": 32768,
+    "museGlimmerTemplateConfirmedByProps": true,
+    "weightsCryptographicallyVerified": false
+  },
+  "inferenceCountDiscrepancy": {
+    "hostMissionSummary": 36,
+    "finalModelEvidenceView": 37,
+    "resolved": false
+  },
+  "sourceHashes": {
+    "beforeCalculatorSha256": "75cfacb7faac086c50b23ac4b29a709eb8680999e6756f620ca76d42aba07cab",
+    "repairedCalculatorSha256": "5b63136552577a64d788dc3cd4552739d0d60f9e1adb63ec4dfb6932d56fc75d"
+  },
+  "sourceArchive": {
+    "checksumManifestVerified": true,
+    "filesVerified": 12,
+    "publishedRaw": false
+  },
+  "limitations": [
+    "Historical dirty candidate build; not proof of the current repository commit.",
+    "One supervised disposable-project run; not a benchmark.",
+    "No operating-system sandbox.",
+    "No cryptographic verification of the model weights.",
+    "No Meta Model API consultation in this Mission."
+  ]
+}

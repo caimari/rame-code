@@ -2,11 +2,24 @@
 
 **Un agente de programación local-first para VS Code nacido en el Meta Global AI Developer Hackathon, basado en modelos Meta Muse y diseñado con permisos explícitos y evidencias verificadas por el host.**
 
-[Web oficial](https://ramecode.com/) · [**Guía de usuario en español**](docs/USER_GUIDE.es.md) · [English user guide](docs/USER_GUIDE.md) · [Cómo verificarlo](docs/VERIFICATION.es.md) · [English README](README.md) · [Changelog](CHANGELOG.md) · [Licencia](LICENSE)
+[Web oficial](https://ramecode.com/) · [**Para el jurado: afirmaciones y evidencias**](docs/JUDGES.es.md) · [Guía de usuario en español](docs/USER_GUIDE.es.md) · [Cómo verificarlo](docs/VERIFICATION.es.md) · [Evidencias públicas](evidence/README.md) · [English README](README.md) · [Changelog](CHANGELOG.md) · [Licencia](LICENSE)
 
 RAME Code es un proyecto independiente de código abierto iniciado desde cero durante el [Meta Global AI Developer Hackathon 2026](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details). Funciona como extensión de VS Code y admite tanto Muse Glimmer local como modelos en la nube mediante Meta Model API.
 
-La versión `0.1.0` es la primera preview pública. Es apropiada para evaluarla sobre proyectos desechables. Todavía no constituye una frontera de seguridad para producción.
+La versión `0.1.0` es la última release. Esta rama contiene el candidato preview `0.2.0` descrito más abajo. Es adecuado para una evaluación controlada en proyectos desechables, pero todavía no constituye una frontera de seguridad para producción.
+
+## Seis capacidades que conviene ver primero
+
+| Capacidad | Qué hace RAME |
+| --- | --- |
+| Memoria gobernada | Solo el usuario autoriza una decisión duradera; conserva versiones y procedencia, y los archivos verificados vinculados pueden quedar obsoletos si cambia una decisión. |
+| Missions verificables | El host —no el modelo— ejecuta la aceptación congelada y decide si terminó la Mission. |
+| Autoridad exacta | Las aprobaciones de un solo uso ligan la acción, el hilo, el proveedor, el workspace y las precondiciones relevantes. |
+| Muse local gestionado | La extensión puede iniciar y detener su propio `llama-server` loopback; Ollama es opcional, no necesario. |
+| Divulgación controlada a Meta | Antes de enviar contexto local elegible, RAME muestra el contenido acotado y liga la decisión a las condiciones del destinatario. |
+| Evidencia honesta | Se separan resultados REAL, SIMULATED y RECORDED y se indica expresamente qué no demuestra cada uno. |
+
+Empieza por [la tabla de afirmaciones y evidencias](docs/JUDGES.es.md). Enlaza una Mission supervisada con Glimmer local, la batería simulada reproducible y los límites actuales.
 
 ## Sigue la construcción
 

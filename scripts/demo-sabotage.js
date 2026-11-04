@@ -9,6 +9,7 @@ const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { publicEvidenceHasPrivateMaterial } = require('../out/src/publicEvidenceGuard.js');
 
 const root = path.resolve(__dirname, '..');
 const outDir = path.join(root, 'evidence', 'sabotage');
@@ -55,10 +56,15 @@ const report = {
 };
 const text = JSON.stringify(report, null, 2) + '\n';
 
-// Sanitization gate: no local paths, user names or key-like values.
-const forbidden = [os.homedir(), os.tmpdir(), root, os.userInfo().username].filter((value) => value && value.length > 2);
-const leaks = forbidden.filter((value) => text.includes(value));
-if (/\/(?:home|Users)\/|[A-Za-z]:\\\\|sk-[A-Za-z0-9]{16,}|-----BEGIN/.test(text) || leaks.length > 0) {
+// Sanitization gate: no local paths, structured user names or key-like values.
+// A bare word equal to the OS username is not enough: GitHub Actions runs as
+// `runner`, which legitimately appears in phrases such as "case runner".
+if (publicEvidenceHasPrivateMaterial(text, {
+  homeDir: os.homedir(),
+  tempDir: os.tmpdir(),
+  repositoryRoot: root,
+  username: os.userInfo().username,
+})) {
   process.stderr.write('The result file would contain a local path, a user name or a key-like value; nothing was written.\n');
   process.exit(1);
 }

@@ -58,6 +58,7 @@ Candidate for 0.2.0. It introduces a modularized core, governed project memory, 
 
 ### Fixed
 
+- CI evidence generation no longer mistakes ordinary phrases such as "case runner" for disclosure of GitHub Actions' `runner` account. The public-evidence gate still rejects absolute local paths, structured account fields and key-like material, with regression coverage.
 - Prevented model-authored text from impersonating the host record.
 - Made malformed local tool-call replies recoverable within a bounded retry budget.
 - Added exact-fragment editing with hash-bound approval and atomic rollback.

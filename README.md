@@ -6,7 +6,7 @@
 
 Build software inside VS Code with local-first inference, user-governed memory, scoped permissions and autonomous Missions whose authorized acceptance is checked by the host.
 
-[Installation](#installation) · [User guide](docs/USER_GUIDE.md) · [**For judges**](docs/JUDGES.md) · [Evidence](evidence/README.md) · [Verification](docs/VERIFICATION.md) · [Public VSIX](https://github.com/caimari/rame-code/releases/latest) · [Website](https://ramecode.com/) · [Español](README.es.md)
+[Installation](#installation) · [Product pitch](docs/PITCH.md) · [User guide](docs/USER_GUIDE.md) · [**For judges**](docs/JUDGES.md) · [Evidence](evidence/README.md) · [Verification](docs/VERIFICATION.md) · [Public VSIX](https://github.com/caimari/rame-code/releases/latest) · [Website](https://ramecode.com/) · [Español](README.es.md)
 
 **Official website:** [https://ramecode.com/](https://ramecode.com/)
 
@@ -15,6 +15,8 @@ Run Meta Muse Glimmer through RAME's managed loopback `llama-server`, or connect
 Use Meta Model API for direct cloud Chat and Agent with models whose advertised capabilities fit the selected mode. During an authorized local Mission, RAME can request optional, budget-limited advice from Meta Muse Spark after an eligible capability stop while the local model retains tool control. This Advisory route is implemented and covered with a simulated Meta API; only direct Spark Chat has a recorded real-API validation so far.
 
 **Local inference first. Cloud assistance when authorized. Explicit budgets, persistent decisions and evidence-backed verification.**
+
+> **AI should remember what matters, respect what you decide, and prove what it actually accomplished.**
 
 > **Version status — 0.2.0 preview candidate.** Commit [`e383ea4`](https://github.com/caimari/rame-code/commit/e383ea4281aaf25a85d66b5955d71707508a9af0) was built and installed as an isolated VSIX during human validation. It is the current candidate described here, but no public 0.2.0 VSIX or release has been published yet. The latest downloadable public release remains [`v0.1.0`](https://github.com/caimari/rame-code/releases/tag/v0.1.0). Use disposable projects; this preview is not a production security boundary.
 

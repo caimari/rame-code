@@ -6,7 +6,7 @@
 
 Desarrolla software dentro de VS Code con inferencia local-first, memoria gobernada por el usuario, permisos acotados y Missions autónomas cuya aceptación autorizada comprueba el host.
 
-[Instalación](#instalación) · [Guía de usuario](docs/USER_GUIDE.es.md) · [**Para el jurado**](docs/JUDGES.es.md) · [Evidencias](evidence/README.md) · [Verificación](docs/VERIFICATION.es.md) · [VSIX público](https://github.com/caimari/rame-code/releases/latest) · [Web](https://ramecode.com/) · [English](README.md)
+[Instalación](#instalación) · [Presentación](docs/PITCH.es.md) · [Guía de usuario](docs/USER_GUIDE.es.md) · [**Para el jurado**](docs/JUDGES.es.md) · [Evidencias](evidence/README.md) · [Verificación](docs/VERIFICATION.es.md) · [VSIX público](https://github.com/caimari/rame-code/releases/latest) · [Web](https://ramecode.com/) · [English](README.md)
 
 **Web oficial:** [https://ramecode.com/](https://ramecode.com/)
 
@@ -15,6 +15,8 @@ Ejecuta Meta Muse Glimmer mediante el `llama-server` loopback gestionado por RAM
 Utiliza Meta Model API para Chat y Agent cloud directos con modelos cuyas capacidades anunciadas sean adecuadas para el modo elegido. Durante una Mission local autorizada, RAME puede solicitar asesoramiento opcional y limitado por presupuesto a Meta Muse Spark tras una parada de capacidad elegible, mientras el modelo local conserva las herramientas. Esta vía Advisory está implementada y cubierta con una API Meta simulada; por ahora solo Chat directo con Spark tiene una validación registrada contra la API real.
 
 **Inferencia local primero. Asistencia cloud cuando se autoriza. Presupuestos explícitos, decisiones persistentes y verificación respaldada por evidencias.**
+
+> **La IA debería recordar lo que importa, respetar lo que decides y demostrar lo que realmente ha conseguido.**
 
 > **Estado de versión — candidato preview 0.2.0.** El commit [`e383ea4`](https://github.com/caimari/rame-code/commit/e383ea4281aaf25a85d66b5955d71707508a9af0) se construyó e instaló como VSIX aislado durante la validación humana. Es el candidato actual descrito aquí, pero todavía no se ha publicado un VSIX ni una release pública 0.2.0. La última release pública descargable sigue siendo [`v0.1.0`](https://github.com/caimari/rame-code/releases/tag/v0.1.0). Utiliza proyectos desechables; esta preview no es una frontera de seguridad para producción.
 

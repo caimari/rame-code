@@ -2,7 +2,7 @@
 
 RAME Code es un agente de programación local para VS Code, creado para el Meta Global AI Developer Hackathon 2026. Su afirmación central es deliberadamente estrecha: **los modelos pueden proponer trabajo, pero la memoria duradera, la autoridad de las herramientas y la finalización de una Mission siguen siendo decisiones separadas y controladas por el host.**
 
-[Web oficial](https://ramecode.com/) · [Código](https://github.com/caimari/rame-code) · [Guía de usuario](USER_GUIDE.es.md) · [Guía de verificación](VERIFICATION.es.md) · [Índice de evidencias](../evidence/README.md) · [English](JUDGES.md)
+[Web oficial](https://ramecode.com/) · [Código](https://github.com/caimari/rame-code) · [Presentación del producto](PITCH.es.md) · [Guía de usuario](USER_GUIDE.es.md) · [Guía de verificación](VERIFICATION.es.md) · [Índice de evidencias](../evidence/README.md) · [English](JUDGES.md)
 
 ## Afirmaciones y evidencias
 

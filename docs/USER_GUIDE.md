@@ -67,6 +67,15 @@ RAME can also use a model server you run yourself. Open **Settings › Runtime �
 
 A cloud request leaves your machine and may consume Meta API credits. The API key is stored in VS Code SecretStorage. RAME shows disclosure and authorization controls before eligible local context is sent to Meta.
 
+When **Meta Model API — Cloud** is selected, pressing **Send** authorizes the new message you have just written; RAME does not add a second confirmation for that message alone. If the request would also include eligible history produced while working locally, authorized project decisions, or Agent tool results, RAME first shows **Review what would be sent to Meta** so you can decide whether that additional context may leave the machine.
+
+- **Send with this context** authorizes the additional context displayed on the card.
+- **Send without it** keeps the newly offered context local, while the new message, Meta's earlier replies and material already authorized under the same conditions may still be sent.
+- **Cancel** sends no request.
+- **Stop sharing with Meta** withdraws the thread's disclosure choices for future requests. It cannot recall information already received by Meta, and an active request must be stopped before its sharing choices can be withdrawn.
+
+Message and project-decision choices are scoped to the thread, Meta processing class and current API-key revision and persist when VS Code restarts. Permission to send Agent tool results is additionally limited to the current VS Code session. A change of Contributor/undocumented processing class or a newly saved or cleared key requires a new choice. A later Meta message may therefore proceed without another card when it adds no new local context requiring review. **Shared with Meta** describes the thread's recorded disclosure state; for a completed inference, use the individual entry under **Model evidence** to see the provider, model, observed response and reported token usage.
+
 There are two different cloud paths:
 
 - **Advisory:** Spark gives advice; Glimmer keeps control of tools.

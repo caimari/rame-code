@@ -67,6 +67,15 @@ RAME también puede usar un servidor de modelos que ejecutas tú. Abre **Setting
 
 Una petición cloud sale de tu equipo y puede consumir créditos de Meta API. La clave se almacena en VS Code SecretStorage. RAME muestra controles de divulgación y autorización antes de enviar a Meta contexto local que necesite consentimiento.
 
+Cuando está seleccionado **Meta Model API — Nube**, pulsar **Enviar** autoriza el mensaje nuevo que acabas de escribir; RAME no añade una segunda confirmación para ese mensaje por sí solo. Si la petición llevaría además historial elegible generado mientras trabajabas en local, decisiones autorizadas del proyecto o resultados de herramientas de Agent, RAME muestra primero **Review what would be sent to Meta** para que decidas si ese contexto adicional puede salir del equipo.
+
+- **Send with this context** autoriza el contexto adicional mostrado en la tarjeta.
+- **Send without it** mantiene en local el contexto nuevo ofrecido, aunque todavía pueden enviarse el mensaje nuevo, las respuestas anteriores de Meta y el material ya autorizado bajo las mismas condiciones.
+- **Cancel** no envía ninguna petición.
+- **Stop sharing with Meta** retira las decisiones de divulgación del hilo para peticiones futuras. No puede recuperar información que Meta ya haya recibido y, si hay una petición activa, primero hay que detenerla.
+
+Las decisiones sobre mensajes y decisiones del proyecto quedan ligadas al hilo, la clase de tratamiento de Meta y la revisión actual de la clave API, y persisten al reiniciar VS Code. El permiso para enviar resultados de herramientas de Agent queda limitado además a la sesión actual de VS Code. Cambiar a una clase Contributor/no documentada o guardar o borrar una clave exige decidir de nuevo. Por eso un mensaje posterior a Meta puede continuar sin otra tarjeta si no incorpora contexto local nuevo que requiera revisión. **Shared with Meta** describe el estado de divulgación registrado para el hilo; para comprobar una inferencia completada, consulta su entrada individual en **Model evidence**, donde figuran el proveedor, el modelo, la respuesta observada y el uso de tokens comunicado.
+
 Existen dos vías cloud distintas:
 
 - **Asesoramiento:** Spark aconseja; Glimmer conserva el control de las herramientas.

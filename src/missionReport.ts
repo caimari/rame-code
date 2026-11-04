@@ -41,8 +41,20 @@ export function buildMissionReportEntry(mission: MissionRecord, evidence: string
     ...evidence,
     `mission: ${mission.note}`,
   ];
+  // The level reached, in the title itself: conventional, protected or reinforced.
+  const level = reportLevel(Boolean(mission.grant?.acceptance), acceptanceState(mission).summary);
   return {
-    title: report !== null ? 'Mission completed and verified by the host.' : `Mission ${mission.status.replace('_', ' ')} — status note, not a final report.`,
+    title: report !== null ? `Mission completed and verified by the host (${level}).` : `Mission ${mission.status.replace('_', ' ')} — status note, not a final report.`,
     hostRecord: lines.map((line) => `• ${line}`.slice(0, MAX_HOST_RECORD_LINE_LENGTH)),
   };
+}
+
+/**
+ * The level a completed Mission reached, as stated in its report title.
+ * Never a full protected or reinforced level when changes during the run
+ * could not be observed (the host's acceptance note says "start and end only").
+ */
+export function reportLevel(hasAcceptance: boolean, acceptanceSummary: string): string {
+  const reached = !hasAcceptance ? 'conventional' : /; reinforced level: /.test(acceptanceSummary) ? 'reinforced' : 'protected';
+  return /host file record at start and end only/.test(acceptanceSummary) ? `${reached} level, start and end only` : `${reached} level`;
 }

@@ -12,6 +12,13 @@ export interface ChatCallInput {
 
 export class ChatRunner {
   private controller: AbortController | null = null;
+  private closed = false;
+
+  /** For a disposed window: cancels any running call and starts no new one. */
+  close(): void {
+    this.closed = true;
+    this.cancel();
+  }
 
   get isRunning(): boolean {
     return this.controller !== null;
@@ -23,6 +30,9 @@ export class ChatRunner {
    * when another call is running.
    */
   async start<T = string>(work: (input: ChatCallInput) => Promise<T>): Promise<T> {
+    if (this.closed) {
+      throw new Error('This RAME Code window was closed or reloaded; nothing was sent.');
+    }
     if (this.controller !== null) {
       throw new Error('A RAME Code request is already running.');
     }

@@ -17,6 +17,7 @@
 import type { ChosenAdvisoryLimits } from './missionAdvisoryLimits.js';
 import { sanitizeEvidenceView, type ModelEvidenceView } from './modelEvidence.js';
 import { sanitizeContinuityLogView, type ContinuityLogView } from './continuityLog.js';
+import { sanitizeMissionAcceptanceReviewView, type MissionAcceptanceReviewView } from './missionAcceptanceReviewView.js';
 import { parseRemoteMessage, sanitizeMissionRemote, sanitizeRemoteView, type MissionRemoteView, type RemoteMessage, type RemoteView } from './remoteViews.js';
 import { isAgentProfileId } from './agentProfiles.js';
 import { isReasoningChoice, REASONING_LEVELS } from './generationSettings.js';
@@ -984,10 +985,13 @@ export interface MissionLiveView {
     candidates: string[];
     environmentFiles: string[];
     packageJsonHash: string;
+    createdFiles: string[];
     /** Empty-project first authorization. */
     bootstrap: boolean;
     /** Scaffold created; a second authorization must review its tests. */
     awaitingVerification: boolean;
+    /** Optional independent review; never includes credentials or tool authority. */
+    review: MissionAcceptanceReviewView | null;
   } | null;
   /** The last start request of this window and what the host made of it. */
   startRequest: { requestId: string; state: 'authorizing' | 'started' | 'failed'; error: string } | null;
@@ -1514,8 +1518,10 @@ function sanitizeMissionLive(value: unknown): MissionLiveView | null {
             candidates: strings(setup.candidates, 80, 512),
             environmentFiles: strings(setup.environmentFiles, 8, 64),
             packageJsonHash: text(setup.packageJsonHash, 64),
+            createdFiles: strings(setup.createdFiles, 24, 512),
             bootstrap: setup.bootstrap === true,
             awaitingVerification: setup.awaitingVerification === true,
+            review: sanitizeMissionAcceptanceReviewView(setup.review),
           },
     startRequest:
       request === null || typeof request.requestId !== 'string' || !['authorizing', 'started', 'failed'].includes(request.state as string)

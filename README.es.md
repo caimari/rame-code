@@ -2,7 +2,7 @@
 
 **Un agente de programación local-first para VS Code nacido en el Meta Global AI Developer Hackathon, basado en modelos Meta Muse y diseñado con permisos explícitos y evidencias verificadas por el host.**
 
-[English README](README.md) · [Changelog](CHANGELOG.md) · [Licencia](LICENSE)
+[Web oficial](https://ramecode.com/) · [**Guía de usuario en español**](docs/USER_GUIDE.es.md) · [English user guide](docs/USER_GUIDE.md) · [Cómo verificarlo](docs/VERIFICATION.es.md) · [English README](README.md) · [Changelog](CHANGELOG.md) · [Licencia](LICENSE)
 
 RAME Code es un proyecto independiente de código abierto iniciado desde cero durante el [Meta Global AI Developer Hackathon 2026](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details). Funciona como extensión de VS Code y admite tanto Muse Glimmer local como modelos en la nube mediante Meta Model API.
 
@@ -32,8 +32,10 @@ El siguiente gran hito es deliberadamente recursivo: RAME Code debe utilizar su 
 
 ## Qué falta todavía
 
-- Decisiones persistentes y versionadas del proyecto y detección de artefactos desactualizados.
-- Reanudar una misión después de reiniciar completamente la extensión.
+En la release pública v0.1.0 faltaban todavía los dos primeros puntos; el candidato 0.2.0 los implementa (consulta [Memoria del proyecto](#memoria-del-proyecto-hilos-guardados-y-contexto-del-modelo) y [Misiones de arranque y verificadas](#misiones-de-arranque-y-verificadas-candidato-020-sin-publicar)):
+
+- Decisiones persistentes y versionadas del proyecto y detección de artefactos desactualizados (v0.1.0; implementado en el candidato 0.2.0).
+- Reanudar una misión después de reiniciar completamente la extensión (v0.1.0; implementado en el candidato 0.2.0).
 - Escalada automática local-nube y regreso verificado al modelo local.
 - Sandbox del sistema operativo o control ilimitado del terminal y del ordenador.
 - Garantías de que la ejecución local, las autorizaciones o la auditoría sean resistentes a cualquier manipulación.
@@ -123,6 +125,30 @@ llama-server \
 | **Workspace full** | Las acciones permitidas pueden ejecutarse sin preguntar. Las políticas continúan activas, pero es un modo de riesgo elevado. |
 
 El agente queda ligado a una carpeta de workspace seleccionada explícitamente. RAME Code no ofrece un shell arbitrario. Las pruebas se limitan a comandos derivados de una allowlist y se ejecutan con `shell: false`, aunque el script del proyecto podría ejecutar código arbitrario.
+
+## Misiones de arranque y verificadas (candidato 0.2.0, sin publicar)
+
+Una Mission puede comenzar en una carpeta vacía. Su primera autorización explícita de arranque puede crear la estructura del proyecto, los scripts del paquete y las pruebas, pero no puede ejecutar esas pruebas ni completar la Mission. RAME revoca entonces ese permiso y se detiene en **Estructura preparada**. El usuario revisa el nuevo comando permitido y los archivos de prueba en una segunda autorización; solo esa segunda autorización puede congelar la aceptación y permitir que continúe la Mission.
+
+En ese punto puede prepararse una **revisión independiente opcional de aceptación** con un modelo Meta Estándar documentado. Prepararla no envía nada: RAME muestra primero el texto exacto y acotado, incluido el requisito original y hasta tres fragmentos de pruebas elegidos entre los candidatos de aceptación ofrecidos. Enviarla requiere una autorización independiente de un solo uso, ligada a la Mission, carpeta, modelo, clase de tratamiento, revisión de la credencial, contenido y límites de bytes/tokens. Spark no recibe herramientas y no puede editar archivos, conceder permisos, elegir o congelar la aceptación ni completar la Mission. Su resultado estructurado es un consejo no confiable que el usuario puede considerar o descartar antes de tomar la decisión local definitiva. Cancelar, superar el presupuesto, recibir una salida mal formada o sufrir un fallo de API deja disponible el flujo local en dos etapas y nunca provoca un reintento automático. En este candidato, esta vía solo se ha verificado con una API de Meta simulada.
+
+## Integridad de la aceptación (candidato 0.2.0, sin publicar)
+
+Una Mission se verifica en uno de tres niveles, y el nivel queda escrito en sus notas del host y en su informe final:
+
+- **Convencional (Mission estándar).** Una prueba permitida del proyecto pasa después del último cambio.
+- **Protegido (Mission verificada).** El host ejecuta él mismo la comprobación de aceptación congelada por el usuario, la observa hasta el final y exige que salga con 0. Antes de autorizar, RAME la ejecuta una vez bajo su propia traza y la analiza para encontrar los procesos que ejecuta y los módulos y ficheros que usa, y guarda ese alcance en la autorización junto con una huella de cada fichero del proyecto. Se congelan los auxiliares, los datos y los ficheros de prueba que ejecuta la orden, y se sellan las carpetas de pruebas que ejecuta o lista. Lo que vaya a quedar modificable se muestra en un diálogo modal para que lo confirmes. Una comprobación cuyas dependencias no se pueden determinar no se protege: RAME ofrece la verificación convencional como alternativa. Se rechazan las escrituras que cambiarían un fichero congelado, una carpeta sellada o cómo los resuelve Node. Después de cada ejecución del host, RAME compara todo el proyecto con su propio registro (el SHA-256 de los bytes de cada fichero): un cambio fuera del alcance autorizado nunca cuenta como aprobado. En Linux y macOS, los tiempos de cambio del núcleo muestran además un fichero cambiado y restaurado durante la ejecución; en Windows solo se afirma el estado al inicio y al final, y el informe lo dice.
+- **Reforzado.** Una comprobación protegida más un fichero `*.rame-cases.json` congelado. El ejecutor de casos de RAME llama al código bajo prueba en un proceso aparte y el host compara él mismo cada resultado; los valores esperados no se envían a ese proceso y quedan ocultos para las herramientas del agente. Un `process.exit(0)` prematuro o una salida falsificada no pueden aprobar. Esto no hace secretos los valores esperados: no hay sandbox, y el código que se ejecuta con tus permisos puede encontrar el fichero en disco. En el nivel protegido, una comprobación es tan fiable como su código de salida: el código bajo prueba que se ejecuta en su mismo proceso puede terminarla antes de tiempo.
+
+Cuando RAME no puede demostrar que se cumplieron las condiciones autorizadas, el resultado es **no verificable**: nunca es un aprobado, la Mission se bloquea con el motivo y la aceptación autorizada no cambia.
+
+Estas garantías se ponen a prueba con una batería de sabotaje **SIMULATED** (`npm run demo:sabotage`): 43 intentos de completar una Mission sin hacer el trabajo, incluidas las reproducciones de una auditoría independiente. 3 todavía funcionan y se documentan como límites:
+
+- una comprobación débil superada con constantes;
+- un auxiliar que el usuario confirmó como modificable;
+- `process.exit(0)` en el nivel protegido.
+
+La traza de RAME se ejecuta junto al código bajo prueba y se puede falsificar, así que solo es una ayuda para descubrir; lo que decide es lo que comprueba el propio host (los hashes y la huella del proyecto). Separar procesos no es un sandbox. Si VS Code se cierra o se recarga durante una Mission, la ventana antigua no inicia ni escribe nada más. Consulta [Cómo verificarlo](docs/VERIFICATION.es.md). Los resultados se etiquetan como **REAL**, **SIMULATED** o **RECORDED**, y una simulación nunca se presenta como una ejecución real con Glimmer o con Meta.
 
 ## Evidencia del modelo (candidato 0.2.0, sin publicar)
 

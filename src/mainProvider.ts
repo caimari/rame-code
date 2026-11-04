@@ -59,6 +59,8 @@ import { isLiveMissionLease, unregisterLiveMissionLease } from './missionRuntime
 import { LocalAgentModelProvider, MetaAgentModelProvider } from './modelProviders/agentProvider.js';
 import { npmTestContext } from './projectAdapters/npmProjectAdapter.js';
 import { createVscodeWorkspaceFs } from './projectAdapters/vscodeWorkspaceFs.js';
+import { guardDisposedWrites } from './hostLifecycle.js';
+import { confirmAcceptanceScopeChangeDialog, confirmAcceptanceScopeDialog } from './acceptanceScopeDialog.js';
 import { withBoundedRequest } from './boundedRequest.js';
 import { ChatRunner } from './chatRunner.js';
 import {
@@ -163,6 +165,7 @@ import * as memCtrl from './memoryController.js';
 import * as agentCtrl from './agentController.js';
 import * as missionCoord from './missionCoordinator.js';
 import * as remote from './remoteController.js';
+import * as acceptanceReview from './missionAcceptanceReviewHost.js';
 import { CLOUD_DISCLOSURE_KEY, loadDisclosure, type CloudDisclosureOffer, type CloudRun, type DisclosureState } from './cloudDisclosure.js';
 import { cloudGate, cloudMemoryText, credentialChanged, decideDisclosure, stopSharing } from './cloudDisclosureHost.js';
 import { loadCredentialRevision, rotateCredentialRevision } from './metaRecipient.js';
@@ -394,6 +397,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
 
   dispose(): void {
     this.disposed = true;
+    this.chatRunner.close();
     this.cancelRequest();
     unregisterLiveMissionLease(this.leaseToken);
     this.localRuntime.dispose();
@@ -428,7 +432,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   }
 
   agentFsFor(root: string): AgentFs {
-    return createVscodeWorkspaceFs(root);
+    return guardDisposedWrites(createVscodeWorkspaceFs(root), () => this.disposed);
   }
 
   async heldCanonicalRoot(labelRoot: string, fs: AgentFs): Promise<string> {
@@ -540,7 +544,11 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     command: AllowedTestCommand,
     signal: AbortSignal,
     boundRoot?: string,
+    env?: Record<string, string>,
   ): Promise<string> {
+    if (this.disposed) {
+      return 'not started: this RAME Code window was closed or reloaded';
+    }
     const spec = buildTestSpawnSpec(command);
     const held = this.heldWorkspaceRoot();
     const cwd = boundRoot ?? (held.ok ? held.root : undefined);
@@ -563,11 +571,15 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         cwd,
         timeoutMs: spec.timeoutMs,
         maxOutputBytes: spec.maxOutputBytes,
+        ...(env ? { env } : {}),
       },
       signal,
     );
     return truncateToolOutput(formatProcessResult(result, spec.timeoutMs, MAX_TEST_OUTPUT_BYTES));
   }
+
+  confirmAcceptanceScope = confirmAcceptanceScopeDialog;
+  confirmAcceptanceScopeChange = confirmAcceptanceScopeChangeDialog;
 
   recordUsage(provider: 'cloud' | 'local', usage: ProviderUsage): void {
     // Only a real answer confirms a connection.
@@ -921,6 +933,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     provider: ProviderId,
     agentTarget?: { root: string; label: string },
   ): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
     if (provider === 'cloud' && !(await cloudGate(this, threadId, text, mode, agentTarget))) {
       return;
     }
@@ -1578,6 +1593,12 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         return;
       case 'localIssueStart':
         await this.startAfterLocalIssue();
+        return;
+      case 'acceptanceReviewPrepare':
+      case 'acceptanceReviewSend':
+      case 'acceptanceReviewCancel':
+      case 'acceptanceReviewDecide':
+        await acceptanceReview.handleAcceptanceReviewMessage(this, message);
         return;
       case 'consultIncludeFiles':
         await this.includeConsultFiles(message.digest, message.files);

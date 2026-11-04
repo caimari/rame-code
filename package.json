@@ -10,7 +10,7 @@
     "type": "git",
     "url": "https://github.com/caimari/rame-code.git"
   },
-  "homepage": "https://github.com/caimari/rame-code#readme",
+  "homepage": "https://ramecode.com/",
   "bugs": {
     "url": "https://github.com/caimari/rame-code/issues"
   },
@@ -69,6 +69,7 @@
     "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
     "compile": "node scripts/check-module-size.js && node scripts/check-module-deps.js && tsc -p . && node scripts/build-info.js",
     "test": "npm run compile && node --test out/test/*.test.js",
+    "demo:sabotage": "npm run compile && node scripts/demo-sabotage.js",
     "check": "npm run test",
     "package": "npm run check && vsce package --allow-missing-repository"
   },

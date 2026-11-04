@@ -195,7 +195,11 @@ export interface ProviderHost {
     { ok: true; root: string; label: string } | { ok: false; cancelled: boolean; error: string }
   >;
   offerOpenFolderAction(): Promise<void>;
-  runAllowlistedTest(command: AllowedTestCommand, signal: AbortSignal, boundRoot?: string): Promise<string>;
+  runAllowlistedTest(command: AllowedTestCommand, signal: AbortSignal, boundRoot?: string, env?: Record<string, string>): Promise<string>;
+  /** The user's explicit answer to what an acceptance check freezes and leaves writable (a modal dialog). */
+  confirmAcceptanceScope?(summary: { commandId: string; frozen: string[]; writable: string[]; outputs: string[]; sealed: string[] }): Promise<boolean>;
+  /** Scope review: files changed outside a protected check's authorized scope; true only on the user's explicit approval. */
+  confirmAcceptanceScopeChange?(review: { commandId: string; changes: Array<{ path: string; change: 'changed' | 'added' | 'removed' }> }): Promise<boolean>;
   cancelRequest(): boolean;
   isLeaseAlive(lease: MissionLease): boolean;
 

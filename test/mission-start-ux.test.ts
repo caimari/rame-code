@@ -6,6 +6,7 @@
  * cards, and the version is shown.
  */
 
+import { changeTimesTrusted } from '../src/projectSnapshot.js';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -245,7 +246,7 @@ test('a double click (or the same message twice) starts the Mission once', async
     // Without the guard the extra clicks would be refused later by the revision check, but the
     // user would see a false "changed in another window" error.
     assert.ok(!states.some((state) => /The Mission changed|already running/.test(String(state.status))), 'and never surfaced an error');
-    const turns = (h.last().turns as Array<{ text?: string }>).filter((turn) => turn.text === 'Mission completed and verified by the host.');
+    const turns = (h.last().turns as Array<{ text?: string }>).filter((turn) => turn.text === 'Mission completed and verified by the host (conventional level).');
     assert.equal(turns.length, 1, 'one final report');
   });
 });
@@ -377,7 +378,7 @@ test('the final report appears only after the host\'s acceptance run exited 0', 
     assert.ok(firstReport > 0);
     for (const state of states.slice(0, firstReport)) {
       assert.notEqual(liveOf(state)?.acceptance?.state, 'passed', 'no report while the acceptance had not passed');
-      const finals = (state.turns as Array<{ text?: string }>).filter((turn) => turn.text === 'Mission completed and verified by the host.');
+      const finals = (state.turns as Array<{ text?: string }>).filter((turn) => turn.text === 'Mission completed and verified by the host (protected level).');
       assert.equal(finals.length, 0);
     }
     assert.ok(states.slice(0, firstReport).some((state) => liveOf(state)?.acceptance?.state === 'failed'), 'the first acceptance run failed first');
@@ -387,12 +388,17 @@ test('the final report appears only after the host\'s acceptance run exited 0', 
     assert.deepEqual(report.files, ['a.txt']);
     assert.equal(report.tests.length, 2);
     assert.ok(report.tests.every((line) => /exit=0/.test(line)));
-    assert.match(report.acceptance, /^npm:check — npm:check exit=0 with every frozen file intact \(frozen: acceptance\/accept\.test\.js, package\.json\)$/);
+    // The level is stated: exit code of a protected check, not host-compared cases.
+    assert.equal(
+      report.acceptance,
+      `npm:check — npm:check exit=0 with every frozen file intact; protected level (frozen check exit code; ${changeTimesTrusted() ? 'host file record before, during and after the run' : 'host file record at start and end only'}; no host-compared cases); Node ${process.version} (frozen: acceptance/accept.test.js, package.json)`,
+      'the level and the Node version the check really ran on (AUD-05) are stated',
+    );
     assert.equal(report.internalRuns, 2);
     assert.match(report.models[0] as string, /local-glimmer \(Muse Glimmer — Local\)/);
     assert.equal(report.metaConsultations, 'none allowed');
     const record = (h.last().turns.at(-1) as { text: string; hostRecord: string[] });
-    assert.equal(record.text, 'Mission completed and verified by the host.');
+    assert.equal(record.text, 'Mission completed and verified by the host (protected level).', 'the level is in the title');
     const lines = record.hostRecord.join('\n');
     assert.match(lines, /mission: tests run run_tests npm:test → exit=0/);
     assert.match(lines, /mission: models local-glimmer \(Muse Glimmer — Local\); Meta consultations none allowed/);

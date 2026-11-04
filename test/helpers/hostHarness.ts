@@ -14,6 +14,13 @@ import Module from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+// The Node under test runs every child too: `npm run` resolves `node` from
+// PATH, which may point at another version than the one running the tests.
+const NODE_DIR = path.dirname(process.execPath);
+if ((process.env.PATH ?? '').split(path.delimiter)[0] !== NODE_DIR) {
+  process.env.PATH = `${NODE_DIR}${path.delimiter}${process.env.PATH ?? ''}`;
+}
+
 const FileType = { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 };
 
 interface FakeUri {
@@ -53,6 +60,13 @@ export const fakeWindow = {
   },
   async showInformationMessage(): Promise<undefined> {
     return undefined;
+  },
+  /** Modal answers: the first item of the queue, else the default (the first action offered). */
+  warningAnswers: [] as Array<string | undefined>,
+  warningCalls: [] as Array<{ message: string; detail: string }>,
+  async showWarningMessage(message: string, options?: { detail?: string }, ...actions: string[]): Promise<string | undefined> {
+    fakeWindow.warningCalls.push({ message, detail: options?.detail ?? '' });
+    return fakeWindow.warningAnswers.length > 0 ? fakeWindow.warningAnswers.shift() : actions[0];
   },
 };
 

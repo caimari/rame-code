@@ -8,6 +8,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import { missionAcceptanceReviewHtml } from './missionAcceptanceReviewHtml.js';
 
 export interface ViewHtmlOptions {
   cspSource: string;
@@ -185,7 +186,7 @@ details.settings-card > summary .card-summary { font-size: 11px; opacity: 0.8; o
 details.settings-card > .card-body { padding: 8px 12px 12px; }
 details.settings-card section.settings-block:first-child { border-top: 0; }
 .mission-card { border: 1px solid var(--vscode-focusBorder, #0e70c0); border-left-width: 3px; border-radius: 8px; padding: 8px 10px; background-color: var(--vscode-editor-background); display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.mission-card[hidden], #missionSetup[hidden], #missionVerifiedRow[hidden], #missionReport[hidden], #missionStartError[hidden], #missionStartNote[hidden], #missionBootstrapNote[hidden] { display: none; }
+.mission-card[hidden], #missionSetup[hidden], #missionVerifiedRow[hidden], #missionReport[hidden], #missionStartError[hidden], #missionStartNote[hidden], #missionBootstrapNote[hidden], #missionAcceptanceReview[hidden], #acceptanceReviewOffer[hidden], #acceptanceReviewResult[hidden] { display: none; }
 .mission-card h3 { margin: 0; }
 #missionSetup { display: flex; flex-direction: column; gap: 12px; padding-top: 4px; }
 #missionSetup > label[for] { font-weight: 600; line-height: 1.35; }
@@ -206,6 +207,9 @@ details.settings-card section.settings-block:first-child { border-top: 0; }
 #missionConsultRow > label input { flex: 0 0 auto; margin-top: 3px; }
 #missionConsultCountRow { display: grid; grid-template-columns: minmax(0, 1fr) 84px; align-items: center; gap: 8px; }
 #missionConsultSummary { margin: 0; padding: 7px 9px; border-left: 3px solid var(--vscode-textLink-foreground, #3794ff); background-color: var(--vscode-textBlockQuote-background, transparent); overflow-wrap: anywhere; }
+#missionAcceptanceReview { display: flex; flex-direction: column; gap: 9px; padding: 10px; border: 1px solid var(--vscode-panel-border, transparent); border-radius: 6px; }
+#acceptanceReviewPayload { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px; background: var(--vscode-textCodeBlock-background, transparent); }
+#acceptanceReviewResult ul { margin: 5px 0 8px 18px; padding: 0; }
 #missionConsultLimits[open] { display: flex; flex-direction: column; gap: 7px; }
 #disclosureBox[hidden], #disclosureContributor[hidden], #disclosureEarlier[hidden], #disclosureDecisionsNote[hidden], #disclosureToolsRow[hidden], #disclosureSharing[hidden] { display: none; }
 #disclosureToolsRow { display: flex; gap: 6px; align-items: flex-start; margin: 6px 0; overflow-wrap: anywhere; }
@@ -328,12 +332,13 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
         </div>
         <div id="missionSetup" hidden>
           <p id="missionBootstrapNote" class="mission-note" role="status" aria-live="polite" hidden></p>
+          ${missionAcceptanceReviewHtml}
           <fieldset id="missionLevel">
             <legend>Verification level</legend>
             <label><input type="radio" name="missionLevel" id="missionLevelStandard" value="standard" checked> Standard Mission</label>
             <p class="hint">The project's normal tests decide when each task is done.</p>
             <label><input type="radio" name="missionLevel" id="missionLevelVerified" value="verified"> Verified Mission</label>
-            <p class="hint">Also your acceptance check, frozen now: RAME Code runs it itself and the Mission completes only if it exits 0.</p>
+            <p class="hint" id="missionLevelVerifiedHint">Also your acceptance check, frozen with the test files it runs, loads or reads; you confirm which files stay writable and RAME Code records every other file. It completes only if the check RAME Code runs exits 0 and nothing else changed; otherwise: not verifiable. The code under test can still end it early: add a *.rame-cases.json file for the reinforced level, where RAME Code compares the cases.</p>
           </fieldset>
           <p class="hint" id="missionStackNote" role="note">Tests: RAME Code currently runs only the package.json scripts of a Node/npm project (test, check, compile, lint, typecheck). In a project without them, the Agent can still edit, but a Mission cannot verify its tasks and will not complete.</p>
           <label for="missionMode">Permission for this Mission</label>

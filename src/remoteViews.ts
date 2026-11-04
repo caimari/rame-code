@@ -42,7 +42,37 @@ export interface DisclosureStopMessage {
   type: 'disclosureStop';
 }
 
-export type RemoteMessage = EscalateApproveMessage | ConsultIncludeFilesMessage | DelegationRunLocalMessage | LocalIssueStartMessage | DisclosureDecideMessage | DisclosureStopMessage;
+export interface AcceptanceReviewPrepareMessage {
+  type: 'acceptanceReviewPrepare';
+  missionId: string;
+  revision: number;
+  commandId: string;
+  files: string[];
+  maxConsultations: number;
+  maxRequestBytes: number | null;
+  maxOutputTokens: number | null;
+  maxTotalTokens: number | null;
+}
+
+export interface AcceptanceReviewActionMessage {
+  type: 'acceptanceReviewSend' | 'acceptanceReviewCancel';
+  missionId: string;
+  revision: number;
+  digest: string;
+}
+
+export interface AcceptanceReviewDecideMessage {
+  type: 'acceptanceReviewDecide';
+  missionId: string;
+  revision: number;
+  digest: string;
+  decision: 'considered' | 'dismissed';
+}
+
+export type RemoteMessage =
+  | EscalateApproveMessage | ConsultIncludeFilesMessage | DelegationRunLocalMessage | LocalIssueStartMessage
+  | DisclosureDecideMessage | DisclosureStopMessage | AcceptanceReviewPrepareMessage
+  | AcceptanceReviewActionMessage | AcceptanceReviewDecideMessage;
 
 const DIGEST = /^[0-9a-f]{64}$/;
 
@@ -53,6 +83,9 @@ function exactKeys(record: Record<string, unknown>, keys: readonly string[]): bo
 
 /** Parse a Meta-path message; null when the type is not one of them; throws when malformed. */
 export function parseRemoteMessage(record: Record<string, unknown>): RemoteMessage | null {
+  const mission = (): boolean =>
+    typeof record.missionId === 'string' && /^mis_[0-9a-f]{24}$/.test(record.missionId) &&
+    typeof record.revision === 'number' && Number.isInteger(record.revision) && record.revision > 0;
   switch (record.type) {
     case 'escalateApprove':
       if (!exactKeys(record, ['type', 'digest']) || typeof record.digest !== 'string' || !DIGEST.test(record.digest)) {
@@ -96,6 +129,38 @@ export function parseRemoteMessage(record: Record<string, unknown>): RemoteMessa
         throw new Error('Invalid disclosureStop message.');
       }
       return { type: 'disclosureStop' };
+    case 'acceptanceReviewPrepare': {
+      const numeric = (value: unknown): value is number | null => value === null || (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 1_000_000);
+      if (
+        !exactKeys(record, ['type', 'missionId', 'revision', 'commandId', 'files', 'maxConsultations', 'maxRequestBytes', 'maxOutputTokens', 'maxTotalTokens']) || !mission() ||
+        typeof record.commandId !== 'string' || record.commandId.length === 0 || record.commandId.length > 128 ||
+        !Array.isArray(record.files) || record.files.length === 0 || record.files.length > 3 ||
+        record.files.some((file) => typeof file !== 'string' || file.length === 0 || file.length > 512) ||
+        typeof record.maxConsultations !== 'number' || !Number.isInteger(record.maxConsultations) || record.maxConsultations < 1 || record.maxConsultations > 5 ||
+        !numeric(record.maxRequestBytes) || !numeric(record.maxOutputTokens) || !numeric(record.maxTotalTokens)
+      ) {
+        throw new Error('Invalid acceptanceReviewPrepare message.');
+      }
+      return {
+        type: 'acceptanceReviewPrepare', missionId: record.missionId as string, revision: record.revision as number,
+        commandId: record.commandId, files: [...(record.files as string[])], maxConsultations: record.maxConsultations, maxRequestBytes: record.maxRequestBytes,
+        maxOutputTokens: record.maxOutputTokens, maxTotalTokens: record.maxTotalTokens,
+      };
+    }
+    case 'acceptanceReviewSend':
+    case 'acceptanceReviewCancel':
+      if (!exactKeys(record, ['type', 'missionId', 'revision', 'digest']) || !mission() || typeof record.digest !== 'string' || !DIGEST.test(record.digest)) {
+        throw new Error(`Invalid ${record.type} message.`);
+      }
+      return { type: record.type, missionId: record.missionId as string, revision: record.revision as number, digest: record.digest };
+    case 'acceptanceReviewDecide':
+      if (
+        !exactKeys(record, ['type', 'missionId', 'revision', 'digest', 'decision']) || !mission() ||
+        typeof record.digest !== 'string' || !DIGEST.test(record.digest) || (record.decision !== 'considered' && record.decision !== 'dismissed')
+      ) {
+        throw new Error('Invalid acceptanceReviewDecide message.');
+      }
+      return { type: 'acceptanceReviewDecide', missionId: record.missionId as string, revision: record.revision as number, digest: record.digest, decision: record.decision };
     default:
       return null;
   }

@@ -14,6 +14,10 @@ import {
   validateCascadeAdvice,
 } from './cascade.js';
 import { currentFileHash } from './agentController.js';
+import type { AcceptanceManifest } from './acceptanceManifest.js';
+import { runAcceptance } from './acceptanceRun.js';
+import { protectAcceptanceScope } from './acceptanceScopeHost.js';
+import { CASES_FILE, parseCasesSpec } from './hostCases.js';
 import { memoryScopeForUi } from './memoryController.js';
 import {
   assessRun,
@@ -118,7 +122,8 @@ export function updateActiveMission(
 ): Promise<boolean> {
   const next = missionUpdates.then(async () => {
     const active = host.activeMission;
-    if (active === null) {
+    if (active === null || host.disposed) {
+      // A disposed window writes no Mission state; the next one recovers it.
       return false;
     }
     const result = await host.missions.update(active.id, active.revision, change);
@@ -246,7 +251,8 @@ export async function startMission(
     return;
   }
   // The user's acceptance check is frozen now: its command and its files by hash.
-  let frozen: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }> } | null = null;
+  let frozen: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }>; scope: AcceptanceManifest } | null = null;
+  let scopeNotes: string[] = [];
   if (acceptance !== null) {
     const files: Array<{ path: string; hash: string }> = [];
     // Also frozen, when present: what decides how the check runs.
@@ -271,10 +277,30 @@ export async function startMission(
       await host.postState();
       return;
     }
-    frozen = { commandId: acceptance.commandId, packageJsonHash: hashContent(testContext.packageJsonRaw), files };
+    // What the check loads and reads, observed and analysed: verifier files are
+    // frozen with it, writable ones need the user's confirmation, and anything
+    // undetermined means it cannot be protected (S6b/S6e).
+    for (const file of files.filter((candidate) => CASES_FILE.test(candidate.path))) {
+      const parsed = parseCasesSpec(await scope.fs.readText(file.path).catch(() => ''));
+      if (!parsed.ok) {
+        host.status = `The cases file ${file.path.slice(0, 120)} is not valid: ${parsed.error}. Nothing was authorized.`;
+        await host.postState();
+        return;
+      }
+    }
+    const entry = testContext.allowlist.find((candidate) => candidate.id === acceptance.commandId) as Parameters<ProviderHost['runAllowlistedTest']>[0];
+    const protectedScope = await protectAcceptanceScope(host, scope.fs, scope.root, entry, acceptance.commandId, files, packageName(testContext.packageJsonRaw));
+    if (!protectedScope.ok) {
+      host.status = protectedScope.error;
+      await host.postState();
+      return;
+    }
+    files.push(...protectedScope.freeze);
+    scopeNotes = protectedScope.notes;
+    frozen = { commandId: acceptance.commandId, packageJsonHash: hashContent(testContext.packageJsonRaw), files, scope: protectedScope.manifest };
   }
-  const granted = await host.missions.update(missionId, expectedRevision, (draft) =>
-    grantMission(
+  const granted = await host.missions.update(missionId, expectedRevision, (draft) => {
+    const result = grantMission(
       draft,
       {
         model: host.generationModel('local'),
@@ -300,8 +326,27 @@ export async function startMission(
         bootstrap,
       },
       Date.now(),
-    ),
-  );
+    );
+    if (result.ok && frozen !== null) {
+      const task = currentTask(result.value);
+      for (const text of task ? scopeNotes : []) {
+        result.value.evidence.push({ taskId: task!.id, kind: 'note', text: text.slice(0, 300), at: Date.now() });
+      }
+    }
+    if (result.ok && result.value.acceptanceReview && frozen !== null) {
+      const review = result.value.acceptanceReview;
+      const task = currentTask(result.value);
+      if (task) {
+        result.value.evidence.push({
+          taskId: task.id,
+          kind: 'note',
+          text: `user froze ${frozen.commandId} and ${frozen.files.length} acceptance file(s) after Spark review status ${review.status}, decision ${review.decision}; Spark authorized nothing`,
+          at: Date.now(),
+        });
+      }
+    }
+    return result;
+  });
   if (!granted.ok) {
     host.status = granted.error;
     await host.refreshMemoryView();
@@ -484,11 +529,18 @@ export async function runMissionAutonomous(
   mission = leased.value;
   // After an interruption with an unknown result, the first run checks
   // before any automatic write: its writes still ask.
-  host.missionAuto = { missionId, stop: null, holdAutonomy: uncertainActions(mission).length > 0 };
+  const auto: NonNullable<ProviderHost['missionAuto']> = { missionId, stop: null, holdAutonomy: uncertainActions(mission).length > 0 };
+  host.missionAuto = auto;
+  // This loop's lifetime: a disposed window, or another loop for this host,
+  // ends it. Checked after every await before anything is started or written.
+  const live = (): boolean => !host.disposed && host.missionAuto === auto;
   const testCommands = (await host.testCommandContext(scope.root)).allowlist.map((entry) => entry.id);
   let ended = '';
   try {
     for (;;) {
+      if (!live()) {
+        break;
+      }
       mission = host.missions.get(missionId);
       if (mission === null) {
         ended = 'The Mission could not be read.';
@@ -508,6 +560,9 @@ export async function runMissionAutonomous(
       const fileHashes: Record<string, string | null> = {};
       for (const file of filesReadInMission(mission)) {
         fileHashes[file] = await currentFileHash(scope.fs, file);
+      }
+      if (!live()) {
+        break;
       }
       const prompt = buildAutoTaskPrompt(mission, testCommands, fileHashes);
       const decisions = host.memory.listCurrentDecisions(scope.scopeId).map((entry) => ({ key: entry.key, version: entry.version }));
@@ -535,7 +590,7 @@ export async function runMissionAutonomous(
         host.pinnedRunRoot = null;
         host.hostPromptText = null;
       }
-      if (host.disposed) {
+      if (!live()) {
         // This window is going away (a reload): like a killed process, it
         // writes nothing more; the next window recovers the Mission.
         break;
@@ -557,6 +612,9 @@ export async function runMissionAutonomous(
       const runContext = await host.testCommandContext(scope.root);
       const conditions = runContext.packageJsonRaw.length > 0 ? hashContent(runContext.packageJsonRaw) : '';
       const bootstrapCandidates = current?.grant?.bootstrap === true ? await listAcceptanceCandidates(scope.fs) : [];
+      if (!live()) {
+        break;
+      }
       const bootstrapReady =
         current?.grant?.bootstrap === true &&
         runContext.packageJsonRaw.length > 0 &&
@@ -599,6 +657,9 @@ export async function runMissionAutonomous(
         result.value.mission.status = 'active';
         return { ok: true, value: result.value.mission };
       });
+      if (!live()) {
+        break;
+      }
       if (!recorded) {
         ended = 'The Mission checkpoint could not be saved; stopping before the next run.';
         break;
@@ -620,6 +681,9 @@ export async function runMissionAutonomous(
         unrecoverable = notes[0] ?? '';
         return { ok: true, value: draft };
       });
+      if (!live()) {
+        break;
+      }
       if (unrecoverable.length > 0) {
         await updateActiveMission(host, (draft) => blockMission(draft, `${unrecoverable}.`, Date.now()));
         break;
@@ -630,6 +694,15 @@ export async function runMissionAutonomous(
         if (await recheckBlockingVerifiers(host, missionId, runContext, conditions, scope.root)) {
           next = 'complete-task';
         }
+        if (!live()) {
+          break;
+        }
+      }
+      if (next !== 'complete-task' && hostVerifiesAcceptance(host.missions.get(missionId), observation, assessment as RunAssessment | null)) {
+        // S10b: the agent reported done without a passing test after its last
+        // change. With a frozen acceptance check on the last task, the host runs
+        // that check itself (below) instead of waiting for the agent to test.
+        next = 'complete-task';
       }
       if (next === 'complete-task') {
         const latest = host.missions.get(missionId);
@@ -638,10 +711,31 @@ export async function runMissionAutonomous(
           // Before the Mission can end, the host runs the user's frozen check.
           host.status = `Running the acceptance check ${latest.grant.acceptance.commandId}\u2026`;
           await host.postState();
+          if (!live()) {
+            break;
+          }
           const acceptanceResult = await runAcceptance(host, latest, scope.root, scope.fs);
-          if (acceptanceResult.tampered) {
-            // The criteria themselves changed: no run of the agent can fix that.
-            await updateActiveMission(host, (draft) => blockMission(draft, `the acceptance check can no longer be trusted: ${acceptanceResult.summary}.`, Date.now()));
+          if (!live()) {
+            // Closed or reloaded while the check ran: nothing is recorded here.
+            break;
+          }
+          if (acceptanceResult.interrupted && host.missionAuto!.stop === null) {
+            // Stopped before it finished, but not by the user: an interruption, not a failed check.
+            await updateActiveMission(host, (draft) => interrupt(draft, `The acceptance check ${latest.grant!.acceptance!.commandId} was interrupted before it finished; nothing was concluded from it.`, Date.now()));
+            break;
+          }
+          if (acceptanceResult.tampered || acceptanceResult.unverifiable) {
+            // The criteria themselves changed, or RAME cannot verify them: no run of the agent can fix that.
+            await updateActiveMission(host, (draft) => {
+              note(draft, `acceptance (run by the host): ${acceptanceResult.summary}`);
+              return blockMission(
+                draft,
+                acceptanceResult.unverifiable
+                  ? `NOT VERIFIABLE: ${acceptanceResult.summary.replace(/^not verifiable: /, '')}. RAME did not count this run; the acceptance you authorized is unchanged.`
+                  : `the acceptance check can no longer be trusted: ${acceptanceResult.summary}.`,
+                Date.now(),
+              );
+            });
             break;
           }
           if (host.missionAuto!.stop !== null) {
@@ -651,6 +745,13 @@ export async function runMissionAutonomous(
           }
           let decision = 'continue' as 'complete-task' | 'continue' | 'blocked';
           await updateActiveMission(host, (draft) => {
+            const approvedScope = draft.grant?.acceptance?.scope;
+            if (acceptanceResult.approved && approvedScope) {
+              // A scope review the user approved: a new authorization, recorded as such.
+              approvedScope.writable = [...new Set([...approvedScope.writable, ...acceptanceResult.approved])].slice(0, 200);
+              approvedScope.approvals += 1;
+              note(draft, `scope review: the user approved ${acceptanceResult.approved.slice(0, 8).join(', ')} as writable after the check ran`);
+            }
             const result = recordAcceptance(draft, acceptanceResult, Date.now());
             if (!result.ok) {
               return result;
@@ -658,6 +759,9 @@ export async function runMissionAutonomous(
             decision = result.value.next;
             return { ok: true, value: result.value.mission };
           });
+          if (!live()) {
+            break;
+          }
           if (decision === 'blocked') {
             await updateActiveMission(host, (draft) => blockMission(draft, `the user's acceptance check kept failing (${acceptanceResult.summary}).`, Date.now()));
             break;
@@ -665,6 +769,9 @@ export async function runMissionAutonomous(
           if (decision === 'continue') {
             continue;
           }
+        }
+        if (!live()) {
+          break;
         }
         await updateActiveMission(host, (draft) => completeTask(draft, [], outcome.report || 'verified by the host', Date.now()));
         continue;
@@ -676,7 +783,7 @@ export async function runMissionAutonomous(
         );
         break;
       }
-      if (outcome.capabilityReason) {
+      if (outcome.capabilityReason && live()) {
         await consultForMission(host, missionId, outcome.capabilityReason, outcome.hostRecord, scope.scopeId);
       }
     }
@@ -691,7 +798,9 @@ export async function runMissionAutonomous(
       });
     }
     unregisterLiveMissionLease(host.leaseToken);
-    host.missionAuto = null;
+    if (host.missionAuto === auto) {
+      host.missionAuto = null;
+    }
     const done = host.disposed ? null : host.missions.get(missionId);
     if (done !== null) {
       appendMissionReport(host, done);
@@ -752,28 +861,12 @@ export async function retryMission(
 
 // ---- Mission helpers --------------------------------------------------------
 
-/**
- * A target frozen by the running Mission's acceptance check (checked by
- * hash), or inside node_modules (only blocked for RAME's own tools, not
- * hashed: scripts, other processes, or the user can still change it).
- */
-export function frozenTarget(host: ProviderHost, targets: readonly string[]): string | null {
-  const auto = host.missionAuto;
-  if (auto === null) {
-    return null;
+/** A host note on the current task (bounded like every evidence entry). */
+function note(mission: MissionRecord, text: string): void {
+  const task = currentTask(mission);
+  if (task) {
+    mission.evidence.push({ taskId: task.id, kind: 'note', text: text.replace(/[\u0000-\u001F\u007F]+/g, ' ').slice(0, 300), at: Date.now() });
   }
-  const frozen = frozenPaths(host.missions.get(auto.missionId));
-  if (frozen.length === 0) {
-    return null;
-  }
-  for (const target of targets) {
-    const gate = checkAgentRelPath(target);
-    const rel = gate.ok ? (gate as { ok: true; rel: string }).rel : target;
-    if (frozen.includes(rel) || rel === 'node_modules' || rel.startsWith('node_modules/')) {
-      return rel;
-    }
-  }
-  return null;
 }
 
 /** Whether the running Mission's grant covers this tool for this exact run. */
@@ -790,45 +883,6 @@ export function missionGrantAllows(
     return false;
   }
   return grantAllows(host.missions.get(auto.missionId), { missionId: auto.missionId, scopeId, provider, model }, tool, test);
-}
-
-/**
- * The user's acceptance check, run by the host itself (never the model):
- * every frozen file and package.json must still have its granted hash, and
- * the granted command must exit 0.
- */
-export async function runAcceptance(
-  host: ProviderHost,
-  mission: MissionRecord,
-  root: string,
-  fs: AgentFs,
-): Promise<{ passed: boolean; summary: string; output: string; tampered: boolean }> {
-  const acceptance = mission.grant?.acceptance ?? null;
-  if (acceptance === null) {
-    return { passed: true, summary: 'no acceptance check', output: '', tampered: false };
-  }
-  for (const file of acceptance.files) {
-    if ((await currentFileHash(fs, file.path)) !== file.hash) {
-      return { passed: false, summary: `${file.path} changed since the Mission was authorized`, output: '', tampered: true };
-    }
-  }
-  if ((await currentFileHash(fs, 'package.json')) !== acceptance.packageJsonHash) {
-    return { passed: false, summary: 'package.json changed since the Mission was authorized', output: '', tampered: true };
-  }
-  const command = (await host.testCommandContext(root)).allowlist.find((entry) => entry.id === acceptance.commandId);
-  if (!command) {
-    return { passed: false, summary: `${acceptance.commandId} is no longer allowlisted`, output: '', tampered: true };
-  }
-  const controller = new AbortController();
-  host.acceptanceController = controller;
-  try {
-    const output = await host.runAllowlistedTest(command, controller.signal, root);
-    const exit = /^exit=(\d+)/.exec(output);
-    const code = exit ? Number(exit[1]) : null;
-    return { passed: code === 0, summary: `${acceptance.commandId} exit=${code ?? 'unknown'} with every frozen file intact`, output, tampered: false };
-  } finally {
-    host.acceptanceController = null;
-  }
 }
 
 /**
@@ -852,7 +906,7 @@ export async function recheckBlockingVerifiers(
   const results: Array<{ commandId: string; exitCode: number | null }> = [];
   for (const blocker of blockers) {
     const command = (await host.testCommandContext(root)).allowlist.find((entry) => entry.id === blocker.commandId);
-    if (!command || !tests.commandIds.includes(blocker.commandId)) {
+    if (!command || !tests.commandIds.includes(blocker.commandId) || host.disposed) {
       return false;
     }
     host.status = `Re-running the blocking verifier ${blocker.commandId}\u2026`;
@@ -866,7 +920,7 @@ export async function recheckBlockingVerifiers(
     } finally {
       host.acceptanceController = null;
     }
-    if (host.missionAuto?.stop !== null && host.missionAuto?.stop !== undefined) {
+    if ((host.missionAuto?.stop !== null && host.missionAuto?.stop !== undefined) || host.disposed) {
       return false;
     }
   }
@@ -946,4 +1000,36 @@ export function missionViewRuntime(host: ProviderHost, mission: MissionRecord): 
     setup: host.missionSetup,
     startRequest: host.missionStartRequest?.missionId === mission.id ? host.missionStartRequest : null,
   };
+}
+
+function packageName(packageJsonRaw: string): string {
+  try {
+    const name = (JSON.parse(packageJsonRaw) as { name?: unknown }).name;
+    return typeof name === 'string' ? name : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * S10b: the agent reported done, nothing is uncertain, no blocking verifier is
+ * open, this is the last task, and the user froze an acceptance check, but no
+ * test passed after the last change. The host then runs the frozen check
+ * itself: its result, not the agent's silence, decides.
+ */
+export function hostVerifiesAcceptance(
+  mission: MissionRecord | null,
+  observation: Pick<RunObservation, 'outcome' | 'uncertain'>,
+  assessment: Pick<RunAssessment, 'needs' | 'verifierUpdate'> | null,
+): boolean {
+  return (
+    mission !== null &&
+    mission.grant?.acceptance != null &&
+    observation.outcome === 'done' &&
+    observation.uncertain === 0 &&
+    assessment !== null &&
+    assessment.needs &&
+    assessment.verifierUpdate.blockers.length === 0 &&
+    mission.tasks.filter((task) => task.status === 'pending').length === 0
+  );
 }

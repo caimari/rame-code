@@ -243,7 +243,7 @@ export async function createChatCompletion(
  * bounded by the caller; it is never treated as an instruction.
  */
 export async function createCascadeAdvice(
-  options: Omit<CreateMissionPlanOptions, 'goal'> & { payload: string; schema: unknown },
+  options: Omit<CreateMissionPlanOptions, 'goal'> & { payload: string; schema: unknown; systemPrompt?: string },
 ): Promise<{ content: string; usage: ProviderUsage }> {
   const { response, rawPayload } = await postMetaRequest({ ...options, goal: '' }, {
     model: selectedModel(options.model),
@@ -251,6 +251,7 @@ export async function createCascadeAdvice(
       {
         role: 'system',
         content:
+          options.systemPrompt ??
           'You advise a local coding agent that has its own file and test tools. You cannot see the project and you cannot run tools. Do not claim to have inspected anything. Return only the requested structured output.',
       },
       { role: 'user', content: options.payload },

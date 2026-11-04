@@ -1,7 +1,7 @@
 import { MAX_AGENT_STEPS } from './agentPolicy.js';
 import { missionRemoteView } from './missionRemote.js';
 import { canRunTask, currentTask, leaseHeldByOther, type MissionLease, type MissionRecord } from './missionStore.js';
-import { acceptanceState, missionFinalReport, missionPhase, missionTestRuns, missionTestsNotRun } from './missionPhase.js';
+import { acceptanceState, missionChangedFiles, missionFinalReport, missionPhase, missionTestRuns, missionTestsNotRun } from './missionPhase.js';
 import type { MissionLiveView, MissionView } from './viewMessages.js';
 
 export interface MissionSetupView {
@@ -144,8 +144,32 @@ export function buildMissionLiveView(mission: MissionRecord, runtime: MissionVie
         candidates: [...runtime.setup.candidates],
         environmentFiles: [...runtime.setup.environmentFiles],
         packageJsonHash: runtime.setup.packageJsonHash,
+        createdFiles: missionChangedFiles(mission),
         bootstrap: runtime.setup.packageJsonHash.length === 0 || runtime.setup.testCommands.length === 0,
         awaitingVerification: mission.awaitingVerification === true,
+        review: mission.acceptanceReview
+          ? {
+              status: mission.acceptanceReview.status,
+              model: mission.acceptanceReview.model,
+              processingClass: mission.acceptanceReview.processingClass,
+              commandId: mission.acceptanceReview.commandId,
+              files: mission.acceptanceReview.files.map((file) => ({ ...file })),
+              provenance: mission.acceptanceReview.provenance,
+              payload: mission.acceptanceReview.payload,
+              digest: mission.acceptanceReview.digest,
+              requestBytes: mission.acceptanceReview.requestBytes,
+              sentBytes: mission.acceptanceReview.sentBytes,
+              maxRequestBytes: mission.acceptanceReview.maxRequestBytes,
+              maxConsultations: mission.acceptanceReview.maxConsultations,
+              maxOutputTokens: mission.acceptanceReview.maxOutputTokens,
+              maxTotalTokens: mission.acceptanceReview.maxTotalTokens,
+              attempts: mission.acceptanceReview.attempts,
+              usedTokens: mission.acceptanceReview.usedTokens,
+              decision: mission.acceptanceReview.decision,
+              result: mission.acceptanceReview.result,
+              failure: mission.acceptanceReview.failure,
+            }
+          : null,
       }
     : null;
   return {

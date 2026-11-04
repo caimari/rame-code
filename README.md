@@ -2,7 +2,7 @@
 
 **A local-first VS Code coding agent born at the Meta Global AI Developer Hackathon, powered by Meta Muse models and built around explicit permissions and host-verified evidence.**
 
-[Versión en español](README.es.md) · [Changelog](CHANGELOG.md) · [License](LICENSE)
+[Official website](https://ramecode.com/) · [**English user guide**](docs/USER_GUIDE.md) · [Guía de usuario en español](docs/USER_GUIDE.es.md) · [How to verify it](docs/VERIFICATION.md) · [Versión en español](README.es.md) · [Changelog](CHANGELOG.md) · [License](LICENSE)
 
 RAME Code is an independent open-source project started from scratch during the [Meta Global AI Developer Hackathon 2026](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details). It runs as a VS Code extension and supports both a local Muse Glimmer runtime and Meta Model API cloud models.
 
@@ -32,8 +32,10 @@ The next important milestone is intentionally recursive: RAME Code should use it
 
 ## What is not implemented yet
 
-- Persistent, versioned project decisions and stale-artifact detection.
-- Resumable missions across a full extension restart.
+In the public v0.1.0 release, two items below were still missing; the 0.2.0 candidate implements them (see [Project memory](#project-memory-saved-threads-and-model-context) and [Bootstrap and verified Missions](#bootstrap-and-verified-missions-020-candidate-unreleased)):
+
+- Persistent, versioned project decisions and stale-artifact detection (v0.1.0; implemented in the 0.2.0 candidate).
+- Resumable missions across a full extension restart (v0.1.0; implemented in the 0.2.0 candidate).
 - Automatic local-to-cloud escalation and verified return to the local model.
 - An operating-system sandbox or unrestricted terminal/computer control.
 - A claim that local execution, approvals or the audit log are tamper-proof.
@@ -123,6 +125,30 @@ llama-server \
 | **Workspace full** | Allowed workspace actions may run without prompting. Policy checks remain, but this mode is high risk. |
 
 Agent work is restricted to one explicitly selected VS Code workspace folder. RAME Code has no arbitrary shell tool. Test execution is limited to commands derived from an allowlist and uses `shell: false`, but the selected package script may still execute arbitrary project code.
+
+## Bootstrap and verified Missions (0.2.0 candidate, unreleased)
+
+A Mission may start in an empty folder. Its first, explicit bootstrap authorization can create the project scaffold, package scripts and tests, but it cannot run those tests or complete the Mission. RAME then revokes that grant and stops at **Scaffold ready**. The user reviews the new allowlisted command and test files in a second authorization; only that second authorization can freeze acceptance and let the Mission continue.
+
+At that checkpoint, an **optional independent acceptance review** may be prepared for a documented Standard Meta model. Preparing it sends nothing: RAME shows the exact bounded text first, including the original requirement and up to three test fragments selected from the offered acceptance candidates. Sending requires a separate one-use approval bound to the Mission, folder, model, processing class, credential revision, content and byte/token limits. Spark receives no tools and cannot edit files, grant permissions, select or freeze the acceptance criteria, or complete the Mission. Its structured result is untrusted advice that the user may consider or dismiss before making the final local choice. Cancellation, budget refusal, malformed output or an API failure leaves the local two-stage flow available and never retries automatically. This path is verified with a simulated Meta API only in this candidate.
+
+## Acceptance integrity (0.2.0 candidate, unreleased)
+
+A Mission is verified at one of three levels, and the level is written in its host notes and final report:
+
+- **Conventional (Standard Mission).** An allowlisted project test passes after the last change.
+- **Protected (Verified Mission).** The host itself runs the user's frozen acceptance check, observes it to its end and requires exit 0. Before authorizing, RAME runs the check once under its own trace and analyses it, to find the processes it runs and the modules and files it uses, and records that scope in the grant together with a fingerprint of every project file. Test helpers, data and the test files the command runs are frozen, and test folders it runs or lists are sealed. Anything that would stay writable is shown in a modal dialog for you to confirm. A check whose dependencies cannot be determined is not protected: RAME offers conventional verification instead. Writes that would change a frozen file, a sealed folder or how Node resolves them are refused. After every host run, RAME compares the whole project with its own record (the SHA-256 of every file's bytes): a change outside the authorized scope is never counted as a pass. On Linux and macOS, kernel change times also show a file changed and restored during the run; on Windows only the start and end state is claimed, and the report says so.
+- **Reinforced.** A protected check plus a frozen `*.rame-cases.json` file. RAME's case runner calls the code under test in a separate process and the host compares every result itself; the expected values are not sent to that process and are hidden from the agent's tools. An early `process.exit(0)` or forged output cannot pass. This does not make the expected values secret: there is no sandbox, and code running with your permissions can find the file on disk. At the protected level, a check is only as trustworthy as its exit code: code under test that runs in the check's own process can end it early.
+
+When RAME cannot show that the authorized conditions held, the result is **not verifiable**: never a pass, the Mission is blocked with the reason and the authorized acceptance stays unchanged.
+
+These guarantees are exercised by a **SIMULATED** sabotage battery (`npm run demo:sabotage`): 43 attempts to complete a Mission without the work, including the reproductions from an independent audit. 3 still succeed and are documented as limits:
+
+- a weak check satisfied by constants;
+- a helper the user confirmed as writable;
+- `process.exit(0)` at the protected level.
+
+RAME's trace runs beside the code under test and can be forged, so it is only a discovery aid; what the host checks itself (hashes and the project fingerprint) decides. Process separation is not a sandbox. When VS Code closes or reloads during a Mission, the old window starts nothing and writes nothing more. See [How to verify it](docs/VERIFICATION.md). Results are labelled **REAL**, **SIMULATED** or **RECORDED**, and a simulation is never presented as a real Glimmer or Meta run.
 
 ## Model evidence (0.2.0 candidate, unreleased)
 

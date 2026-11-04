@@ -45,6 +45,7 @@ import {
 } from './agentModel.js';
 import { hashContent } from './agentPatch.js';
 import { checkAgentRelPath, MAX_AGENT_STEPS } from './agentPolicy.js';
+import { agentToolFs, frozenTarget } from './missionToolGuards.js';
 import {
   DEFAULT_AGENT_PROFILE,
   isAutoAllowed,
@@ -627,28 +628,6 @@ async function currentFileHash(fs: AgentFs, file: string): Promise<string | null
   }
 }
 
-function frozenTarget(
-  host: ProviderHost,
-  targets: readonly string[],
-): string | null {
-  const auto = host.missionAuto;
-  if (auto === null) {
-    return null;
-  }
-  const frozen = frozenPaths(host.missions.get(auto.missionId));
-  if (frozen.length === 0) {
-    return null;
-  }
-  for (const target of targets) {
-    const gate = checkAgentRelPath(target);
-    const rel = gate.ok ? (gate as { ok: true; rel: string }).rel : target;
-    if (frozen.includes(rel) || rel === 'node_modules' || rel.startsWith('node_modules/')) {
-      return rel;
-    }
-  }
-  return null;
-}
-
 function missionGrantAllows(
   host: ProviderHost,
   tool: string,
@@ -781,7 +760,7 @@ export async function sendAgent(
     history.pop();
     current = historyTurn.pop() as number;
   }
-  const fs = host.agentFsFor(workspaceId);
+  const fs = agentToolFs(host, host.agentFsFor(workspaceId));
   const heldCanonicalRoot = await host.heldCanonicalRoot(workspaceId, fs);
   const contextBudget = contextSelectionBudget(generation.profile.contextWindow);
   // buildAgentMessages makes this same selection at every step.
@@ -1110,7 +1089,7 @@ export async function sendAgent(
         }
         const frozenHit = WORKSPACE_WRITE_TOOLS.has(call.tool) ? frozenTarget(host, described.targets) : null;
         if (frozenHit !== null) {
-          const dependencies = frozenHit === 'node_modules' || frozenHit.startsWith('node_modules/');
+          const dependencies = frozenHit.split('/').includes('node_modules');
           recordHostAction(
             call,
             described.targets,

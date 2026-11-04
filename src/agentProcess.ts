@@ -22,6 +22,8 @@ export interface BoundedProcessSpec {
   maxOutputBytes: number;
   /** Grace period between SIGTERM and SIGKILL. */
   killGraceMs?: number;
+  /** Extra environment for this run only (merged over the host's). */
+  env?: Record<string, string>;
 }
 
 export interface BoundedProcessResult {
@@ -95,6 +97,18 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
 }
 
 /**
+ * The environment a test or acceptance command runs with. NODE_TEST_CONTEXT
+ * is never passed on: when inherited (for example from a Node test runner
+ * that started VS Code), `node --test` behaves as a child of that runner and
+ * exits 0 without running a single test file, which would read as a pass.
+ */
+export function childEnvironment(extra?: Record<string, string>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...(extra ?? {}) };
+  delete env.NODE_TEST_CONTEXT;
+  return env;
+}
+
+/**
  * Run one command with time/output limits. Rejects with an AbortError when
  * `signal` aborts (after the tree has been signalled); resolves with
  * `timedOut: true` when the deadline kills it.
@@ -110,6 +124,7 @@ export function runBoundedProcess(spec: BoundedProcessSpec, signal?: AbortSignal
       child = spawn(spec.executable, spec.argv, {
         shell: false,
         cwd: spec.cwd,
+        env: childEnvironment(spec.env),
         detached: process.platform !== 'win32',
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],

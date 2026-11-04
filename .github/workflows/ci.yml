@@ -1,0 +1,44 @@
+# Build, architecture policies and the full test suite on every push and pull
+# request, on the two Node versions RAME Code supports. No secrets: model
+# servers and the Meta API are simulated in the tests, so nothing here calls
+# Meta or needs a GPU.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        node: ['20', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      # The Node on PATH is the one under test: acceptance checks started
+      # through npm in the tests must run on it too (each note states it).
+      - run: test "$(node -p process.versions.node | cut -d. -f1)" = "${{ matrix.node }}"
+      # Compile runs the per-file size policy, the module dependency (cycle)
+      # policy and the TypeScript build before the tests.
+      - run: npm test
+      # The Mission sabotage battery, with a SIMULATED model; writes
+      # evidence/sabotage/mission-sabotage.SIMULATED.json.
+      - run: node scripts/demo-sabotage.js
+      - run: npm audit --omit=dev --audit-level=low
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sabotage-node-${{ matrix.node }}
+          path: evidence/sabotage/mission-sabotage.SIMULATED.json
+          if-no-files-found: error

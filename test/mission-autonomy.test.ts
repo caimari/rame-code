@@ -168,7 +168,7 @@ test('more than 12 steps of work: three internal runs, no "continue", no cards, 
     assert.deepEqual(typed, ['Make check.test.js pass by writing final into a.txt.'], 'the user typed only the goal; nobody said "continue"');
     assert.equal(turns.filter((turn) => turn.kind === 'user' && (turn as { host?: boolean }).host === true).length, 3);
     const report = turns.at(-1) as { text: string; hostRecord: string[] };
-    assert.equal(report.text, 'Mission completed and verified by the host.');
+    assert.equal(report.text, 'Mission completed and verified by the host (conventional level).');
     assert.match(report.hostRecord.join('\n'), /mission: last test run_tests npm:test → exit=0/);
     // The second internal run was told what the first one did.
     const secondPrompt = (h.model.requests[MAX_AGENT_STEPS]?.messages as Message[]).filter((m) => m.role === 'user').pop()?.content ?? '';

@@ -20,10 +20,12 @@
  * - Unreadable stored state is never overwritten.
  */
 
+import { copyManifest, parseAcceptanceManifest, type AcceptanceManifest } from './acceptanceManifest.js';
 import { createHash, randomBytes } from 'node:crypto';
 
 import { ADVISORY_DATA_CLASSES } from './remoteAuthority.js';
 import { checkAdvisoryLimits, storedAdvisoryLimits, type AdvisoryLimits } from './missionAdvisoryLimits.js';
+import { parseMissionAcceptanceReview, type MissionAcceptanceReview } from './missionAcceptanceReview.js';
 import {
   blockingVerifierPrompt,
   parseBlockingVerifiers,
@@ -90,7 +92,7 @@ export interface MissionGrant {
    * package.json it is declared in. The agent may read and run them but never
    * change them; the host itself runs the check before `completed`.
    */
-  acceptance: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }> } | null;
+  acceptance: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }>; scope?: AcceptanceManifest } | null;
   /**
    * First stage for an empty project. It may scaffold files, but it has no
    * test grant and can never complete a task. The host stops it as soon as
@@ -198,6 +200,8 @@ export interface MissionRecord {
   lease: MissionLease | null;
   /** The scaffold exists; nothing runs until the user reviews and authorizes its tests. */
   awaitingVerification?: true;
+  /** Optional Meta review of the proposed bootstrap acceptance; advice only. */
+  acceptanceReview?: MissionAcceptanceReview;
 }
 
 export type MissionResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -327,10 +331,15 @@ function parseGrant(raw: unknown, missionId: string, scopeId: string): MissionGr
     ) {
       return undefined;
     }
+    const scope = a.scope === undefined ? null : parseAcceptanceManifest(a.scope);
+    if (scope === undefined) {
+      return undefined;
+    }
     acceptance = {
       commandId: a.commandId,
       packageJsonHash: a.packageJsonHash,
       files: (a.files as Array<{ path: string; hash: string }>).map((f) => ({ path: f.path, hash: f.hash })),
+      ...(scope === null ? {} : { scope }),
     };
   }
   if (bootstrap && acceptance !== null) {
@@ -458,7 +467,8 @@ function parseMission(raw: unknown): MissionRecord | null {
   const grant = parseGrant(raw.grant, raw.id, raw.scopeId);
   const auto = parseAuto(raw.auto);
   const lease = parseLease(raw.lease);
-  if (grant === undefined || auto === undefined || lease === undefined || (raw.awaitingVerification !== undefined && raw.awaitingVerification !== true)) {
+  const acceptanceReview = parseMissionAcceptanceReview(raw.acceptanceReview, raw.id, raw.scopeId);
+  if (grant === undefined || auto === undefined || lease === undefined || acceptanceReview === undefined || (raw.awaitingVerification !== undefined && raw.awaitingVerification !== true)) {
     return null;
   }
   return {
@@ -481,6 +491,7 @@ function parseMission(raw: unknown): MissionRecord | null {
     auto,
     lease,
     ...(raw.awaitingVerification === true ? { awaitingVerification: true as const } : {}),
+    ...(acceptanceReview === null ? {} : { acceptanceReview }),
   };
 }
 
@@ -896,7 +907,7 @@ export function grantMission(
     /** Autonomous only: the user marked the project trusted; the test commands and the package.json they come from. */
     tests: { trustedProject: boolean; packageJsonHash: string; commandIds: string[] } | null;
     /** The user's frozen acceptance check, or null for none. */
-    acceptance?: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }> } | null;
+    acceptance?: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }>; scope?: AcceptanceManifest } | null;
     /** Empty-project first stage; never carries tests or frozen acceptance. */
     bootstrap?: boolean;
   },
@@ -955,10 +966,17 @@ export function grantMission(
     acceptance:
       acceptance === null
         ? null
-        : { commandId: acceptance.commandId, packageJsonHash: acceptance.packageJsonHash, files: acceptance.files.map((file) => ({ path: file.path, hash: file.hash })) },
+        : {
+            commandId: acceptance.commandId,
+            packageJsonHash: acceptance.packageJsonHash,
+            files: acceptance.files.map((file) => ({ path: file.path, hash: file.hash })),
+            ...(acceptance.scope ? { scope: copyManifest(acceptance.scope) } : {}),
+          },
     ...(bootstrap ? { bootstrap: true as const } : {}),
   };
   delete mission.awaitingVerification;
+  // Keep the review as evidence of what the user considered, but it cannot
+  // alter the grant or the hashes frozen below.
   if (grant.mode === 'autonomous-workspace') {
     // Safety ceiling for chained runs; the normal stop is verification or no progress.
     mission.maxTaskRuns = Math.max(mission.maxTaskRuns, Math.min(MAX_AUTO_MISSION_RUNS, mission.tasks.length * MAX_AUTO_RUNS_PER_TASK));
@@ -1014,6 +1032,7 @@ export function awaitBootstrapVerification(
   );
   mission.grant = null;
   mission.awaitingVerification = true;
+  delete mission.acceptanceReview;
   mission.status = 'active';
   mission.note = 'Scaffold created. Review the new test command and files, then authorize the verification stage. Nothing runs until you do.';
   return { ok: true, value: mission };
@@ -1424,7 +1443,8 @@ export function buildAutoTaskPrompt(
   if (acceptance !== null) {
     parts.push(
       `The user's acceptance check ${acceptance.commandId} must also pass before the Mission can end. Its files are frozen: ${acceptance.files.map((file) => file.path).join(', ')} and package.json. ` +
-        'You may read and run them; you can never change, move, or delete them.',
+        `You may read and run them; you can never change, move, or delete them${(acceptance.scope?.sealed.length ?? 0) > 0 ? `, nor add files to ${acceptance.scope!.sealed.join(', ')}` : ''}.` +
+        ((acceptance.scope?.hidden.length ?? 0) > 0 ? ` The expected values in ${acceptance.scope!.hidden.join(', ')} are hidden from you.` : ''),
     );
   }
   if (auto !== null && auto.userGuidance.length > 0) {
@@ -1451,7 +1471,8 @@ export function leaseHeldByOther(
 /** Paths no tool may change while this Mission has a frozen acceptance check. */
 export function frozenPaths(mission: MissionRecord | null): string[] {
   const acceptance = mission?.grant?.acceptance ?? null;
-  return acceptance === null ? [] : [...acceptance.files.map((file) => file.path), 'package.json'];
+  // A sealed folder is listed with a trailing '/': nothing may be added, changed or removed in it.
+  return acceptance === null ? [] : [...acceptance.files.map((file) => file.path), 'package.json', ...(acceptance.scope?.sealed ?? []).map((dir) => `${dir}/`)];
 }
 
 /**

@@ -74,7 +74,8 @@ export function missionPhase(mission: MissionRecord, live: MissionLiveFacts): Mi
 export type AcceptanceState = 'none' | 'not_run' | 'passed' | 'failed' | 'tampered';
 
 const ACCEPTANCE_PREFIX = 'acceptance (run by the host): ';
-const ACCEPTANCE_PASSED = /exit=0 with every frozen file intact$/;
+// A pass ends here or continues with its level ("; reinforced: …"); ", but …" is a failure.
+const ACCEPTANCE_PASSED = /exit=0 with every frozen file intact(?:$|; )/;
 
 /** The latest host run of the user's frozen acceptance check, if any. */
 export function acceptanceState(mission: MissionRecord): { state: AcceptanceState; summary: string } {

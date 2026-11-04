@@ -8,6 +8,8 @@ Build software inside VS Code with local-first inference, user-governed memory, 
 
 [Installation](#installation) · [User guide](docs/USER_GUIDE.md) · [**For judges**](docs/JUDGES.md) · [Evidence](evidence/README.md) · [Verification](docs/VERIFICATION.md) · [Public VSIX](https://github.com/caimari/rame-code/releases/latest) · [Website](https://ramecode.com/) · [Español](README.es.md)
 
+**Official website:** [https://ramecode.com/](https://ramecode.com/)
+
 Run Meta Muse Glimmer through RAME's managed loopback `llama-server`, or connect to compatible chat models served by Ollama, LM Studio, another `llama-server` or an OpenAI-compatible server. A server on another computer of the private network requires explicit authorization. The executable and model weights are installed separately; RAME does not bundle them.
 
 Use Meta Model API for direct cloud Chat and Agent with models whose advertised capabilities fit the selected mode. During an authorized local Mission, RAME can request optional, budget-limited advice from Meta Muse Spark after an eligible capability stop while the local model retains tool control. This Advisory route is implemented and covered with a simulated Meta API; only direct Spark Chat has a recorded real-API validation so far.

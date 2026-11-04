@@ -8,6 +8,8 @@ Desarrolla software dentro de VS Code con inferencia local-first, memoria gobern
 
 [Instalación](#instalación) · [Guía de usuario](docs/USER_GUIDE.es.md) · [**Para el jurado**](docs/JUDGES.es.md) · [Evidencias](evidence/README.md) · [Verificación](docs/VERIFICATION.es.md) · [VSIX público](https://github.com/caimari/rame-code/releases/latest) · [Web](https://ramecode.com/) · [English](README.md)
 
+**Web oficial:** [https://ramecode.com/](https://ramecode.com/)
+
 Ejecuta Meta Muse Glimmer mediante el `llama-server` loopback gestionado por RAME, o conecta modelos de chat compatibles servidos por Ollama, LM Studio, otro `llama-server` o un servidor compatible con OpenAI. Un servidor situado en otro equipo de la red privada requiere autorización explícita. El ejecutable y los pesos del modelo se instalan por separado; RAME no los incluye.
 
 Utiliza Meta Model API para Chat y Agent cloud directos con modelos cuyas capacidades anunciadas sean adecuadas para el modo elegido. Durante una Mission local autorizada, RAME puede solicitar asesoramiento opcional y limitado por presupuesto a Meta Muse Spark tras una parada de capacidad elegible, mientras el modelo local conserva las herramientas. Esta vía Advisory está implementada y cubierta con una API Meta simulada; por ahora solo Chat directo con Spark tiene una validación registrada contra la API real.

@@ -10,11 +10,21 @@ Desarrolla software dentro de VS Code con inferencia local-first, memoria gobern
 
 **Web oficial:** [https://ramecode.com/](https://ramecode.com/)
 
+## Mira la demostración de 3 minutos
+
+[![Ver la demostración de 3 minutos de RAME Code](https://img.youtube.com/vi/6wyAemPs6jY/maxresdefault.jpg)](https://www.youtube.com/watch?v=6wyAemPs6jY)
+
+Creado durante el **Meta Global AI Developer Hackathon 2026 — Indie Developer Track / Push the Frontier**. [Apoya RAME Code en X](https://x.com/caimaricaldes/status/2118144184733282470).
+
 Ejecuta Meta Muse Glimmer mediante el `llama-server` loopback gestionado por RAME, o conecta modelos de chat compatibles servidos por Ollama, LM Studio, otro `llama-server` o un servidor compatible con OpenAI. Un servidor situado en otro equipo de la red privada requiere autorización explícita. El ejecutable y los pesos del modelo se instalan por separado; RAME no los incluye.
+
+La compatibilidad del backend no garantiza que todos los modelos servidos por él puedan utilizar todos los modos de RAME. Chat, Agent y Mission dependen de las capacidades reales del modelo elegido, incluidas las llamadas a herramientas, y los resultados dependen del modelo, GPU, RAM del sistema, cuantización y tamaño de contexto cargado. La inferencia local no exige una suscripción obligatoria a un servicio de IA, aunque el hardware, la electricidad y el uso opcional de API externas pueden tener costes.
 
 Utiliza Meta Model API para Chat y Agent cloud directos con modelos cuyas capacidades anunciadas sean adecuadas para el modo elegido. Durante una Mission local autorizada, RAME puede solicitar asesoramiento opcional y limitado por presupuesto a Meta Muse Spark tras una parada de capacidad elegible, mientras el modelo local conserva las herramientas. Esta vía Advisory está implementada y cubierta con una API Meta simulada; por ahora solo Chat directo con Spark tiene una validación registrada contra la API real.
 
 > **Escalado cloud controlado — desactivado por defecto.** Activa **Ajustes › Seguridad › Escalada › Permitir escalado a la nube** para que la asistencia cloud esté disponible; no existe fallback silencioso. Tras una parada elegible de Agent local, RAME ofrece una elección visible y solo envía la petición actual a Meta después de una aprobación explícita. Para una Mission local, autorizas por separado **entre 0 y 5 consultas a Meta** al iniciarla y puedes limitar los bytes por petición, los bytes totales, los tokens de salida de cada respuesta y los tokens remotos totales. Una consulta solo aporta consejo acotado: Glimmer conserva el control de las herramientas y el verificador original de la Mission debe pasar antes de considerar recuperado el bloqueo.
+
+> **Enfoque de privacidad.** RAME es local-first y utiliza autorización humana y controles de minimización de datos antes de enviar contexto elegible a un servicio externo. Estos controles técnicos no certifican el cumplimiento del RGPD ni sustituyen la responsabilidad del usuario de establecer una base jurídica adecuada y revisar lo que comparte.
 
 **Inferencia local primero. Asistencia cloud cuando se autoriza. Presupuestos explícitos, decisiones persistentes y verificación respaldada por evidencias.**
 
@@ -71,6 +81,8 @@ Es una base histórica de investigación, no la mejor descripción de la release
 - **Frontera de seguridad:** no se afirma que la ejecución local, las autorizaciones o las evidencias sean resistentes a cualquier manipulación; los comandos y scripts aprobados se ejecutan con los permisos del usuario de VS Code.
 
 El contenido del repositorio, las salidas de herramientas y las respuestas del modelo se consideran datos no confiables. Un modelo no puede concederse autoridad adicional. Consulta la [guía de usuario](docs/USER_GUIDE.es.md) para utilizarlo con seguridad y el [Changelog](CHANGELOG.md#known-limitations) para conocer los límites detallados.
+
+v0.2.0 sigue siendo un proyecto experimental en desarrollo activo. Revisa las limitaciones conocidas anteriores y las del Changelog, incluido el rendimiento de Mission y las rutas cloud/web que todavía necesitan validación con proveedores reales. [Comunica un error o propón una mejora](https://github.com/caimari/rame-code/issues).
 
 ## Instalación
 
@@ -135,7 +147,7 @@ RAME Code puede arrancar directamente `llama-server`; Ollama no es obligatorio.
 
 El servidor administrado escucha únicamente en `127.0.0.1`. RAME Code solo detiene el proceso que él mismo inició.
 
-**Servidores de modelos (v0.2.0).** RAME también puede conectarse a un servidor que ejecutas tú: Ollama, LM Studio, otro `llama-server` o cualquier servidor compatible con OpenAI. **Buscar modelos** los distingue, lista sus modelos de chat con información de herramientas, visión y contexto, y un modelo que según el servidor no puede llamar herramientas queda limitado a Chat. Un servidor en otro ordenador de tu red privada (una IP privada numérica) solo se usa después de que confirmes que se le enviará el trabajo local; se rechazan las direcciones públicas y los nombres de equipo, y nunca se siguen redirecciones. La «visión» de la lista es una capacidad del modelo; RAME todavía no envía imágenes. Probado de verdad con Muse Glimmer 30B en LM Studio (RTX 3090 Ti, por la red privada) y con Ollama 0.32.5.
+**Servidores de modelos (v0.2.0).** RAME puede utilizar directamente `llama-server` de llama.cpp —Ollama no es obligatorio— o conectarse a un servidor que ejecutas tú: Ollama, LM Studio, otro `llama-server` o un endpoint compatible con el estilo OpenAI. **Buscar modelos** distingue los tipos de servidor admitidos, lista sus modelos de chat con información de herramientas, visión y contexto, y un modelo que según el servidor no puede llamar herramientas queda limitado a Chat. Un servidor en otro ordenador de tu red privada (una IP privada numérica) solo se usa después de que confirmes que se le enviará el trabajo local; se rechazan las direcciones públicas y los nombres de equipo, y nunca se siguen redirecciones. La compatibilidad del backend es distinta de la capacidad del modelo: no todos los modelos listados pueden usar herramientas ni completar de forma fiable trabajo de Agent o Mission. La «visión» de la lista es una capacidad del modelo; RAME todavía no envía imágenes. Probado de verdad con Muse Glimmer 30B en LM Studio (RTX 3090 Ti, por la red privada) y con Ollama 0.32.5.
 
 **Acceso web opcional (v0.2.0, desactivado por defecto).** Con un modelo local, Agent puede usar `web_search` y `web_fetch`; esta vía tiene una validación REAL registrada con LM Studio en una LAN privada, DuckDuckGo y `web_fetch`. La web en Chat está implementada, pero es experimental y solo se ha probado con servidores simulados. La web en Mission también está implementada y es experimental: se autoriza por separado con presupuestos de búsquedas/lecturas y dominios opcionales, y solo tiene cobertura con servidores simulados. No presentes Chat ni Mission web como validados contra Internet real. Los destinos privados se rechazan después del DNS y en cada redirección, y no se envían consultas que contengan claves reconocibles o rutas de ficheros. Consulta la [guía de uso](docs/USER_GUIDE.es.md#acceso-web-en-agent-chat-y-mission).
 

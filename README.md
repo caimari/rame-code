@@ -10,11 +10,21 @@ Build software inside VS Code with local-first inference, user-governed memory, 
 
 **Official website:** [https://ramecode.com/](https://ramecode.com/)
 
+## Watch the 3-Minute Demo
+
+[![Watch the RAME Code 3-minute demo](https://img.youtube.com/vi/6wyAemPs6jY/maxresdefault.jpg)](https://www.youtube.com/watch?v=6wyAemPs6jY)
+
+Built during the **Meta Global AI Developer Hackathon 2026 — Indie Developer Track / Push the Frontier**. [Support RAME Code on X](https://x.com/caimaricaldes/status/2118144184733282470).
+
 Run Meta Muse Glimmer through RAME's managed loopback `llama-server`, or connect to compatible chat models served by Ollama, LM Studio, another `llama-server` or an OpenAI-compatible server. A server on another computer of the private network requires explicit authorization. The executable and model weights are installed separately; RAME does not bundle them.
+
+Backend compatibility does not guarantee that every model served by that backend can use every RAME mode. Chat, Agent and Mission depend on the selected model's actual capabilities, including tool calling, and results depend on the model, GPU, system RAM, quantization and loaded context size. Local inference requires no mandatory AI-service subscription, although hardware, electricity and any optional external API usage may still have costs.
 
 Use Meta Model API for direct cloud Chat and Agent with models whose advertised capabilities fit the selected mode. During an authorized local Mission, RAME can request optional, budget-limited advice from Meta Muse Spark after an eligible capability stop while the local model retains tool control. This Advisory route is implemented and covered with a simulated Meta API; only direct Spark Chat has a recorded real-API validation so far.
 
 > **Controlled cloud escalation — default OFF.** Enable **Settings › Security › Escalation › Allow cloud escalation** to make cloud assistance available; there is no silent fallback. After an eligible local Agent stop, RAME offers a visible choice and sends the current request to Meta only after explicit approval. For a local Mission, you separately authorize **0–5 Meta consultations** when starting it and may cap request bytes, total bytes, output tokens per answer and total remote tokens. A consultation supplies bounded advice only: Glimmer keeps tool control, and the Mission's original verifier must pass before the blocker is considered recovered.
+
+> **Privacy posture.** RAME is local-first and uses human authorization and data-minimisation controls before eligible context is sent to an external service. These technical controls are not a certification of GDPR compliance and do not replace the user's responsibility to establish an appropriate legal basis and review what is shared.
 
 **Local inference first. Cloud assistance when authorized. Explicit budgets, persistent decisions and evidence-backed verification.**
 
@@ -71,6 +81,8 @@ It is a historical research baseline, not the best description of the current re
 - **Security boundary:** local execution, approvals and evidence are not claimed to be tamper-proof; approved commands and project scripts run with the VS Code user's operating-system permissions.
 
 Repository content, tool output and model output are treated as untrusted inputs. A model cannot grant itself additional authority. See the [user guide](docs/USER_GUIDE.md) for safe use and the [Changelog](CHANGELOG.md#known-limitations) for the detailed limits.
+
+v0.2.0 remains an experimental project under active development. Review the known limitations above and in the Changelog, including Mission performance and cloud/web paths that still need real-provider validation. [Report a bug or propose an improvement](https://github.com/caimari/rame-code/issues).
 
 ## Installation
 
@@ -135,7 +147,7 @@ RAME Code can start `llama-server` directly; Ollama is not required.
 
 The managed server binds to `127.0.0.1`. RAME Code stops only the process it started.
 
-**Model servers (v0.2.0).** RAME can also connect to a server you run yourself: Ollama, LM Studio, another `llama-server` or any OpenAI-compatible server. **Find models** tells them apart, lists their chat models with tool, vision and context information, and a model the server says cannot call tools is limited to Chat. A server on another computer of your private network (a numeric private IP) is used only after you confirm that local work will be sent there; public addresses and host names are refused, and redirects are never followed. "Vision" in the list is the model's capability; RAME does not send images yet. Tested for real with Muse Glimmer 30B on LM Studio (RTX 3090 Ti, over the private network) and with Ollama 0.32.5.
+**Model servers (v0.2.0).** RAME can use `llama-server` from llama.cpp directly — Ollama is not required — or connect to a server you run yourself: Ollama, LM Studio, another `llama-server` or a compatible OpenAI-style endpoint. **Find models** tells supported server types apart, lists their chat models with tool, vision and context information, and a model the server says cannot call tools is limited to Chat. A server on another computer of your private network (a numeric private IP) is used only after you confirm that local work will be sent there; public addresses and host names are refused, and redirects are never followed. Backend compatibility is separate from model capability: not every listed model can use tools or complete Agent/Mission work reliably. "Vision" in the list is the model's capability; RAME does not send images yet. Tested for real with Muse Glimmer 30B on LM Studio (RTX 3090 Ti, over the private network) and with Ollama 0.32.5.
 
 **Optional web access (v0.2.0, default OFF).** With a local model, Agent can use `web_search` and `web_fetch`; this path has one recorded REAL validation with LM Studio on a private LAN, DuckDuckGo and `web_fetch`. Chat web is implemented but experimental and tested only with simulated servers. Mission web is also implemented but experimental: it is authorized separately with search/read budgets and optional domains, and has only simulated-server coverage. Do not present Chat or Mission web as validated against the real internet. Private destinations are refused after DNS and on every redirect, and queries containing recognized keys or file paths are not sent. See the [user guide](docs/USER_GUIDE.md#agent-chat-and-mission-web-access).
 

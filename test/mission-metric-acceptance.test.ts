@@ -169,9 +169,13 @@ test('measured runs: met criteria retain the check summary and label every proje
 const BENCH =
   "const { latencyMs } = require('../app.js');\n" +
   'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, latencyMs);\n';
-const SLOW = 'module.exports = { latencyMs: 1200 };\n';
+// The slow code waits well above the threshold and the fast code waits 0, so the start-up cost of a check run
+// never decides the verdict. CI evidence (2026-11-11, ubuntu-latest): an acceptance run with a 0 ms wait took
+// 996-1133 ms there (RAME's trace hooks plus process start-up), so the old 1000 ms threshold failed B-27 twice.
+// 2500 still leaves the slow code (3000 ms) out at any start-up cost.
+const SLOW = 'module.exports = { latencyMs: 3000 };\n';
 const FAST = 'module.exports = { latencyMs: 0 };\n';
-const HOST_WALL = { metric: 'wall_ms', op: '<=' as const, value: 1000 };
+const HOST_WALL = { metric: 'wall_ms', op: '<=' as const, value: 2500 };
 const CRITERIA = { criteria: [HOST_WALL], repeats: 3, maxSpreadPct: 30 };
 const stored = (h: HostHarness): MissionRecord => (h.memento.get(MISSION_STATE_KEY) as { missions: MissionRecord[] }).missions[0] as MissionRecord;
 const notes = (h: HostHarness): string => stored(h).evidence.map((entry) => entry.text).join('\n');
@@ -186,7 +190,7 @@ async function withMeasuredMission(body: (h: HostHarness, mission: { id: string;
     await h.writeFile('t.js', 'process.exit(0);\n');
     await h.writeFile('app.js', SLOW);
     await h.writeFile('acceptance/bench.js', BENCH);
-    const plan = { goal: 'Make app.js fast enough.', assumptions: [], steps: [{ id: 't1', title: 'Speed up app.js', successCriterion: 'wall_ms <= 1000 measured by the host' }], risks: [] };
+    const plan = { goal: 'Make app.js fast enough.', assumptions: [], steps: [{ id: 't1', title: 'Speed up app.js', successCriterion: 'wall_ms <= 2500 measured by the host' }], risks: [] };
     h.model.enqueue({ kind: 'json', body: toolCallReply([{ id: 'plan', name: 'submit_mission_plan', args: plan }]) });
     await h.provider.sendMessage('Make app.js fast enough: p95 at most 50 ms.', 'mission', 'local');
     h.send({ type: 'navigate', screen: 'settings' });
@@ -215,17 +219,17 @@ test('B-27 sabotage: hand-written good numbers do not complete the Mission; only
     await h.provider.startMission(mission.id, mission.revision, 'autonomous-workspace', null, true, { commandId: 'npm:check', files: ['acceptance/bench.js'], metrics: CRITERIA });
     const record = stored(h);
     const text = notes(h);
-    assert.match(text, /measured acceptance: wall_ms <= 1000 \[observed by the host\] \(median of 3 check run\(s\), spread up to 30%\)/);
+    assert.match(text, /measured acceptance: wall_ms <= 2500 \[observed by the host\] \(median of 3 check run\(s\), spread up to 30%\)/);
     assert.deepEqual(record.grant?.acceptance?.metrics, CRITERIA, 'the criteria are part of the grant');
     const prompt = JSON.stringify(h.model.requests[0]);
-    assert.match(prompt, /The host judges: wall_ms <= 1000 \[observed by the host\]/);
+    assert.match(prompt, /The host judges: wall_ms <= 2500 \[observed by the host\]/);
     assert.match(prompt, /Host-observed values have maximum trust/);
     // The first host check measured the slow code, whatever results.json said.
-    assert.match(text, /acceptance \(run by the host\): metrics NOT met: wall_ms median .* <= 1000: NOT met/);
+    assert.match(text, /acceptance \(run by the host\): metrics NOT met: wall_ms median .* <= 2500: NOT met/);
     assert.match(JSON.stringify(h.model.requests), /ACCEPTANCE FAILED: .*metrics NOT met: wall_ms median/, 'the agent was told what the host measured');
     // Then the fix: measured, met, completed.
     assert.equal(record.status, 'completed', record.note);
-    assert.match(text, /acceptance \(run by the host\): metrics measured by the host: wall_ms median .* <= 1000: met \[observed by the host\]; npm:check exit=0 with every frozen file intact; protected verification/);
+    assert.match(text, /acceptance \(run by the host\): metrics measured by the host: wall_ms median .* <= 2500: met \[observed by the host\]; npm:check exit=0 with every frozen file intact; protected verification/);
     assert.equal(await h.readFile('results.json'), JSON.stringify({ p95_ms: 5, errors: 0 }), 'the hand-written file is still there, never used');
     const scopeReviews = fakeWindow.warningCalls.filter((call) => /^Count the acceptance check npm:check with these changes\?$/.test(call.message));
     assert.equal(scopeReviews.length, 1, 'the new results.json is reviewed once, not once per measured run');
@@ -235,7 +239,7 @@ test('B-27 sabotage: hand-written good numbers do not complete the Mission; only
 
 test('code under test cannot forge acceptance through the legacy results channel', async () => {
   await withMeasuredMission(async (h, mission) => {
-    const cheat = `const key = Object.keys(process.env).find((name) => name.endsWith('RESULTS_FILE')); if (key) require('node:fs').writeFileSync(process.env[key], '{"wall_ms":1}');\nmodule.exports = { latencyMs: 1200 };\n`;
+    const cheat = `const key = Object.keys(process.env).find((name) => name.endsWith('RESULTS_FILE')); if (key) require('node:fs').writeFileSync(process.env[key], '{"wall_ms":1}');\nmodule.exports = { latencyMs: 3000 };\n`;
     h.model.enqueue(patch('cheat', 'app.js', SLOW, cheat), say('Done.'), say('Done, no test needed.'));
     await h.provider.startMission(mission.id, mission.revision, 'autonomous-workspace', null, true, { commandId: 'npm:check', files: ['acceptance/bench.js'], metrics: CRITERIA });
     const record = stored(h);

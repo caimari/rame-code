@@ -27,6 +27,9 @@ export interface ViewHtmlOptions {
   /** Model evidence inside Run details (loaded after i18n, before the main script). */
   evidenceUxUri?: string;
   localServersUxUri?: string;
+  /** Autonomy & Permissions (loaded after the servers block, before the main script). */
+  autonomyUxUri?: string;
+  advisorUxUri?: string;
 }
 
 /** Create a fresh CSP nonce for one webview load. */
@@ -55,12 +58,13 @@ export function buildViewHtml(options: ViewHtmlOptions): string {
   const scriptUri = escapeAttr(options.scriptUri);
   const styleUri = escapeAttr(options.styleUri);
   const nonce = escapeAttr(options.nonce);
-  const i18nScript = options.i18nUri ? `<script nonce="${nonce}" src="${escapeAttr(options.i18nUri)}"></script>\n` : '';
-  const settingsTabsScript = options.settingsTabsUri ? `<script nonce="${nonce}" src="${escapeAttr(options.settingsTabsUri)}"></script>\n` : '';
-  const composerUxScript = options.composerUxUri ? `<script nonce="${nonce}" src="${escapeAttr(options.composerUxUri)}"></script>\n` : '';
-  const remoteUxScript = options.remoteUxUri ? `<script nonce="${nonce}" src="${escapeAttr(options.remoteUxUri)}"></script>\n` : '';
-  const evidenceUxScript = options.evidenceUxUri ? `<script nonce="${nonce}" src="${escapeAttr(options.evidenceUxUri)}"></script>\n` : '';
-  const serversUxScript = options.localServersUxUri ? `<script nonce="${nonce}" src="${escapeAttr(options.localServersUxUri)}"></script>\n` : '';
+  const tag = (uri: string | undefined): string => (uri ? `<script nonce="${nonce}" src="${escapeAttr(uri)}"></script>\n` : '');
+  const i18nScript = tag(options.i18nUri);
+  const settingsTabsScript = tag(options.settingsTabsUri);
+  const composerUxScript = tag(options.composerUxUri);
+  const remoteUxScript = tag(options.remoteUxUri);
+  const evidenceUxScript = tag(options.evidenceUxUri);
+  const serversUxScript = tag(options.localServersUxUri) + tag(options.autonomyUxUri) + tag(options.advisorUxUri);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -376,8 +380,8 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
             <p id="missionFrozenSummary" class="hint" role="status" aria-live="polite"></p>
             <p class="hint" id="missionDependenciesNote" role="note">With an acceptance check, RAME Code blocks its own tools from changing node_modules. node_modules is not hashed: test scripts, other processes, or you can still change the dependencies.</p>
           </div>
-          <p class="hint" id="missionSandboxWarning" role="note">Not a sandbox: test scripts run with your user permissions and can reach other files, the network, or other processes. RAME Code only checks the paths its own tools use. Use autonomous workspace only for a project you trust.</p>
-          <p class="hint">The permission covers only this Mission, this project, and the local model. Autonomous workspace never leaves the project through RAME's tools, never touches .git, .env, keys, or credentials, runs no shell, runs only the allowlisted tests of the current package.json (a changed package.json asks again), and still asks before deleting, moving, or changing project memory.</p>
+          <p class="hint" id="missionSandboxWarning" role="note">Test scripts run with the isolation level of Security → Terminal commands: Project or Closed (Linux) let them write only in the project, temporary and package-cache folders (Closed: no network); Total gives them your user permissions. They can still read your files. Use autonomous workspace only for a project you trust.</p>
+          <p class="hint">The permission covers only this Mission, this project, and its main model. Autonomous workspace never leaves the project through RAME's tools, never touches .git, .env, keys, or credentials, runs no shell, runs only the allowlisted tests of the current package.json (a changed package.json asks again), and still asks before deleting, moving, or changing project memory.</p>
           <fieldset id="missionConsultRow" hidden>
             <legend>Meta Advisory</legend>
             <div id="missionConsultCountRow">
@@ -392,17 +396,17 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
               </select>
             </div>
             <p id="missionConsultSummary" class="hint" role="status" aria-live="polite"></p>
-            <p class="hint">Advice only: Glimmer keeps every tool. Meta receives no file contents and cannot execute actions.</p>
+            <p class="hint">Advice only: the main model keeps every tool. The advisor receives no file contents and cannot execute actions.</p>
             <details id="missionConsultLimits">
               <summary>Advisory limits</summary>
               <label for="missionLimitRequestBytes">Bytes per request, at most (empty = 12000)</label>
               <input id="missionLimitRequestBytes" type="number" min="1000" max="24000" step="1" placeholder="12000">
               <label for="missionLimitTotalBytes">Total bytes sent, at most (empty = 12000 × consultations)</label>
-              <input id="missionLimitTotalBytes" type="number" min="1000" max="120000" step="1" placeholder="12000 × n">
+              <input id="missionLimitTotalBytes" type="number" min="1000" max="12000000" step="1" placeholder="12000 × n">
               <label for="missionLimitOutputTokens">Output tokens per answer, at most (empty = 2048)</label>
               <input id="missionLimitOutputTokens" type="number" min="256" max="8192" step="1" placeholder="2048">
               <label for="missionLimitTotalTokens">Remote token budget, at most (empty = 14048 × consultations)</label>
-              <input id="missionLimitTotalTokens" type="number" min="1000" max="200000" step="1" placeholder="14048 × n">
+              <input id="missionLimitTotalTokens" type="number" min="1000" max="14048000" step="1" placeholder="14048 × n">
               <p class="hint">RAME refuses before sending anything that would exceed these limits and never raises them itself.</p>
             </details>
           </fieldset>
@@ -438,7 +442,6 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
         <section id="missionReport" aria-labelledby="missionReportHeading" hidden>
           <h4 id="missionReportHeading">Final report</h4>
           <dl id="missionReportFacts" class="mission-facts"></dl>
-          <p class="hint" role="note">No sandbox: test scripts ran with your user permissions and could reach other files, the network, or other processes.</p>
         </section>
       </section>
       <section id="activitySection" aria-labelledby="activity-heading">
@@ -475,6 +478,7 @@ dl.mission-facts dd { margin: 0; overflow-wrap: anywhere; }
         <p id="localIssueHint" class="hint"></p>
         <div class="row">
           <button id="localIssueStart" type="button" hidden>Start Muse Glimmer</button>
+          <button id="localIssueReload" type="button" hidden>Reload in LM Studio with more context</button>
           <button id="localIssueSettings" type="button">Open runtime settings</button>
           <button id="localIssueDelegate" type="button" disabled hidden>Run this request with Spark</button>
         </div>

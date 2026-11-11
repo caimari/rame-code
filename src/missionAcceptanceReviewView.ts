@@ -11,7 +11,8 @@ export interface MissionAcceptanceReviewView {
   requestBytes: number;
   sentBytes: number;
   maxRequestBytes: number;
-  maxConsultations: number;
+  /** '∞' = no count limit. */
+  maxConsultations: number | '∞';
   maxOutputTokens: number;
   maxTotalTokens: number;
   attempts: number;
@@ -51,7 +52,7 @@ export function sanitizeMissionAcceptanceReviewView(value: unknown): MissionAcce
     requestBytes: count(review.requestBytes),
     sentBytes: count(review.sentBytes),
     maxRequestBytes: count(review.maxRequestBytes),
-    maxConsultations: count(review.maxConsultations),
+    maxConsultations: review.maxConsultations === null ? '∞' : count(review.maxConsultations),
     maxOutputTokens: count(review.maxOutputTokens),
     maxTotalTokens: count(review.maxTotalTokens),
     attempts: count(review.attempts),

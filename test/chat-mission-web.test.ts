@@ -213,6 +213,8 @@ test('autonomous Mission with a web budget: no card per request; every request i
   const searx = await fakeSearx(RESULTS);
   try {
     await withMission(searx.origin, async (h, mission) => {
+      // The user pre-authorized web budgets for autonomous Missions of this workspace (Autonomy & Permissions).
+      await h.preauthorize({ missionWeb: true });
       h.send({ type: 'missionWebSet', missionId: mission.id, enabled: true, maxSearches: 2, maxFetches: 1, domains: [] });
       h.model.enqueue(
         tool('s1', 'web_search', { query: 'current Node.js LTS version' }),
@@ -256,6 +258,84 @@ test('Mission with authorized domains: pages elsewhere are refused (also on redi
       assert.match(result(h, 's'), /https:\/\/evil\.example\/x \(outside the domains authorized for this Mission: cannot be read\)/);
       assert.match(result(h, 'f'), /^Not fetched: evil\.example is not one of the domains authorized for this Mission \(nodejs\.org\)/);
       assert.equal(stored(h).grant?.web?.fetches, 0, 'a refused read spends nothing');
+    });
+  } finally {
+    await searx.close();
+  }
+});
+
+test('a web call the user denied stays denied across a reload: nothing replays, old cards approve nothing, resuming asks again', async () => {
+  // Suggested on r/hackathon (2026-11-06): deny a Mission web request, restart, resume,
+  // and check that approved work is kept and no earlier approval or denial is reused.
+  const searx = await fakeSearx(RESULTS);
+  try {
+    await withMission(searx.origin, async (h, mission) => {
+      h.send({ type: 'missionWebSet', missionId: mission.id, enabled: true, maxSearches: 2, maxFetches: 2, domains: [] });
+      type Card = { actionId: string; digest: string; tool: string };
+      const pendingOf = (state: PostedState) => (state.agentPending ?? null) as Card | null;
+      const status = () => stored(h).status;
+      h.model.enqueue(
+        tool('w1', 'apply_patch', { files: [{ path: 'NOTES.md', expectedHash: sha(''), newContent: 'Node ?\n' }] }),
+        tool('s1', 'web_search', { query: 'current Node.js LTS version' }),
+      );
+      const before = h.provider;
+      const run = before.startMission(mission.id, mission.revision, 'supervised', null, false, null);
+
+      // 1. The user approves a write, then denies the web search: the run stops there.
+      const approved = pendingOf(await h.waitFor((state) => state.agentPending?.tool === 'apply_patch')) as Card;
+      await before.approveAgentAction(approved.actionId, approved.digest);
+      const denied = pendingOf(await h.waitFor((state) => state.agentPending?.tool === 'web_search')) as Card;
+      await before.rejectAgentAction(denied.actionId, denied.digest);
+      await run;
+      assert.equal(await h.readFile('NOTES.md'), 'Node ?\n', 'the approved write took effect');
+      assert.deepEqual(searx.queries, [], 'the denied search was never sent');
+      assert.equal(stored(h).grant?.web?.searches, 0, 'a denied search spends nothing of the web budget');
+      const statusBeforeReload = status();
+      assert.equal(statusBeforeReload, 'interrupted', 'a denial stops the run; nothing goes on by itself');
+      assert.match(notes(h), /You rejected an action/);
+
+      // 2. VS Code reloads.
+      const requestsBeforeReload = h.model.requests.length;
+      before.dispose();
+      h.createProvider();
+      h.send({ type: 'navigate', screen: 'settings' });
+      await h.waitFor((state) => missionOf(state) !== null);
+      assert.equal(h.model.requests.length, requestsBeforeReload, 'the reload made no model call');
+      assert.equal(status(), statusBeforeReload, 'the Mission is as the user left it');
+      assert.ok(stored(h).evidence.some((entry) => /apply_patch/.test(entry.text)), 'the approved write is still in the Mission record');
+
+      // 3. The cards from before the reload approve nothing in the new window.
+      for (const old of [approved, denied]) {
+        await h.provider.approveAgentAction(old.actionId, old.digest);
+        assert.equal(h.last().agentPending ?? null, null);
+      }
+      assert.deepEqual(searx.queries, []);
+      assert.equal(await h.readFile('NOTES.md'), 'Node ?\n');
+
+      // 4. Resume: the same search is proposed again. It is a NEW card: the old denial is not
+      //    turned into a permission, and neither old card's digest can approve it.
+      const fresh = stored(h);
+      h.model.requests.length = 0;
+      h.model.enqueue(tool('s2', 'web_search', { query: 'current Node.js LTS version' }), say('Stopped.'));
+      const resumed = h.provider.resumeMission(fresh.id, fresh.revision);
+      const again = pendingOf(await h.waitFor((state) => state.agentPending?.tool === 'web_search')) as Card;
+      // The digest hashes the action itself, so the same search has the same digest; what makes
+      // each card single-use is its new actionId. The denied card (old id) approves nothing,
+      // and the approved write's digest cannot approve the search.
+      assert.notEqual(again.actionId, denied.actionId, 'a new card, not the denied one');
+      assert.equal(again.digest, denied.digest, 'same action, same digest');
+      await h.provider.approveAgentAction(denied.actionId, denied.digest);
+      assert.equal(pendingOf(h.last())?.actionId, again.actionId, 'the denied card is refused; the real card is still waiting');
+      await h.provider.approveAgentAction(again.actionId, approved.digest);
+      assert.equal(pendingOf(h.last())?.actionId, again.actionId, "the approved write's digest is refused for the search");
+      assert.deepEqual(searx.queries, [], 'no old card sent the search');
+
+      // 5. The user denies it again: still nothing searched, the approved write is intact.
+      await h.provider.rejectAgentAction(again.actionId, again.digest);
+      await resumed;
+      assert.deepEqual(searx.queries, [], 'both denials held');
+      assert.equal(stored(h).grant?.web?.searches, 0);
+      assert.equal(await h.readFile('NOTES.md'), 'Node ?\n');
     });
   } finally {
     await searx.close();

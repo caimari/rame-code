@@ -29,6 +29,8 @@ function loadI18n(): I18n {
   vm.runInNewContext(readFileSync('media/remoteUx.js', 'utf8'), context);
   vm.runInNewContext(readFileSync('media/evidenceUx.js', 'utf8'), context);
   vm.runInNewContext(readFileSync('media/localServersUx.js', 'utf8'), context);
+  vm.runInNewContext(readFileSync('media/autonomyUx.js', 'utf8'), context);
+  vm.runInNewContext(readFileSync('media/advisorUx.js', 'utf8'), context);
   assert.ok(context.window.RAME_I18N);
   return context.window.RAME_I18N;
 }
@@ -54,7 +56,11 @@ test('every interface string of the script and the markup has a Spanish entry', 
   const evidenceCode = evidenceUx.slice(0, evidenceUx.indexOf('var ES = {')) + evidenceUx.slice(evidenceUx.indexOf('\n  };', evidenceUx.indexOf('var ES = {')));
   const serversUx = readFileSync('media/localServersUx.js', 'utf8');
   const serversCode = serversUx.slice(0, serversUx.indexOf('var ES = {')) + serversUx.slice(serversUx.indexOf('\n  };', serversUx.indexOf('var ES = {')));
-  const script = [readFileSync('media/main.js', 'utf8'), withoutTable, evidenceCode, serversCode].join('\n');
+  const autonomyUx = readFileSync('media/autonomyUx.js', 'utf8');
+  const autonomyCode = autonomyUx.slice(0, autonomyUx.indexOf('var ES = {')) + autonomyUx.slice(autonomyUx.indexOf('\n  };', autonomyUx.indexOf('var ES = {')));
+  const advisorUx = readFileSync('media/advisorUx.js', 'utf8');
+  const advisorCode = advisorUx.slice(0, advisorUx.indexOf('var ES = {')) + advisorUx.slice(advisorUx.indexOf('\n  };', advisorUx.indexOf('var ES = {')));
+  const script = [readFileSync('media/main.js', 'utf8'), withoutTable, evidenceCode, serversCode, autonomyCode, advisorCode].join('\n');
   const used = new Set<string>();
   for (const match of script.matchAll(/\bt\('((?:[^'\\]|\\.)*)'\)/g)) {
     used.add(unescapeLiteral(match[1] as string));
@@ -106,6 +112,22 @@ test('templates keep their slots and the table loads after the markup, before th
 
 test('host messages are translated by exact text or pattern; unknown text and values stay as written', () => {
   const tr = (text: string): string => i18n.translateHost('es', text);
+  assert.equal(
+    tr('This environment has no protected isolation: the acceptance check will run without isolation. Code under test could read hidden cases and alter its results.'),
+    'Este entorno no tiene aislamiento protegido: la comprobación de aceptación se ejecutará sin aislamiento. El código evaluado podría leer los casos ocultos y alterar sus resultados.',
+  );
+  assert.equal(tr('verification: protected'), 'verificación: protegida');
+  assert.equal(tr('verification: unprotected'), 'verificación: sin aislamiento');
+  assert.equal(tr('verification changed from protected to unprotected: no Landlock'), 'la verificación cambió de protegida a sin aislamiento: no Landlock');
+  assert.equal(
+    tr('Not run: protected verification requires read confinement and a closed network, and RAME isolates commands only on Linux for now (this is Windows).'),
+    'No ejecutado: la verificación protegida exige lecturas restringidas y red cerrada; solo está disponible en Linux, no en Windows.',
+  );
+  assert.equal(
+    tr('Not run: protected verification requires read confinement and a closed network, and RAME isolates commands only on Linux for now (this is macOS).'),
+    'No ejecutado: la verificación protegida exige lecturas restringidas y red cerrada; solo está disponible en Linux, no en macOS.',
+  );
+  assert.match(tr('Blocked: NOT COUNTED: the host measured the acceptance check twice and both measurements were inconclusive (the runs disagree more than allowed). The Mission is not passed; retry it when the machine is less busy, or review the criteria.'), /^Bloqueada: NO CONTABILIZADA: el host midió la comprobación de aceptación dos veces/);
   assert.equal(tr('Saved shipping.free_threshold_eur v2 = 60.'), 'Guardado: shipping.free_threshold_eur v2 = 60.');
   assert.equal(tr('Memory change rejected. Nothing was written.'), 'Cambio de memoria rechazado. No se guardó nada.');
   assert.equal(
@@ -306,4 +328,15 @@ test('memory actions show progress and their answer inside Project memory', () =
   assert.match(html, /Advanced: add a decision manually/);
   // The picker shows only folders the host listed; nothing is typed in.
   assert.doesNotMatch(script.slice(script.indexOf('function renderMemoryProjects'), script.indexOf('function renderMemory(')), /innerHTML/);
+});
+
+test('Spanish: Full Access reads as the top level of the selector, not as a link to Settings', () => {
+  const level = i18n.translate('es', 'Full Access — no cards for the parts you choose; asks for confirmation.');
+  assert.equal(level, 'Acceso total — sin tarjetas para las partes que elijas; pide confirmación.');
+  assert.equal(i18n.translate('es', 'Until you turn it off'), 'Hasta que lo apagues');
+  assert.equal(i18n.translate('es', 'Full Access — on until {0}; choose a lower level to turn it off.').replace('{0}', i18n.translate('es', 'you turn it off')), 'Acceso total — activo hasta que lo apagues; elige un nivel inferior para apagarlo.');
+  assert.doesNotMatch(level, /…|Autonomía y permisos/, 'a level of the selector, not a way to another panel');
+  assert.equal(i18n.translate('es', 'Full Access expired'), 'Acceso total caducado');
+  assert.equal(i18n.translate('es', 'Full Access expired: the permission is back to {0}.'), 'El acceso total ha caducado: el permiso vuelve a {0}.');
+  assert.equal(i18n.keys('es').includes('Full Access… — a separate permission in Autonomy & Permissions; no profile turns it on'), false, 'the old link wording is gone');
 });

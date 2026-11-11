@@ -11,8 +11,8 @@
 import { MAX_AUDIT_ENTRIES } from './agentPolicy.js';
 import type { AgentProfileId } from './agentProfiles.js';
 
-/** mission-grant: allowed by the Mission's own authorization (not by the Agent profile). */
-export type AuditDecision = 'human' | 'profile-auto' | 'mission-grant' | 'rejected' | 'policy';
+/** mission-grant: allowed by the Mission's own authorization (not by the Agent profile); full-access: by Full Access (Autonomy & Permissions). */
+export type AuditDecision = 'human' | 'profile-auto' | 'mission-grant' | 'full-access' | 'rejected' | 'policy';
 
 export interface AuditEntry {
   seq: number;
@@ -111,7 +111,7 @@ export class AgentAuditLog {
         typeof record.tool !== 'string' ||
         typeof record.digest !== 'string' ||
         !/^[0-9a-f]{64}$/.test(record.digest) ||
-        (record.decision !== 'human' && record.decision !== 'profile-auto' && record.decision !== 'mission-grant' && record.decision !== 'rejected' && record.decision !== 'policy') ||
+        !['human', 'profile-auto', 'mission-grant', 'full-access', 'rejected', 'policy'].includes(record.decision as string) ||
         typeof record.result !== 'string' ||
         typeof record.seq !== 'number'
       ) {

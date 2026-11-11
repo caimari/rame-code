@@ -20,7 +20,7 @@ export function missionRemoteView(mission: MissionRecord): MissionRemoteView | n
   const last = [...mission.evidence].reverse().find((entry) => entry.text.startsWith('remote advice'));
   return {
     model: escalation?.model ?? '',
-    maxConsultations: escalation?.maxConsultations ?? 0,
+    maxConsultations: escalation === null ? 0 : (escalation.maxConsultations ?? ('∞' as const)),
     attempts: escalation?.used ?? 0,
     validResponses: escalation?.validResponses ?? 0,
     limits:

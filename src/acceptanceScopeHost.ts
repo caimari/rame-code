@@ -12,10 +12,13 @@ import { currentFileHash } from './agentController.js';
 import type { AgentFs } from './agentHost.js';
 import { planAcceptanceDependencies } from './acceptanceDependencies.js';
 import { MAX_BASELINE_FILES, type AcceptanceManifest } from './acceptanceManifest.js';
-import { acceptanceTraceEnv, classifyAcceptanceScope, parseTrace, type ParsedTrace } from './acceptanceTrace.js';
+import { acceptanceTraceEnv, classifyAcceptanceScope, parseTrace, TRACE_RUNTIME_DIR, type ParsedTrace } from './acceptanceTrace.js';
 import { CASES_FILE } from './hostCases.js';
+import { REFERENCE_FILE } from './referenceCheck.js';
 import { FINGERPRINT_VERSION, printsOf, snapshotProject } from './projectSnapshot.js';
 import type { ProviderHost } from './providerTypes.js';
+import { protectedProjectAccess, protectedVerifierSecret } from './protectedVerifier.js';
+import { currentVerificationMode, UNPROTECTED_VERIFICATION_WARNING, verificationLabel, type ProtectedInvocationAccess, type VerificationMode } from './shellIsolation.js';
 
 /** The grant schema's ceiling on frozen files (listed, environment and verifier support). */
 export const MAX_FROZEN_ACCEPTANCE_FILES = 20;
@@ -30,7 +33,11 @@ export async function runTraced(
   root: string,
   observeOnly = false,
   given?: AbortController,
-): Promise<{ output: string; trace: ParsedTrace | null; interrupted: boolean }> {
+  /** Extra variables for this run only (for example the private trace file). */
+  extraEnv: Record<string, string> = {},
+  protectedAccess?: ProtectedInvocationAccess,
+  verificationMode?: VerificationMode,
+): Promise<{ output: string; trace: ParsedTrace | null; interrupted: boolean; elapsedMs: number }> {
   // Registered before any await: a Stop can never fall between two steps.
   const controller = given ?? new AbortController();
   if (given === undefined) {
@@ -40,14 +47,19 @@ export async function runTraced(
   const file = path.join(dir, 'trace.jsonl');
   try {
     if (controller.signal.aborted) {
-      return { output: '', trace: null, interrupted: true };
+      return { output: '', trace: null, interrupted: true, elapsedMs: 0 };
     }
     let output: string;
+    const started = process.hrtime.bigint();
     try {
-      output = await host.runAllowlistedTest(command, controller.signal, root, acceptanceTraceEnv(file, root, process.env.NODE_OPTIONS ?? '', undefined, observeOnly));
+      const resultWrites = typeof extraEnv.RAME_RESULTS_FILE === 'string' && path.isAbsolute(extraEnv.RAME_RESULTS_FILE) ? [path.dirname(extraEnv.RAME_RESULTS_FILE)] : [];
+      const confined = protectedAccess === undefined
+        ? undefined
+        : { ...protectedAccess, readTrees: [...(protectedAccess.readTrees ?? []), dir], writeTrees: [...(protectedAccess.writeTrees ?? []), dir, ...resultWrites] };
+      output = await host.runAllowlistedTest(command, controller.signal, root, { ...extraEnv, ...acceptanceTraceEnv(file, root, process.env.NODE_OPTIONS ?? '', undefined, observeOnly), TMPDIR: dir, TMP: dir, TEMP: dir }, confined, verificationMode);
     } catch (error) {
       if (controller.signal.aborted) {
-        return { output: '', trace: null, interrupted: true };
+        return { output: '', trace: null, interrupted: true, elapsedMs: 0 };
       }
       throw error;
     }
@@ -57,7 +69,7 @@ export async function runTraced(
     } catch {
       // no trace written: the run could not be observed
     }
-    return { output, trace: text.length > 0 ? parseTrace(text) : null, interrupted: false };
+    return { output, trace: text.length > 0 ? parseTrace(text) : null, interrupted: false, elapsedMs: Number(process.hrtime.bigint() - started) / 1_000_000 };
   } finally {
     if (given === undefined && host.acceptanceController === controller) {
       host.acceptanceController = null;
@@ -125,7 +137,8 @@ export async function protectAcceptanceScope(
   const controller = new AbortController();
   host.acceptanceController = controller;
   try {
-    return await protectWith(host, fs, root, command, commandId, listed, listedPaths, projectName, controller);
+    const mode = await currentVerificationMode();
+    return await protectWith(host, fs, root, command, commandId, listed, listedPaths, projectName, controller, mode);
   } finally {
     if (host.acceptanceController === controller) {
       host.acceptanceController = null;
@@ -143,12 +156,25 @@ async function protectWith(
   listedPaths: string[],
   projectName: string,
   controller: AbortController,
+  mode: VerificationMode,
 ): Promise<ProtectedScope> {
   const plan = await planAcceptanceDependencies(fs, listedPaths, projectName);
   host.status = `Observing what the acceptance check ${commandId} loads and reads…`;
   await host.postState();
   // Observation only: missing code under test is stubbed so the check runs further.
-  const run = await runTraced(host, command, root, true, controller);
+  const beforeObservation = await snapshotProject(root, { signal: controller.signal });
+  if (!beforeObservation.ok) {
+    return { ok: false, error: 'RAME could not build a read-confined view of the project. Nothing was authorized.' };
+  }
+  if (beforeObservation.unreadable.length > 0) {
+    return { ok: false, error: `RAME cannot read ${beforeObservation.unreadable.slice(0, 3).join(', ')} to record it, so the check cannot be protected. Nothing was authorized.` };
+  }
+  const hidden = new Set(listedPaths.filter((file) => CASES_FILE.test(file) || REFERENCE_FILE.test(file)));
+  const access = protectedProjectAccess(root, [...beforeObservation.files.keys()].filter((file) => !hidden.has(file) && !protectedVerifierSecret(file)), [], null, [TRACE_RUNTIME_DIR]);
+  if (!access.ok) {
+    return { ok: false, error: `The acceptance check cannot be read-confined: ${access.error}. Nothing was authorized.` };
+  }
+  const run = await runTraced(host, command, root, true, controller, {}, access.access, mode);
   if (run.interrupted || host.disposed) {
     return { ok: false, error: 'The acceptance check was stopped while RAME observed it. Nothing was authorized.' };
   }
@@ -224,7 +250,7 @@ async function protectWith(
     sealed: scope.sealed,
     observed: scope.observed,
     entries: scope.entries,
-    hidden: listedPaths.filter((file) => CASES_FILE.test(file)),
+    hidden: listedPaths.filter((file) => CASES_FILE.test(file) || REFERENCE_FILE.test(file)),
     baseline: [...baseline.entries()],
     node: nodeVersions.join(', ').slice(0, 80),
     approvals: 0,
@@ -234,11 +260,12 @@ async function protectWith(
   const exit = /^exit=(\d+)/.exec(run.output);
   const list = (files: string[]) => (files.length > 0 ? files.slice(0, 6).join(', ') : 'none');
   const notes = [
-    `acceptance ${commandId} protected: also froze ${list(freeze.map((file) => file.path))}; ` +
+    `acceptance ${commandId} ${mode.kind === 'protected' ? 'protected' : 'without protected isolation'}: also froze ${list(freeze.map((file) => file.path))}; ` +
       `writable code under test, confirmed by the user: ${list(scope.writable)}; outputs: ${list(scope.outputs)}; ` +
       (stubbed ? 'before any change: no result (the code under test did not exist yet)' : `before any change it exited ${exit ? exit[1] : 'unknown'}`),
-    `acceptance scope recorded by the host: sealed folders ${list(scope.sealed)}; ${scope.entries.length} process entry point(s); ` +
+    `acceptance scope recorded by the host; ${verificationLabel(mode)}: sealed folders ${list(scope.sealed)}; ${scope.entries.length} process entry point(s); ` +
       `${baseline.size} project file(s) fingerprinted (SHA-256 of their bytes); observed on Node ${manifest.node || 'unknown'}`,
+    ...(mode.kind === 'unprotected' ? [UNPROTECTED_VERIFICATION_WARNING] : []),
   ];
   return { ok: true, freeze, manifest, notes: notes.map((text) => text.slice(0, 300)) };
 }

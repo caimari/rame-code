@@ -68,6 +68,7 @@
     'No frozen acceptance check': 'Sin comprobación de aceptación congelada',
     'Frozen acceptance passed: {0}': 'Aceptación congelada superada: {0}',
     'Frozen acceptance failed: {0}': 'Aceptación congelada fallida: {0}',
+    'Frozen acceptance inconclusive (measured twice; not a failure): {0}': 'Aceptación congelada no concluyente (medida dos veces; no es un fallo): {0}',
     'Frozen acceptance not run yet: {0}': 'Aceptación congelada aún sin ejecutar: {0}',
     'Frozen acceptance can no longer be trusted': 'La aceptación congelada ya no es fiable',
     'Mission completed by host': 'Misión completada por el host',
@@ -254,6 +255,7 @@
     out.push(m.acceptance === 'none' ? t('No frozen acceptance check')
       : m.acceptance === 'passed' ? tf('Frozen acceptance passed: {0}', cmd)
       : m.acceptance === 'failed' ? tf('Frozen acceptance failed: {0}', cmd)
+      : m.acceptance === 'inconclusive' ? tf('Frozen acceptance inconclusive (measured twice; not a failure): {0}', cmd)
       : m.acceptance === 'tampered' ? t('Frozen acceptance can no longer be trusted')
       : tf('Frozen acceptance not run yet: {0}', cmd));
     out.push(t(m.completedByHost ? 'Mission completed by host' : 'Mission not completed by host'));

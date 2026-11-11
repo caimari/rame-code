@@ -48,7 +48,7 @@ async function runApproving(h: HostHarness, text: string): Promise<string[]> {
   return cards;
 }
 
-test('web tools are offered only when the user enabled web access, to a local model, outside Missions', async () => {
+test('web tools are offered only when the user enabled web access, to the main model (local or Meta), outside Missions', async () => {
   await withHost({}, async (h) => {
     h.model.enqueue(say('Hello.'));
     await h.provider.sendMessage('Hi there, what can you do?', 'agent', 'local');
@@ -58,7 +58,8 @@ test('web tools are offered only when the user enabled web access, to a local mo
     h.model.enqueue(say('Hello.'));
     await h.provider.sendMessage('Hi there, what can you do?', 'agent', 'local');
     assert.deepEqual(toolNames(h.model.requests.at(-1) as Request).filter((name) => name.startsWith('web_')), ['web_search', 'web_fetch']);
-    assert.deepEqual(webToolDefinitions(h.provider, 'cloud'), [], 'not to Meta');
+    // P5h (decision of 08-11): Meta as the main model uses RAME's tools too; its results go to Meta as tool results.
+    assert.deepEqual(webToolDefinitions(h.provider, 'cloud').map((entry) => entry.function.name), ['web_search', 'web_fetch'], 'to Meta as the main model too');
     h.provider.missionAuto = { missionId: 'mis_000000000000000000000000', stop: null, holdAutonomy: false };
     assert.deepEqual(webToolDefinitions(h.provider, 'local'), [], 'not in a Mission run');
     h.provider.missionAuto = null;

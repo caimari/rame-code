@@ -6,6 +6,10 @@
  * imports and keeping the controllers free of the vscode API.
  */
 
+import type { ProgrammeStore } from './programmeStore.js';
+import type { ProtectedInvocationAccess } from './shellIsolation.js';
+import type { JobStore } from './jobStore.js';
+import type { AutonomyStore } from './autonomyStore.js';
 import type { ConsultOffer, DelegationFailure, DelegationOffer, LocalIssue } from './remoteAuthority.js';
 import type { AgentAuditLog } from './agentAudit.js';
 import type { PendingAgentAction } from './agentApproval.js';
@@ -93,6 +97,8 @@ export interface AgentOutcomeRecord {
   repeatedReads?: number;
   /** The last result of each test command in the run. */
   verifiers?: Array<{ commandId: string; exitCode: number | null; afterLastWrite: boolean }>;
+  /** The raw end of the last failing test's output (local only; made safe before any consultation). */
+  failingOutput?: { commandId: string; text: string };
 }
 
 /**
@@ -107,6 +113,8 @@ export interface ProviderHost {
   connection: ViewConnection | string;
   hasKey: boolean;
   settings: RameSettings;
+  /** The Meta models RAME knows are offered (live catalog, or the fallback one). */
+  readonly cloudCatalog: readonly CloudModelInfo[];
   activeThreadId: string | null;
   runThreadId: string | null;
   runKind: RunKind;
@@ -164,6 +172,10 @@ export interface ProviderHost {
   readonly extensionState: { get(key: string): unknown; update(key: string, value: unknown): unknown };
   readonly memory: DecisionStore;
   readonly missions: MissionStore;
+  /** Long background jobs; they outlive a reload (jobStore.ts). */
+  readonly jobs: JobStore;
+  /** Programmes of chained, host-verified phases (programmeHost.ts). */
+  readonly programmes: ProgrammeStore;
   readonly audit: AgentAuditLog;
   readonly modelEvidence: ModelEvidenceStore;
   /** What earlier context each request recovered, by reference and hash (continuityLog.ts). */
@@ -197,11 +209,15 @@ export interface ProviderHost {
     { ok: true; root: string; label: string } | { ok: false; cancelled: boolean; error: string }
   >;
   offerOpenFolderAction(): Promise<void>;
-  runAllowlistedTest(command: AllowedTestCommand, signal: AbortSignal, boundRoot?: string, env?: Record<string, string>): Promise<string>;
+  runAllowlistedTest(command: AllowedTestCommand, signal: AbortSignal, boundRoot?: string, env?: Record<string, string>, protectedAccess?: ProtectedInvocationAccess, verificationMode?: import('./shellIsolation.js').VerificationMode): Promise<string>;
   /** The user's explicit answer to what an acceptance check freezes and leaves writable (a modal dialog). */
   confirmAcceptanceScope?(summary: { commandId: string; frozen: string[]; writable: string[]; outputs: string[]; sealed: string[] }): Promise<boolean>;
   /** Scope review: files changed outside a protected check's authorized scope; true only on the user's explicit approval. */
   confirmAcceptanceScopeChange?(review: { commandId: string; changes: Array<{ path: string; change: 'changed' | 'added' | 'removed' }> }): Promise<boolean>;
+  /** The user's explicit answer to a pre-authorization (Autonomy & Permissions, a modal dialog); absent = refused. */
+  confirmAutonomy?(request: { message: string; detail: string; action: string }): Promise<boolean>;
+  /** Each workspace's Autonomy & Permissions and its record of external requests; absent = nothing is pre-authorized. */
+  autonomy?: AutonomyStore;
   cancelRequest(): boolean;
   isLeaseAlive(lease: MissionLease): boolean;
 

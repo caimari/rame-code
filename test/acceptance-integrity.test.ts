@@ -12,7 +12,6 @@ import * as path from 'node:path';
 import test from 'node:test';
 
 import { MISSION_STATE_KEY, type MissionRecord } from '../src/missionStore.js';
-import { changeTimesTrusted } from '../src/projectSnapshot.js';
 import { assistantText, fakeWindow, HostHarness, toolCallReply, type PostedState } from './helpers/hostHarness.js';
 
 const sha = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
@@ -116,7 +115,7 @@ test('every new code file needs scope review, including one the untrusted trace 
   });
 });
 
-test('a file added and removed in an acceptance folder during the check (nothing left at the end): not verifiable', { skip: changeTimesTrusted() ? false : 'change times are not trusted on this platform' }, async () => {
+test('the protected check cannot add even a temporary file to an acceptance folder', async () => {
   await withProject({ 'acceptance/accept.test.js': SIMPLE }, async (h, mission) => {
     const sneak =
       "const fs = require('node:fs');\nconst p = require('node:path').join(__dirname, '..', 'acceptance', 'extra.test.js');\n" +
@@ -124,18 +123,20 @@ test('a file added and removed in an acceptance folder during the check (nothing
     h.model.enqueue(write('w', 'lib/sum.js', sneak), say('Done.'), say('Done, no test needed.'));
     await h.provider.startMission(mission.id, mission.revision, 'autonomous-workspace', null, true, FROZEN);
     assert.equal(stored(h).status, 'blocked', notes(h));
-    assert.match(stored(h).note, /acceptance\/ \(a file was added, removed or renamed in this acceptance folder during the check\)/);
+    assert.match(stored(h).note, /acceptance check kept failing \(npm:check exit=1 with every frozen file intact; verification: protected\)/);
+    assert.equal(await h.readFile('acceptance/extra.test.js').catch(() => null), null);
   });
 });
 
-test('reinforced level: a change made only while the host-compared cases run is still seen', async () => {
+test('reinforced level: the case runner cannot change a non-writable project file', async () => {
   const CASES = JSON.stringify({ rameCases: 1, module: 'lib/sum.js', cases: [{ call: '', args: [2, 3], expect: 5 }] });
   await withProject({ 'acceptance/accept.test.js': "require('../lib/sum.js');\n", 'acceptance/sum.rame-cases.json': CASES, 'notes.txt': 'kept' }, async (h, mission) => {
     const lateWriter = "module.exports = (a, b) => { require('node:fs').writeFileSync(require('node:path').join(__dirname, '..', 'notes.txt'), 'changed'); return a + b; };\n";
     h.model.enqueue(write('w', 'lib/sum.js', lateWriter), say('Done.'), say('Done, no test needed.'));
     await h.provider.startMission(mission.id, mission.revision, 'autonomous-workspace', null, true, { commandId: 'npm:check', files: ['acceptance/accept.test.js', 'acceptance/sum.rame-cases.json'] });
     assert.equal(stored(h).status, 'blocked', notes(h));
-    assert.match(stored(h).note, /^Blocked: NOT VERIFIABLE: files changed outside the scope you authorized: notes\.txt \(it existed when you authorized the check and is not code/);
+    assert.match(stored(h).note, /host-compared cases.*failed:.*EACCES: permission denied, open .*notes\.txt/);
+    assert.equal(await h.readFile('notes.txt'), 'kept');
   });
 });
 

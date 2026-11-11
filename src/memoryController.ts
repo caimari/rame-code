@@ -7,6 +7,7 @@
  * as its first parameter.
  */
 
+import { rememberAutonomyScope } from './autonomyHost.js';
 import * as path from 'node:path';
 
 import {
@@ -99,6 +100,8 @@ export async function refreshMemoryView(
   missionView: (scopeId: string, current: Array<{ key: string; version: number }>) => MissionView | null,
 ): Promise<void> {
   const scope = await memoryScopeForUi(host);
+  // Autonomy & Permissions show the same workspace as Settings.
+  rememberAutonomyScope(host, scope.ok ? scope : null);
   const folders = host.listOpenWorkspaceFolders().map((folder) => ({ name: folder.name, path: folder.path }));
   if (!scope.ok) {
     host.memoryView = { project: null, readable: true, decisions: [], history: [], artifacts: [], corruptKeys: [], pending: null, note: scope.error, mission: null, folders, selectedPath: null };

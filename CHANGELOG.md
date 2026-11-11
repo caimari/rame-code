@@ -4,6 +4,47 @@ All notable changes to RAME Code are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.3.0] - 2026-11-11
+
+### Added
+
+- Long Missions can run bounded, resumable work with persistent jobs, progress evidence, host-observed measurements and multi-phase Programmes. A renewable phase lease prevents two VS Code windows from directing the same Programme phase at once and safely permits recovery after an expired owner.
+- Autonomy controls now separate approval policy from command isolation. Full Access can remove routine prompts within its explicit grant, while protected verification always keeps its own mandatory boundary. Long jobs, bounded installs and local process limits have dedicated controls and records.
+- Reinforced functional cases and differential references run one input at a time. Expected answers, future inputs and host records remain outside the evaluated process, and the host performs the comparison.
+- LM Studio can offer a confirmed reload with a larger context after a short-context refusal. Local server errors retain the server's bounded message, distinguish setup failures from an unreachable server, and keep the selected model visible when discovery temporarily omits it.
+
+### Changed
+
+- The user guides (English and Spanish) explain every option of the Mission authorization card, and describe test isolation by level instead of saying that test scripts always run with the user's permissions.
+- Full Access is now the top level of the chat's permission selector (Ask → Safe auto → Workspace full → Full Access). Choosing it asks for its usual confirmation with the parts, validity and environment chosen in Autonomy & Permissions; choosing a lower level turns it off at once. It never raises the profile underneath, so it covers only the parts you granted; when it expires, a notice shows the level you are back to. By default it lasts until you turn it off (no expiry); 1 hour to 30 days remain available in Autonomy & Permissions. The Meta and web pre-authorizations keep their own hours.
+
+### Fixed
+
+- Measured acceptance distinguishes host-observed metrics (`wall_ms`, `exit_code`) from values declared by the frozen project check (for example `p95_ms`, `errors`) through a private per-run channel. Every criterion and result states its class and warns that malicious code in the same process can alter project-declared figures; arbitrary project JSON and printed values have no authority.
+- Protected verification uses an exact filesystem view and closed network on supported Linux, independently of Full Access or the terminal's `Total` setting. Without protected isolation, verification runs with a warning and results are marked unprotected («sin aislamiento protegido, la verificación se ejecuta con un aviso y los resultados se marcan como no protegidos»).
+- Node 24 can load the host-owned case runner inside the protected view without granting access to the surrounding extension tree.
+- Local HTTP 400 responses caused by an undersized LM Studio context now explain the required action instead of looking like a generic runtime failure. The same refusal sent inside a streamed reply (HTTP 200, as LM Studio sends it to Agent) is recognized too: the card says the request does not fit the model's context, offers the reload, and no longer reads «Glimmer answered». When LM Studio reports the context the model is loaded with, RAME now refuses a request that does not fit before sending it: LM Studio would otherwise retry by itself with the conversation cut to fit and stream the answer to the cut conversation. Turning cloud escalation on (or saving a key) after a local failure now offers «Run this request with Spark» on the same card; it still waits for approval. Rows of buttons have space above and below the text around them. The Mission's final report states the isolation each test really ran with, as the host noted it at run time (for example Project for the project's tests and the protected verifier for a frozen acceptance check), instead of a fixed «No sandbox» note that contradicted the host record. In «Web access for this Mission», the checkbox and each limit now sit on their own line. Expired Spark offers disappear instead of leaving an unusable action.
+
+### Known limitations
+
+- Protected verification requires Linux with Landlock ABI 4 or newer and `libseccomp.so.2`. On Windows, macOS, older/no Landlock or missing libseccomp, the check runs without isolation, with a prominent warning and an unprotected label in authorization, progress, result and evidence. Equivalent protected isolation on Windows and macOS remains the goal.
+- Evaluated code necessarily sees its current input and can alter its own behavior or internal clocks. Only the host's external wall time and exit code are official measurements; those observations do not by themselves prove functional quality.
+- Hidden cases provide operating-system-enforced separation of expected answers, future inputs and host evidence, but incomplete cases remain incomplete. Differential verification trusts the frozen original as its behavioral reference, so a defect shared with that original can pass.
+- Programme ownership coordinates VS Code processes that share the same host storage. It is not a distributed lock across different computers or replicated stores.
+- Local model behavior still depends on the server, model and loaded context. The LM Studio short-context path was checked with a real LM Studio server (refusal before sending at 4096, confirmed reload to 32768, then the same request completed). A server that cuts the conversation silently and does not report its loaded context cannot be detected yet; in LM Studio, set «Context Overflow» to «Stop at limit».
+
+### Security
+
+- Official measured acceptance and Programme baselines classify host observations separately from project declarations received only through the frozen check's private per-run channel. Existing Missions and Programmes that use `p95_ms`, `errors` or other valid project metrics continue without re-authorization. Same-process manipulation remains explicitly possible and visible.
+- Protected and reinforced verifiers use the mandatory allowlisted filesystem view whenever it is available. Landlock confines reads and writes; seccomp denies TCP, UDP and Unix sockets plus cross-process inspection; recognized project secret files are excluded. Each functional/reference input runs fresh. Unsupported systems continue unprotected with the warning and label; Full Access/Total never weakens protection when available, and a protected→unprotected transition is recorded rather than stopping silently.
+- Programme phases now use a renewable, machine-wide lease and monotonically increasing fencing token. Concurrent VS Code processes cannot start the same phase twice; expiry permits recovery, while late updates and releases from the previous owner are rejected. The lock is per machine, not distributed across computers.
+
+### Migration
+
+- No re-authorization is required for stored measured acceptance or Programmes naming valid project-declared metrics such as `p95_ms` or `errors`. Protected isolation currently requires Linux with Landlock ABI 4+ and `libseccomp`; elsewhere verification continues with the unprotected warning and label.
+
 ## [0.2.0] - 2026-11-04
 
 Experimental preview release. It introduces a modularized core, governed project memory, autonomous Missions, acceptance and causal verification, and a strict separation between Meta Advisory and Delegated execution. Modularization is not complete: the presentation assets `media/main.js` and `media/i18n.js` remain inherited exceptions.
@@ -191,6 +232,7 @@ The integrated hackathon baseline. It was not yet modular: most of the extension
 - The local audit is bounded but is not tamper-proof.
 - Project test scripts run with the operating-system permissions of VS Code.
 
-[Unreleased]: https://github.com/caimari/rame-code/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/caimari/rame-code/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/caimari/rame-code/releases/tag/v0.3.0
 [0.2.0]: https://github.com/caimari/rame-code/releases/tag/v0.2.0
 [0.1.0]: https://github.com/caimari/rame-code/releases/tag/v0.1.0

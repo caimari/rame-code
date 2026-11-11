@@ -48,11 +48,11 @@ export function buildMissionAutonomyView(mission: MissionRecord, runtime: Missio
     lastProgress: mission.auto?.lastProgress ?? '',
     lastTest: lastTest ? lastTest.text.replace(/^•\s*/, '') : '',
     escalation: mission.grant?.escalation
-      ? { used: mission.grant.escalation.used, max: mission.grant.escalation.maxConsultations, model: mission.grant.escalation.model }
+      ? { used: mission.grant.escalation.used, max: mission.grant.escalation.maxConsultations ?? ('∞' as const), model: mission.grant.escalation.model }
       : null,
     canStart: !runtime.driving && !runtime.hostRunning && !ended && mission.grant === null && !runtime.authorizing,
     canResume: !runtime.driving && !runtime.hostRunning && !ended && mission.grant !== null && mission.status !== 'waiting_approval',
-    canPause: runtime.driving || ['interrupted', 'blocked'].includes(mission.status),
+    canPause: runtime.driving || mission.status === 'interrupted',
     canCancel: !ended,
     cloudEscalationAllowed: runtime.cloudEscalationAllowed,
     testCommands: runtime.testCommands,
@@ -160,7 +160,7 @@ export function buildMissionLiveView(mission: MissionRecord, runtime: MissionVie
               requestBytes: mission.acceptanceReview.requestBytes,
               sentBytes: mission.acceptanceReview.sentBytes,
               maxRequestBytes: mission.acceptanceReview.maxRequestBytes,
-              maxConsultations: mission.acceptanceReview.maxConsultations,
+              maxConsultations: mission.acceptanceReview.maxConsultations ?? ('∞' as const),
               maxOutputTokens: mission.acceptanceReview.maxOutputTokens,
               maxTotalTokens: mission.acceptanceReview.maxTotalTokens,
               attempts: mission.acceptanceReview.attempts,
@@ -199,7 +199,7 @@ export function buildMissionLiveView(mission: MissionRecord, runtime: MissionVie
           summary: acceptance.summary,
         },
     canStart: auto.canStart,
-    canPause: auto.canPause && !['paused', 'cancelled', 'completed', 'failed'].includes(mission.status),
+    canPause: auto.canPause && !['paused', 'blocked', 'cancelled', 'completed', 'failed'].includes(mission.status),
     canResume: auto.canResume && ['paused', 'blocked', 'interrupted'].includes(phase),
     canCancel: auto.canCancel,
     setup,

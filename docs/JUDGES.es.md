@@ -48,7 +48,7 @@ El paquete público es una **extracción RECORDED de una ejecución REAL**. Se v
 - Fue supervisada y no utilizó Meta Model API.
 - El resumen del host dice 36 inferencias locales respondidas y la vista final contiene 37; se conservan ambas cifras.
 - En Windows se compara el estado inicial y final; no se afirma detectar cambios temporales deshechos.
-- Una comprobación puede ser débil. El ejecutor reforzado reduce algunos ataques, pero no vuelve secretos los valores esperados.
+- Una comprobación puede ser débil. En Linux compatible, el verificador reforzado oculta los valores esperados, entrega una entrada cada vez, deniega sockets y confina lecturas. En hosts no compatibles se ejecuta con aviso y etiqueta de «sin aislamiento»; el código evaluado podría leer casos ocultos y alterar resultados. El aislamiento equivalente en Windows y macOS sigue siendo un objetivo.
 - Chat directo con Meta tiene tres respuestas reales registradas. La matriz completa de privacidad y las rutas Advisory/Delegated/Agent cloud con herramientas siguen probadas con API simulada, no validadas de extremo a extremo contra el servicio real.
 - Es una release preview experimental v0.2.0, no una frontera de seguridad para producción.
 

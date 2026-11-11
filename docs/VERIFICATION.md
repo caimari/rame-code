@@ -32,7 +32,7 @@ The model never declares a Mission complete. The host decides from its own evide
 |---|---|---|---|
 | **Conventional** | Standard Mission (no frozen acceptance check) | An allowlisted project test passed after the last change, nothing uncertain, the run reported done | The tests are the agent's to change |
 | **Protected** | Verified Mission with a frozen acceptance check | The host runs the frozen check itself, observes it to its end and needs exit 0; every frozen file is intact before and after the run; every other project file is compared with the host's own record from authorization | The exit code comes from a process that also runs the code under test, which can end it early (`process.exit(0)`) or patch it |
-| **Reinforced** | Protected, plus a frozen `*.rame-cases.json` file | Additionally, RAME's case runner calls the code under test in a separate process and the host compares every result with the expected values it keeps | It does not make the expected values secret (no sandbox); weak cases stay weak |
+| **Reinforced** | A frozen `*.rame-cases.json` file | With supported isolation, each input runs in a fresh read-confined, socket-denied process; otherwise it runs with the explicit unprotected warning and label | Weak cases stay weak; unprotected code could read hidden cases and alter results |
 
 A fourth outcome is not a level: **not verifiable**. RAME reports it whenever it cannot show that the conditions the user authorized were respected. It is never a pass and never a failure the agent is asked to fix: the Mission is blocked with the reason, and the authorized acceptance stays unchanged.
 
@@ -46,6 +46,9 @@ What the host checks itself, without the trace:
 - a fingerprint of every project file (outside `node_modules` and `.git`, at most 2,000 files and 4 GiB): the SHA-256 of its bytes, read in 1 MiB blocks, never its size alone. It is recorded at authorization and taken again before the check, after it and, at the reinforced level, after the host-compared cases. A file the host cannot read, or that changes while it is read, is not verifiable;
 - **during the run** (guarantee B), on Linux and macOS: with every fingerprint the host keeps what the kernel reports about each file and folder (device, inode, modification and status-change times in nanoseconds). The status-change time is set by the kernel on every write, rename or metadata change and an ordinary process cannot set it back, so a file written and restored between two records, even with its old modification time, is seen, and so is a file added and removed in an acceptance folder. This does not rely on file-system events, which can be lost. On Windows programs can set that time, so only the state at start and end is claimed there (guarantee A), and the acceptance note and the report title say "start and end only".
 - the exit code of the command it ran, and, at the reinforced level, every case result it compared.
+- numeric acceptance labels host observations (`wall_ms`, `exit_code`) separately from project-declared metrics received through the frozen check's private per-run channel. Same-process code can alter declarations; arbitrary output and project JSON never count.
+
+Protected verification is independent of Agent, Mission and terminal permission profiles. It constructs an allowlisted filesystem view with Landlock, denies TCP through Landlock and every socket family plus cross-process inspection through seccomp, and sanitizes the environment. Recognized secret files (`.env*`, `.npmrc`, credentials/secrets files and common credential directories) are never ambient verifier inputs. Each reinforced input gets a fresh process, so future inputs and expected values are not present. Full Access and Total do not weaken this boundary.
 
 ### Exact conditions for a protected check
 
@@ -78,7 +81,7 @@ At authorization, RAME:
 ### While the Mission runs
 
 - RAME's tools refuse to change the frozen files and everything that would change how Node finds them: the same name in another letter case, an extensionless or other-extension sibling, the folder name of a frozen `index.*`, a `package.json` at or above a frozen file's folder, `node_modules` at any depth, and anything in a sealed folder (or the folder itself, or one above it).
-- At the reinforced level, RAME's tools cannot read the frozen cases file: its expected values are hidden from the agent. The agent's own test scripts run with your permissions and could still read it.
+- At the reinforced level, neither RAME's tools nor the official verifier process can read the frozen cases file. The verifier receives one input at a time and cannot read sibling projects, host records or recognized secret files, or communicate through sockets.
 - Every host run of the check is compared with the manifest and the project fingerprint (see the next section).
 - A run stopped by the user, by a pause or by closing the window is an interruption, not a failed check.
 
@@ -174,9 +177,9 @@ Detecting these patterns is not a defence against every variant of them.
 | The protected scope: process entries, loads and reads classified; verifier files frozen; test folders sealed; writable files confirmed by the user; undetermined dependencies refuse protection | That observation sees every dependency. Files under excluded `node_modules` remain outside the project fingerprint |
 | Every host run is compared with the authorized manifest and the host's own fingerprint of the project: a new file cannot inherit authority from the trace and a change outside the scope is never a pass | That the trace is tamper-proof. It is not trusted and can still hide a dependency, causing a conservative refusal or leaving an excluded dependency unobserved |
 | Writes that would change a frozen file, a sealed folder or how Node resolves them are refused | That a passing check means correct code. Weak checks can be satisfied with constants (S6) |
-| Reinforced level: every authorized case was run and compared by the host; early exit or forged results cannot pass | That the expected values are secret. There is no sandbox: code running with your permissions can find the cases file on disk; a read the trace does not see is not detected |
+| Reinforced level: every authorized case ran in a fresh protected process and was compared by the host; early exit, forged output and direct reads of the cases/reference files cannot pass | That weak or incomplete cases prove all behavior; protected verification currently requires supported Linux |
 | A disposed window starts and writes nothing more; each barrier on its own | On Windows, a file changed and restored within one run (start and end only there); a change made and undone within the same timestamp tick of a file system with coarse times (for example FAT); `node_modules` is not fingerprinted |
-| Acceptance checks never inherit `NODE_TEST_CONTEXT` (a nested `node --test` would exit 0 without running a test) | Process isolation as a security sandbox. The check and the case runner are processes with the user's permissions |
+| Acceptance checks never inherit `NODE_TEST_CONTEXT` (a nested `node --test` would exit 0 without running a test) | A general sandbox for Agent, terminal commands or ordinary project scripts. The mandatory protected/reinforced verifier boundary is narrower and Linux-specific; it is not a claim that all RAME execution is sandboxed |
 | Optional Spark review: goal, criteria and file fragments are redacted and path-scrubbed; the card shows exactly what is sent, including the fixed instructions | Real-machine validation on Windows (the `NODE_OPTIONS` quoting of the preload paths is untested there); behaviour against the real Meta Model API |
 | Hashes detect a change | Authenticity. Hashes are not signatures and do not prove the host or its data were honest |
 

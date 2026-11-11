@@ -56,8 +56,13 @@ export interface ConsultOffer {
   basePayload: string;
   payload: string;
   model: string;
-  /** The model doing the work locally (it stays in control). */
+  /** The main model doing the work (it keeps the tools and stays in control). */
   localModel: string;
+  /** Its provider; omitted means local (offers made before Meta could be the main model). */
+  mainProvider?: 'local' | 'cloud';
+  /** The default text with the safe end of the failing check's output, when there is one; on the card only if the user includes it. */
+  outputPayload?: string;
+  outputIncluded?: boolean;
   digest: string;
   createdAt: number;
   generation: number;
@@ -68,6 +73,11 @@ export interface ConsultOffer {
   /** Attempts already made for this offer, and the last failure. */
   attempts: number;
   lastFailure: MetaFailureCategory | null;
+  /**
+   * A blocked Mission the advice is for: the answer is kept for that
+   * Mission's next run (if the user retries it), and no separate run starts.
+   */
+  missionId?: string;
 }
 
 export interface DelegationOffer {
@@ -156,13 +166,23 @@ export function authorizedFilesSection(project: string, files: readonly Authoriz
 }
 
 /** Why "Run this request with Spark" is not available for a failed local request. */
-export type DelegationState = 'offered' | 'off' | 'no-key' | 'not-agent' | 'internal' | 'not-sent';
+export type DelegationState = 'offered' | 'off' | 'no-key' | 'not-agent' | 'internal' | 'not-sent' | 'setup';
 
-/** A failed local request: "unreachable" means the server did not answer at all. */
+/**
+ * A failed local request: "unreachable" means the server did not answer at
+ * all; "setup" means it answered that it has no model ready (load it there),
+ * which is never a reason to run the request with Spark.
+ */
 export interface LocalIssue {
   /** null: the home screen, when the request was refused before a thread existed. */
   threadId: string | null;
-  kind: 'unreachable' | 'failed';
+  kind: 'unreachable' | 'failed' | 'setup';
+  /** LM Studio refused for lack of context: the context a "Reload in LM Studio" button offers. */
+  reload?: number;
+  /** The server refused because the request does not fit its context (the card says so, not "Glimmer answered"). */
+  context?: true;
+  /** Host only (never sent to the view): the reason a Spark offer made later from Settings shows. */
+  reason?: string;
   /** RAME Code owns a configured server it can start. */
   canStart: boolean;
   delegation: DelegationState;

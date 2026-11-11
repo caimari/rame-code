@@ -12,14 +12,14 @@ export const missionAcceptanceReviewHtml = `
   <div id="acceptanceReviewBudgets">
     <label for="acceptanceReviewConsultations">Maximum review consultations</label>
     <select id="acceptanceReviewConsultations" aria-label="Maximum review consultations">
-      <option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option>
+      <option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="10">10</option><option value="100">100</option><option value="1000">1000</option><option value="-1">No count limit</option>
     </select>
     <label for="acceptanceReviewRequestBytes">Request bytes at most (empty = 12000)</label>
     <input id="acceptanceReviewRequestBytes" type="number" min="1000" max="24000" step="1" placeholder="12000">
     <label for="acceptanceReviewOutputTokens">Output tokens at most (empty = 2048)</label>
     <input id="acceptanceReviewOutputTokens" type="number" min="256" max="8192" step="1" placeholder="2048">
     <label for="acceptanceReviewTotalTokens">Total remote token bound (empty = 14048)</label>
-    <input id="acceptanceReviewTotalTokens" type="number" min="1000" max="200000" step="1" placeholder="14048 × consultations">
+    <input id="acceptanceReviewTotalTokens" type="number" min="1000" max="14048000" step="1" placeholder="14048 × consultations">
   </div>
   <div class="row"><button id="acceptanceReviewPrepare" type="button">Prepare Spark review</button></div>
   <div id="acceptanceReviewOffer" hidden>

@@ -209,12 +209,13 @@ test('host gates reject non-Standard recipients, non-candidate files, normal Mis
       { id: 'muse-spark-1.3-contributor', label: 'Spark Contributor', contributor: true },
       { id: 'muse-wonder-1.0', label: 'Wonder', contributor: false },
     ];
-    h.provider.settings.cloudModel = 'muse-spark-1.3-contributor';
+    // (P5h) The reviewer is the advisor model: a Contributor variant is never one.
+    h.provider.settings.advisorModel = 'muse-spark-1.3-contributor';
     await prepare(h, mission);
     assert.equal(stored(h).acceptanceReview ?? null, null);
-    assert.match(h.provider.status, /requires a Standard Meta model/);
+    assert.match(h.provider.status, /No model can review the acceptance tests: muse-spark-1\.3-contributor is a Contributor variant \(Meta may use the data\), never an advisor/);
 
-    h.provider.settings.cloudModel = 'muse-spark-1.3';
+    h.provider.settings.advisorModel = 'muse-spark-1.3';
     await prepareAcceptanceReview(h.provider, { missionId: mission.id, revision: mission.revision, commandId: 'npm:check', files: ['package.json'] });
     assert.equal(stored(h).acceptanceReview ?? null, null);
     assert.match(h.provider.status, /not an offered acceptance candidate/);
@@ -223,13 +224,13 @@ test('host gates reject non-Standard recipients, non-candidate files, normal Mis
     const offered = mission.acceptanceReview;
     await sendAcceptanceReview(h.provider, mission.id, mission.revision, '0'.repeat(64));
     assert.equal(fakeCloud.requests.length, 0, 'a different content approval cannot be reused');
-    h.provider.settings.cloudModel = 'muse-wonder-1.0';
+    h.provider.settings.advisorModel = 'muse-wonder-1.0';
     fakeCloud.handler = () => metaReply(RESULT);
     await sendAcceptanceReview(h.provider, mission.id, mission.revision, offered?.digest ?? '');
     assert.equal(fakeCloud.requests.length, 0);
     assert.match(h.provider.status, /stale or does not match/);
 
-    h.provider.settings.cloudModel = 'muse-spark-1.3';
+    h.provider.settings.advisorModel = 'muse-spark-1.3';
     h.provider.metaCredential = 'f'.repeat(32);
     await sendAcceptanceReview(h.provider, mission.id, mission.revision, offered?.digest ?? '');
     assert.equal(fakeCloud.requests.length, 0);

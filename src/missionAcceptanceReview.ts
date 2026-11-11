@@ -11,11 +11,20 @@
 
 import { createHash } from 'node:crypto';
 
+import { MAX_FINITE_CONSULTATIONS } from './autonomyPolicy.js';
+
 export const ACCEPTANCE_REVIEW_MAX_FILES = 3;
 export const ACCEPTANCE_REVIEW_FILE_CHARS = 3000;
 export const ACCEPTANCE_REVIEW_PAYLOAD_CHARS = 12000;
 export const ACCEPTANCE_REVIEW_DEFAULT_OUTPUT_TOKENS = 2048;
 export const ACCEPTANCE_REVIEW_DEFAULT_TOTAL_TOKENS = 14048;
+/** How many review consultations the user may authorize: the Missions' choices; -1 = no count limit (stored as null). */
+export const ACCEPTANCE_REVIEW_COUNTS: readonly number[] = [1, 2, 3, 4, 5, 10, 100, 1000, -1];
+/** The most remote tokens one review may use in total: the Missions' technical ceiling, also with no count limit. */
+export const ACCEPTANCE_REVIEW_MAX_TOTAL_TOKENS = 14_048_000;
+/** Whether the review may still be sent once more within its authorized count. */
+export const reviewCountLeft = (review: { attempts: number; maxConsultations: number | null }): boolean =>
+  review.maxConsultations === null || review.attempts < review.maxConsultations;
 
 export type AcceptanceReviewStatus = 'offered' | 'sending' | 'completed' | 'failed' | 'malformed' | 'budget-refused' | 'cancelled';
 export type AcceptanceReviewDecision = 'pending' | 'considered' | 'dismissed';
@@ -48,7 +57,8 @@ export interface MissionAcceptanceReview {
   requestBytes: number;
   sentBytes: number;
   maxRequestBytes: number;
-  maxConsultations: number;
+  /** null = no count limit: the byte and token limits still hold. */
+  maxConsultations: number | null;
   maxOutputTokens: number;
   maxTotalTokens: number;
   attempts: number;
@@ -200,9 +210,9 @@ export function parseMissionAcceptanceReview(value: unknown, missionId: string, 
     typeof raw.commandId !== 'string' || raw.commandId.length > 128 || !Array.isArray(raw.files) || raw.files.length > ACCEPTANCE_REVIEW_MAX_FILES ||
     typeof raw.payload !== 'string' || raw.payload.length > ACCEPTANCE_REVIEW_PAYLOAD_CHARS || typeof raw.digest !== 'string' || !/^[0-9a-f]{64}$/.test(raw.digest) ||
     !Number.isInteger(raw.requestBytes) || (raw.requestBytes as number) < 0 || !Number.isInteger(raw.sentBytes) || (raw.sentBytes as number) < 0 || !Number.isInteger(raw.maxRequestBytes) ||
-    !Number.isInteger(raw.maxConsultations) || (raw.maxConsultations as number) < 1 || (raw.maxConsultations as number) > 5 ||
+    !(raw.maxConsultations === null || (Number.isInteger(raw.maxConsultations) && (raw.maxConsultations as number) >= 1 && (raw.maxConsultations as number) <= MAX_FINITE_CONSULTATIONS)) ||
     !Number.isInteger(raw.maxOutputTokens) || !Number.isInteger(raw.maxTotalTokens) || !Number.isInteger(raw.attempts) ||
-    (raw.attempts as number) < 0 || (raw.attempts as number) > (raw.maxConsultations as number) || !Number.isInteger(raw.usedTokens) ||
+    (raw.attempts as number) < 0 || (raw.maxConsultations !== null && (raw.attempts as number) > (raw.maxConsultations as number)) || !Number.isInteger(raw.usedTokens) ||
     !statuses.includes(raw.status as AcceptanceReviewStatus) || !decisions.includes(raw.decision as AcceptanceReviewDecision) ||
     typeof raw.failure !== 'string' || raw.failure.length > 500 || !Number.isInteger(raw.updatedAt) ||
     (raw.provenance !== 'glimmer' && raw.provenance !== 'user' && raw.provenance !== 'mixed')
@@ -223,7 +233,7 @@ export function parseMissionAcceptanceReview(value: unknown, missionId: string, 
   return {
     version: 1, missionId, scopeId, model: raw.model, processingClass: 'standard', credentialRevision: raw.credentialRevision,
     commandId: raw.commandId, files, provenance: raw.provenance, payload: raw.payload, digest: raw.digest,
-    requestBytes: raw.requestBytes as number, sentBytes: raw.sentBytes as number, maxRequestBytes: raw.maxRequestBytes as number, maxConsultations: raw.maxConsultations as number,
+    requestBytes: raw.requestBytes as number, sentBytes: raw.sentBytes as number, maxRequestBytes: raw.maxRequestBytes as number, maxConsultations: raw.maxConsultations as number | null,
     maxOutputTokens: raw.maxOutputTokens as number, maxTotalTokens: raw.maxTotalTokens as number, attempts: raw.attempts as number, usedTokens: raw.usedTokens as number,
     status: raw.status as AcceptanceReviewStatus, decision: raw.decision as AcceptanceReviewDecision, result,
     failure: raw.failure, updatedAt: raw.updatedAt as number,

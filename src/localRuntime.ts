@@ -19,19 +19,12 @@ export interface LocalRuntimeSettings {
   idleTimeoutSec: number;
 }
 
-/**
- * Detected suggestions for this machine only. These are offered in Settings
- * as starting values — never mandatory public assumptions and never written
- * without the user's explicit action.
- */
+/** Portable placeholders. Local paths must always be chosen by the user. */
 export const LOCAL_RUNTIME_SUGGESTIONS: Readonly<LocalRuntimeSettings> = {
-  executablePath: '/workspace/src/llama.cpp-oficial/build/bin/llama-server',
-  modelPath:
-    '/disco4tb/catalogo-llm/meta/Muse-Glimmer-30B-GGUF/Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf',
-  projectorPath:
-    '/disco4tb/catalogo-llm/meta/Muse-Glimmer-30B-GGUF/mmproj-Muse-Glimmer-30B-Q4_K_M.gguf',
-  draftModelPath:
-    '/disco4tb/catalogo-llm/meta/Muse-Glimmer-30B-GGUF/dflash-Muse-Glimmer-30B-Q4_K_M.gguf',
+  executablePath: '/path/to/llama-server',
+  modelPath: '/path/to/model.gguf',
+  projectorPath: '/path/to/mmproj.gguf',
+  draftModelPath: '/path/to/draft-model.gguf',
   modelId: 'local-glimmer',
   contextSize: 32768,
   port: 8775,

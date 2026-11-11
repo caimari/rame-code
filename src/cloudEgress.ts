@@ -19,7 +19,7 @@ import * as os from 'node:os';
 
 import type { AgentChatMessage } from './agentModel.js';
 import { cloudVisibleThread, protectedLocalTexts, threadDisclosure } from './cloudDisclosure.js';
-import { runScope } from './cloudDisclosureHost.js';
+import { runScope } from './cloudScope.js';
 import { MetaAgentModelProvider, type AgentModelProvider } from './modelProviders/agentProvider.js';
 import type { ProviderHost } from './providerTypes.js';
 import { RAME_AUDIT_KEY } from './settingsStore.js';
@@ -145,7 +145,9 @@ export function scrubLocalPaths(text: string, paths: ReadonlyArray<readonly [str
     if (body.length === 0) {
       continue;
     }
-    const pattern = new RegExp(`(?<![A-Za-z0-9._~-])${lead}${body}(?![A-Za-z0-9._~-])`, windows ? 'gi' : 'g');
+    // A dot right after the path ends it when nothing of a name follows (the end of a sentence: "in /home/ana/shop."),
+    // while "/home/ana/shop.bak" is another path and stays as it is.
+    const pattern = new RegExp(`(?<![A-Za-z0-9._~-])${lead}${body}(?![A-Za-z0-9_~-]|\\.[A-Za-z0-9_~-])`, windows ? 'gi' : 'g');
     out = out.replace(pattern, label);
   }
   return out;

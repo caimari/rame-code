@@ -25,6 +25,7 @@ import { updateVerifiers } from '../src/missionVerifiers.js';
 import type { ProviderHost } from '../src/providerTypes.js';
 import { parseViewInboundMessage, type MissionLiveView } from '../src/viewMessages.js';
 import { assistantText, fakeCloud, HostHarness, toolCallReply, type PostedState } from './helpers/hostHarness.js';
+import { fakeMetaPreauth } from './helpers/hostHarness.js';
 
 const API_KEY_SECRET = 'rameCode.metaModelApiKey';
 const KEY = 'fake-meta-key-LIMITS-3e7a';
@@ -42,6 +43,8 @@ async function withMission(body: (h: HostHarness, mission: MissionRecord) => Pro
   const h = new HostHarness();
   await h.start({ agentProfile: 'safe-auto', mode: 'mission', allowCloudEscalation: true });
   h.secretValues.set(API_KEY_SECRET, KEY);
+  // The user pre-authorized Meta for Missions of this workspace (Autonomy & Permissions).
+  await h.preauthorize({ meta: 5 });
   fakeCloud.requests.length = 0;
   fakeCloud.handler = null;
   try {
@@ -144,13 +147,14 @@ test('a sent request counts its exact bytes, and the reported tokens replace the
 test('the total limits refuse a request before sending; a budget already used up stays used up', async () => {
   const memory = new Map<string, unknown>();
   const missions = new MissionStore({ get: (key) => memory.get(key), update: async (key, value) => void memory.set(key, JSON.parse(JSON.stringify(value))) });
+  const preauth = fakeMetaPreauth('ws_1', 'muse-spark-1.3');
   const created = await missions.create({ scopeId: 'ws_1', scopeLabel: 'p', threadId: 't1', goal: 'G', steps: [{ id: 't1', title: 'T', successCriterion: 'npm:check' }], decisions: [] });
   assert.ok(created.ok);
   const id = created.value.id;
   const seed = async (sentBytes: number, usedTokens: number) => {
     const current = missions.get(id) as MissionRecord;
     const seeded = await missions.update(id, current.revision, (draft) => {
-      draft.grant = { missionId: id, scopeId: 'ws_1', provider: 'local', model: 'local-glimmer', mode: 'supervised', grantedAt: 1, escalation: { model: 'muse-spark-1.3', maxConsultations: 3, ...defaultAdvisoryLimits(3), used: 1, validResponses: 1, dataClasses: [], sentBytes, usedTokens }, tests: null, acceptance: null };
+      draft.grant = { missionId: id, scopeId: 'ws_1', provider: 'local', model: 'local-glimmer', mode: 'supervised', grantedAt: 1, escalation: { model: 'muse-spark-1.3', maxConsultations: 3, ...defaultAdvisoryLimits(3), used: 1, validResponses: 1, dataClasses: [], sentBytes, usedTokens, preauth: preauth.binding }, tests: null, acceptance: null };
       draft.auto = { runs: 1, startedAt: 1, noProgressStreak: 0, lastSignature: '', lastProgress: '', needsVerification: true, pendingAdvice: '', acceptanceFeedback: '', lastRunNotes: '', userGuidance: '', blockers: updateVerifiers([], [], [{ commandId: 'npm:check', exitCode: 1, afterLastWrite: true }], 'c', 1, 'agent', id).blockers, recoveries: [] };
       return { ok: true, value: draft };
     });
@@ -158,6 +162,8 @@ test('the total limits refuse a request before sending; a budget already used up
   };
   const host = {
     missions,
+    // A Meta pre-authorization in force for this workspace (Autonomy & Permissions).
+    ...preauth,
     settings: { allowCloudEscalation: true },
     missionAuto: null,
     getApiKey: async () => KEY,

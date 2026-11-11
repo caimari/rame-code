@@ -18,13 +18,11 @@
     "Advice only: Glimmer keeps the tools. Sent only for a failing allowed test, with your request, the failing check and its exit code, the host's content-free record, and project decisions; never file contents, and never a delegated run.":
       'Solo consejo: Glimmer conserva las herramientas. Solo se envía ante una prueba permitida que falla, con tu petición, la comprobación que falla y su código de salida, el registro del host sin contenido y las decisiones del proyecto; nunca contenido de ficheros ni una ejecución delegada.',
     'Mode': 'Modo',
-    'Advisory: Spark advises, Glimmer acts': 'Consejo: Spark aconseja, Glimmer actúa',
     'Delegated: Spark directs this one request': 'Delegado: Spark dirige solo esta petición',
     'Working model': 'Modelo que trabaja',
     'Consulted model': 'Modelo consultado',
     'Model': 'Modelo',
     'Tools': 'Herramientas',
-    'Glimmer ({0}) proposes every action and RAME Code checks it; Spark gets no tools.': 'Glimmer ({0}) propone cada acción y RAME Code la comprueba; Spark no recibe herramientas.',
     'Spark proposes the tools; RAME Code checks each one with your {0} profile. No extra permissions.': 'Spark propone las herramientas; RAME Code comprueba cada una con tu perfil {0}. Sin permisos adicionales.',
     'Project': 'Proyecto',
     'Failing check': 'Comprobación que falla',
@@ -42,7 +40,9 @@
     'Dismissing…': 'Descartando…',
     'Starting…': 'Iniciando…',
     'Applying…': 'Aplicando…',
-    'Why: the local run stopped because {0}.': 'Motivo: la ejecución local se detuvo porque {0}.',
+    'Why: the run stopped because {0}.': 'Motivo: la ejecución se detuvo porque {0}.',
+    'Advisory: {0} advises, {1} acts': 'Consejo: {0} aconseja, {1} actúa',
+    '{0} proposes every action and RAME Code checks it; {1} gets no tools.': '{0} propone cada acción y RAME Code la comprueba; {1} no recibe herramientas.',
     'Model: Meta {0} | {1} characters | Digest: {2} — one use.': 'Modelo: Meta {0} | {1} caracteres | Digest: {2} — un solo uso.',
     'The delegated run with Spark stopped: {0}. It was not retried and did not switch to Glimmer; {1} action(s) confirmed by RAME Code are kept.':
       'La ejecución delegada con Spark se detuvo: {0}. No se reintentó ni pasó a Glimmer; se conservan {1} acción(es) confirmadas por RAME Code.',
@@ -191,7 +191,6 @@
     'Maximum consultations for this Mission': 'Máximo de consultas para esta Misión',
     'Maximum Meta consultations': 'Máximo de consultas a Meta',
     '0 — off': '0 — desactivado',
-    'Advice only: Glimmer keeps every tool. Meta receives no file contents and cannot execute actions.': 'Solo consejo: Glimmer conserva todas las herramientas. Meta no recibe contenido de archivos ni puede ejecutar acciones.',
     'Advisory limits': 'Límites del asesoramiento',
     'Bytes per request, at most (empty = 12000)': 'Bytes máximos por petición (vacío = 12000)',
     'Total bytes sent, at most (empty = 12000 × consultations)': 'Bytes totales máximos enviados (vacío = 12000 × consultas)',
@@ -338,7 +337,7 @@
     if (box) {
       box.hidden = consult === null;
     }
-    setText(el('consultReason'), consult ? h.tf('Why: the local run stopped because {0}.', consult.reason) : '');
+    setText(el('consultReason'), consult ? h.tf('Why: the run stopped because {0}.', consult.reason) : '');
     // The payload is shown exactly as it would be sent, never translated.
     setText(el('consultPayload'), consult ? consult.payload : '');
     setText(el('consultMeta'), consult ? h.tf('Model: Meta {0} | {1} characters | Digest: {2} — one use.', consult.model, consult.payload.length, consult.digest.slice(0, 16)) : '');
@@ -351,10 +350,10 @@
       }
       return;
     }
-    fact(facts, h.t('Mode'), h.t('Advisory: Spark advises, Glimmer acts'));
+    fact(facts, h.t('Mode'), h.tf('Advisory: {0} advises, {1} acts', extra.model, extra.localModel));
     fact(facts, h.t('Working model'), extra.localModel);
     fact(facts, h.t('Consulted model'), 'Meta ' + extra.model);
-    fact(facts, h.t('Tools'), h.tf('Glimmer ({0}) proposes every action and RAME Code checks it; Spark gets no tools.', extra.localModel));
+    fact(facts, h.t('Tools'), h.tf('{0} proposes every action and RAME Code checks it; {1} gets no tools.', extra.localModel, extra.model));
     fact(facts, h.t('Project'), extra.project);
     fact(facts, h.t('Failing check'), extra.verifier);
     fact(facts, h.t('Data sent'), words(extra.dataClasses));
@@ -591,7 +590,7 @@
     }
     if (remote.model) {
       fact(list, h.t('Remote advice'), h.tf('{0} · {1} of {2} consultation(s) sent · {3} valid answer(s)', 'Meta ' + remote.model, remote.attempts, remote.maxConsultations, remote.validResponses));
-      fact(list, h.t('Consultations remaining'), String(Math.max(0, remote.maxConsultations - remote.attempts)));
+      fact(list, h.t('Consultations remaining'), remote.maxConsultations === '∞' ? '∞' : String(Math.max(0, remote.maxConsultations - remote.attempts)));
       var limits = remote.limits;
       if (limits) {
         fact(list, h.t('Bytes sent'), h.tf('{0} of {1} · {2} remaining · at most {3} per request', limits.sentBytes, limits.maxTotalBytes, Math.max(0, limits.maxTotalBytes - limits.sentBytes), limits.maxRequestBytes));

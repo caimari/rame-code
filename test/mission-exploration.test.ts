@@ -139,6 +139,7 @@ test('three exploration-only runs: summaries, repeat flags, low-budget and act p
     // --- The red card ---
     const live = liveOf(blockedState) as MissionLiveView;
     assert.equal(live.phase, 'blocked');
+    assert.equal(live.canPause, false, 'a blocked Mission can resume or retry, but cannot be paused again');
     assert.ok(live.blocked);
     assert.match(live.blocked.reason, /^Blocked: 3 internal runs in a row without verifiable progress/);
     assert.equal(live.blocked.runs, 3);

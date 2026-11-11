@@ -1,5 +1,7 @@
 /** Host orchestration for the optional bootstrap acceptance review. */
 
+import { fullIncludesNow, fullMetaNow, fullMetaRefusalNow, recordExternal, settleMetaTokens, trackFullMeta, type FullMetaUse } from './autonomyHost.js';
+import { META_PROVIDER } from './autonomyPolicy.js';
 import * as os from 'node:os';
 
 import { hashContent } from './agentPatch.js';
@@ -12,17 +14,21 @@ import { processingClass } from './metaRecipient.js';
 import {
   ACCEPTANCE_REVIEW_DEFAULT_OUTPUT_TOKENS,
   ACCEPTANCE_REVIEW_DEFAULT_TOTAL_TOKENS,
+  ACCEPTANCE_REVIEW_COUNTS,
   ACCEPTANCE_REVIEW_FILE_CHARS,
   ACCEPTANCE_REVIEW_MAX_FILES,
+  ACCEPTANCE_REVIEW_MAX_TOTAL_TOKENS,
   acceptanceReviewDigest,
   acceptanceReviewSchema,
   acceptanceReviewTokenBound,
   ACCEPTANCE_REVIEW_SYSTEM_PROMPT,
   buildAcceptanceReviewPayload,
+  reviewCountLeft,
   validateAcceptanceReview,
   type MissionAcceptanceReview,
 } from './missionAcceptanceReview.js';
 import { recordAdvisory } from './modelEvidenceRecorder.js';
+import { advisorFor } from './advisorHost.js';
 import type { MissionRecord } from './missionStore.js';
 import { missionChangedFiles } from './missionPhase.js';
 import { listAcceptanceCandidates } from './projectAdapters/npmProjectAdapter.js';
@@ -33,7 +39,7 @@ const MAX_REQUEST_BYTES = 24000;
 const MIN_OUTPUT_TOKENS = 256;
 const MAX_OUTPUT_TOKENS = 8192;
 const MIN_TOTAL_TOKENS = 1000;
-const MAX_TOTAL_TOKENS = 200000;
+const MAX_TOTAL_TOKENS = ACCEPTANCE_REVIEW_MAX_TOTAL_TOKENS;
 
 async function missionScope(host: ProviderHost, mission: MissionRecord): Promise<{ root: string; fs: ReturnType<ProviderHost['agentFsFor']> } | null> {
   for (const folder of host.listOpenWorkspaceFolders()) {
@@ -75,6 +81,7 @@ export interface PrepareAcceptanceReviewInput {
   revision: number;
   commandId: string;
   files: string[];
+  /** One of ACCEPTANCE_REVIEW_COUNTS; -1 = no count limit. */
   maxConsultations?: number;
   maxRequestBytes?: number;
   maxOutputTokens?: number;
@@ -113,18 +120,27 @@ export async function prepareAcceptanceReview(host: ProviderHost, input: Prepare
     await host.postState();
     return;
   }
-  const model = host.selectedCloudModel();
+  // The advisor of the main model reviews: never the model that wrote the tests' Mission itself (advisorHost.ts).
+  const advisor = advisorFor(host);
+  if (!advisor.ok) {
+    host.status = `No model can review the acceptance tests: ${advisor.reason}. Nothing was sent.`;
+    await host.postState();
+    return;
+  }
+  const model = advisor.model;
   if (processingClass(model) !== 'standard') {
     host.status = 'Independent acceptance review requires a Standard Meta model. Contributor and undocumented models are not used by default. Nothing was sent.';
     await host.postState();
     return;
   }
-  const maxConsultations = input.maxConsultations ?? 1;
+  const chosenCount = input.maxConsultations ?? 1;
+  const maxConsultations = chosenCount === -1 ? null : chosenCount;
   const maxRequestBytes = input.maxRequestBytes ?? 12000;
   const maxOutputTokens = input.maxOutputTokens ?? ACCEPTANCE_REVIEW_DEFAULT_OUTPUT_TOKENS;
-  const maxTotalTokens = input.maxTotalTokens ?? ACCEPTANCE_REVIEW_DEFAULT_TOTAL_TOKENS * maxConsultations;
+  // No count limit never means no limit: the total keeps the technical ceiling.
+  const maxTotalTokens = input.maxTotalTokens ?? (maxConsultations === null ? MAX_TOTAL_TOKENS : Math.min(MAX_TOTAL_TOKENS, ACCEPTANCE_REVIEW_DEFAULT_TOTAL_TOKENS * maxConsultations));
   if (
-    !Number.isInteger(maxConsultations) || maxConsultations < 1 || maxConsultations > 5 ||
+    !ACCEPTANCE_REVIEW_COUNTS.includes(chosenCount) ||
     !Number.isInteger(maxRequestBytes) || maxRequestBytes < MIN_REQUEST_BYTES || maxRequestBytes > MAX_REQUEST_BYTES ||
     !Number.isInteger(maxOutputTokens) || maxOutputTokens < MIN_OUTPUT_TOKENS || maxOutputTokens > MAX_OUTPUT_TOKENS ||
     !Number.isInteger(maxTotalTokens) || maxTotalTokens < MIN_TOTAL_TOKENS || maxTotalTokens > MAX_TOTAL_TOKENS ||
@@ -212,7 +228,7 @@ export async function prepareAcceptanceReview(host: ProviderHost, input: Prepare
   const previous = mission.acceptanceReview;
   const attempts = previous?.attempts ?? 0;
   const usedTokens = previous?.usedTokens ?? 0;
-  if (attempts >= maxConsultations || usedTokens >= maxTotalTokens) {
+  if (!reviewCountLeft({ attempts, maxConsultations }) || usedTokens >= maxTotalTokens) {
     host.status = 'The authorized acceptance-review consultation or token budget is already exhausted. Nothing was sent.';
     await host.postState();
     return;
@@ -235,17 +251,29 @@ export async function prepareAcceptanceReview(host: ProviderHost, input: Prepare
     return { ok: true, value: draft };
   });
   host.status = updated.ok ? 'Review prepared. Inspect the exact content before sending it to Meta.' : updated.error;
+  if (updated.ok) {
+    // Full Access with its Meta part: the prepared review goes without the send card, within the Meta pre-authorization.
+    const why = fullMetaRefusalNow(host, mission.scopeId, { dataScope: 'files', count: maxConsultations });
+    const fresh = host.missions.get(mission.id);
+    if (why === null && fresh !== null) {
+      await sendAcceptanceReview(host, mission.id, fresh.revision, review.digest, true);
+      return;
+    }
+    if (why !== null && fullIncludesNow(host, mission.scopeId, 'meta')) {
+      host.status = `Review prepared. Not sent without its card: ${why}. Inspect the exact content before sending it to Meta.`;
+    }
+  }
   await host.refreshMemoryView();
   await host.postState();
 }
 
-/** Send one previously previewed review. The request has no tools. */
-export async function sendAcceptanceReview(host: ProviderHost, missionId: string, revision: number, digest: string): Promise<void> {
+/** Send one previously previewed review (on its card, or by Full Access: `full`). The request has no tools. */
+export async function sendAcceptanceReview(host: ProviderHost, missionId: string, revision: number, digest: string, full = false): Promise<void> {
   const mission = host.missions.get(missionId);
   const review = mission?.acceptanceReview ?? null;
   if (
-    mission === null || mission.revision !== revision || mission.awaitingVerification !== true || review === null || review.status !== 'offered' || review.attempts >= review.maxConsultations ||
-    review.digest !== digest || review.model !== host.selectedCloudModel() || review.credentialRevision !== host.metaCredential || processingClass(review.model) !== 'standard'
+    mission === null || mission.revision !== revision || mission.awaitingVerification !== true || review === null || review.status !== 'offered' || !reviewCountLeft(review) ||
+    review.digest !== digest || !advisorIs(host, review.model) || review.credentialRevision !== host.metaCredential || processingClass(review.model) !== 'standard'
   ) {
     host.status = 'The acceptance-review approval is stale or does not match this Mission, project, model, credential, content, and budget. Nothing was sent.';
     await host.postState();
@@ -262,7 +290,7 @@ export async function sendAcceptanceReview(host: ProviderHost, missionId: string
     draft.acceptanceReview.status = 'sending';
     draft.acceptanceReview.attempts += 1;
     draft.acceptanceReview.updatedAt = Date.now();
-    addNote(draft, `acceptance review send authorized for Meta ${review.model} (digest ${digest.slice(0, 12)}…); no tools granted`);
+    addNote(draft, `acceptance review send authorized ${full ? 'by Full Access (Meta part, within the Meta pre-authorization)' : 'on its card'} for Meta ${review.model} (digest ${digest.slice(0, 12)}…); no tools granted`);
     return { ok: true, value: draft };
   });
   if (!marked.ok) {
@@ -273,6 +301,9 @@ export async function sendAcceptanceReview(host: ProviderHost, missionId: string
   let sent = false;
   let refused = '';
   let reservedBound = 0;
+  let use: FullMetaUse | null = null;
+  let fullRefused: string | null = null;
+  let tracked: { signal: AbortSignal; done: () => void } | null = null;
   try {
     const response = await host.chatRunner.start(async ({ signal }) =>
       createCascadeAdvice({
@@ -290,6 +321,16 @@ export async function sendAcceptanceReview(host: ProviderHost, missionId: string
           if (bytes > review.maxRequestBytes) refused = `the exact HTTP request is ${bytes} bytes and the authorized limit is ${review.maxRequestBytes}`;
           else if (review.usedTokens + bound > review.maxTotalTokens) refused = `the requests could use up to ${review.usedTokens + bound} tokens and the authorized total is ${review.maxTotalTokens}`;
           if (refused) throw new DOMException('Refused by the acceptance-review budget.', 'AbortError');
+          if (full) {
+            // Checked again right before it leaves; the pre-authorization's tokens are reserved in the same step.
+            const got = await fullMetaNow(host, mission.scopeId, { dataScope: 'files', count: review.maxConsultations }, bound);
+            if (!got.ok) {
+              fullRefused = got.why;
+              throw new DOMException('Refused: Full Access does not cover this review now.', 'AbortError');
+            }
+            use = got.use;
+            tracked = trackFullMeta(host, mission.scopeId, got.use);
+          }
           const latest = host.missions.get(missionId);
           if (!latest?.acceptanceReview || latest.acceptanceReview.digest !== digest || latest.acceptanceReview.status !== 'sending') {
             throw new DOMException('Review state changed before sending.', 'AbortError');
@@ -303,10 +344,20 @@ export async function sendAcceptanceReview(host: ProviderHost, missionId: string
           });
           if (!accounted.ok) throw new DOMException('Review usage could not be recorded.', 'AbortError');
           sent = true;
-          return fetch(input, init);
+          // Recorded before it leaves (Autonomy & Permissions history): approved on its card, or by Full Access.
+          await recordExternal(host, mission.scopeId, {
+            provider: META_PROVIDER, destination: review.model, reason: 'independent review of the acceptance check',
+            data: full ? `the requirements and the test fragments chosen when preparing it, secrets removed and local paths hidden (digest ${digest.slice(0, 12)}…)` : `the exact text approved on the card (digest ${digest.slice(0, 12)}…)`,
+            approval: full ? 'full-access' : 'card', preauthId: use?.metaId ?? null, missionId, bytes, outcome: 'sent',
+          });
+          const signals = [init?.signal, tracked?.signal].filter((entry): entry is AbortSignal => entry instanceof AbortSignal);
+          return fetch(input, signals.length > 1 ? { ...init, signal: AbortSignal.any(signals) } : init);
         },
       }),
     );
+    (tracked as { done: () => void } | null)?.done();
+    const used = use as FullMetaUse | null;
+    if (used !== null) await settleMetaTokens(host, mission.scopeId, used.metaId, used.reserved, response.usage.inputTokens + response.usage.outputTokens);
     const result = validateAcceptanceReview(JSON.parse(response.content) as unknown);
     host.recordUsage('cloud', response.usage);
     host.cloudConfirmed = true;
@@ -322,6 +373,23 @@ export async function sendAcceptanceReview(host: ProviderHost, missionId: string
     });
   } catch (error) {
     const malformed = error instanceof SyntaxError || (error instanceof Error && /acceptance review|unexpected fields|requirements|recommendation/.test(error.message));
+    (tracked as { done: () => void } | null)?.done();
+    const used = use as FullMetaUse | null;
+    if (used !== null && !sent) await settleMetaTokens(host, mission.scopeId, used.metaId, used.reserved, 0);
+    if (full && !sent) {
+      // Nothing left: back to the card, with the exact content, for the user to send or cancel.
+      await finish(host, missionId, (draft) => {
+        if (!draft.acceptanceReview || draft.acceptanceReview.digest !== digest) return;
+        draft.acceptanceReview.attempts = Math.max(0, draft.acceptanceReview.attempts - 1);
+        draft.acceptanceReview.status = 'offered';
+        draft.acceptanceReview.failure = `Not sent without its card: ${fullRefused ?? 'it was cancelled before it left'}.`.slice(0, 500);
+        draft.acceptanceReview.updatedAt = Date.now();
+        addNote(draft, `acceptance review not sent under Full Access: ${fullRefused ?? 'cancelled before it left'}; its card shows the exact content`);
+      });
+      host.status = `Review prepared. Not sent without its card: ${fullRefused ?? 'it was cancelled before it left'}. Inspect the exact content before sending it to Meta.`;
+      await host.postState();
+      return;
+    }
     const failure = classifyMetaFailure(error, [apiKey]);
     recordAdvisory(host, mission.threadId, review.model, { error, sent });
     await finish(host, missionId, (draft) => {
@@ -370,4 +438,9 @@ export async function decideAcceptanceReview(
     draft.acceptanceReview.updatedAt = Date.now();
     addNote(draft, decision === 'considered' ? 'user considered the Spark review before selecting final acceptance criteria' : 'user rejected the Spark suggestions; no criteria were changed');
   });
+}
+
+function advisorIs(host: ProviderHost, model: string): boolean {
+  const advisor = advisorFor(host);
+  return advisor.ok && advisor.model === model;
 }

@@ -36,7 +36,7 @@ No empieces con código confidencial ni datos personales reales. RAME Code 0.2.0
 ### No puede prometer
 
 - Que unas pruebas en verde demuestren que todo el producto es correcto.
-- Un sandbox del sistema operativo. Los scripts de prueba se ejecutan con los permisos de tu usuario de VS Code.
+- Un sandbox completo del sistema operativo. Los scripts de prueba se ejecutan con el nivel de aislamiento de **Seguridad › Comandos de terminal**: con Proyecto o Cerrado (Linux con Landlock) solo pueden escribir en el proyecto, la carpeta temporal y las cachés de paquetes, pero pueden leer tus archivos; con Total tienen tus permisos de usuario.
 - Control sin restricciones del terminal o del ordenador.
 - Memoria perfecta ni recuperación de cualquier paráfrasis antigua.
 - Verificación funcional completa para todos los lenguajes y plataformas. La verificación autónoma actual utiliza scripts Node/npm compatibles.
@@ -205,7 +205,7 @@ Agente y Misión utilizan decisiones de permisos independientes:
 
 Cambiar el selector de Agente no amplía, reduce ni sustituye un permiso de Misión ya concedido. Una Misión puede utilizar internamente el motor de ejecución de Agente, pero eso no la convierte en una petición de Agente: su autoridad sigue procediendo de la tarjeta de Misión mostrada antes de comenzar. La interfaz identifica esas ejecuciones internas como trabajo de Misión y mantiene visible el permiso de la Misión, en lugar de presentar el selector de Agente como su autoridad. Durante una Misión, considera como fuente de verdad el permiso que muestran su estado y sus evidencias.
 
-El workspace autónomo exige marcar **Confío en este proyecto**. La confianza se limita a esa Misión, carpeta, proveedor local y modelo. No es un sandbox del sistema operativo. Los scripts de prueba pueden acceder a archivos, red u otros procesos con tus permisos de usuario.
+El workspace autónomo exige marcar **Confío en este proyecto**. La confianza se limita a esa Misión, carpeta, proveedor local y modelo. No es un sandbox completo del sistema operativo: los scripts de prueba se ejecutan con el nivel de aislamiento de **Seguridad › Comandos de terminal** (Proyecto o Cerrado: solo escriben en el proyecto, la carpeta temporal y las cachés de paquetes, y Cerrado además sin red; Total: con tus permisos de usuario). En todos los niveles pueden leer tus archivos. El informe final de la Misión indica el nivel con el que se ejecutó de verdad cada prueba.
 
 RAME sigue protegiendo determinadas rutas y vuelve a preguntar por operaciones fuera del permiso, como borrar, mover archivos o modificar la memoria del proyecto. Si cambia `package.json`, también deja de ser válido el entorno de pruebas autorizado anteriormente.
 
@@ -250,13 +250,30 @@ Una comprobación en verde solo demuestra lo que esa comprobación cubre. Una pr
   "cases": [ { "call": "add", "args": [19, 23], "expect": 42 } ] }
 ```
 
-RAME llama entonces a esas funciones en un proceso aparte y compara él mismo los resultados; los valores esperados nunca se envían a ese proceso y las herramientas de RAME no se los muestran al agente. Una salida prematura o un falso mensaje de «todo aprobado» no pueden superarla. El informe de la Misión indica qué nivel se alcanzó y con qué versión de Node se ejecutó la comprobación. Los valores no son secretos: el código que se ejecuta con tus permisos todavía puede leer el archivo, así que haz casos variados.
+RAME llama entonces a cada función en un proceso nuevo y compara él mismo el resultado. En Linux compatible, ese proceso queda confinado con Landlock y seccomp. Si esa frontera no está disponible, la comprobación se ejecuta sin aislamiento, con un aviso en autorización, progreso, resultado y evidencia, y el resultado se etiqueta «sin aislamiento». Full Access y Total no rebajan el aislamiento cuando está disponible. El objetivo sigue siendo una protección equivalente en Windows y macOS.
+
+**Aceptación medida y Programmes.** Cada criterio indica si es observado por el host (`wall_ms`, `exit_code`) o declarado por la comprobación congelada (`p95_ms`, `errors` y otros nombres válidos). Las declaraciones solo cuentan por el canal privado de cada ejecución y advierten que código malicioso del mismo proceso puede alterarlas. Ficheros, salida y JSON arbitrarios nunca cuentan. Los registros antiguos no requieren nueva autorización.
 
 **No verificable.** Después de cada ejecución de la comprobación, RAME compara el proyecto con lo que registró al autorizar. Si cambió un archivo que usa la comprobación (en Linux y macOS, aunque se restaurara antes del final), apareció un archivo en una carpeta sellada, cambió un archivo de datos o un documento que ya existía, o RAME vio a la comprobación usar algo fuera del alcance que aprobaste, la Misión se detiene como **no verificable**: no cuenta como aprobado y tu aceptación queda tal como la autorizaste. Si solo cambió otro código, RAME te muestra los archivos y te pregunta (una revisión de alcance); apruébalos solo si son código bajo prueba, no pruebas ni valores esperados. Consulta [Cómo verificarlo](VERIFICATION.es.md).
 
 ### 6. Autoriza y sigue el progreso
 
 Revisa el objetivo, el nivel de verificación, el permiso y el posible permiso de asesoramiento de Meta. Pulsa **Autorizar e iniciar** solo cuando coincidan con tu intención.
+
+**Qué hace cada opción de la tarjeta de autorización**
+
+| Opción | Qué hace |
+| --- | --- |
+| **Nivel de verificación → Misión estándar** | La tarea se da por hecha cuando pasan las pruebas normales del proyecto. |
+| **Nivel de verificación → Misión verificada** | Además eliges una comprobación de aceptación y RAME **congela** sus archivos: si cambian, la Misión no se da por verificada. Es la única que muestra «verificación: protegida» (o «sin aislamiento» si el equipo no lo permite). |
+| **Permiso → Supervisada** | Cada escritura y cada prueba te piden confirmación con una tarjeta. |
+| **Permiso → Workspace autónomo** | Edita y ejecuta las pruebas permitidas sin preguntar, dentro del proyecto. Nunca toca `.git`, `.env` ni claves, no ejecuta comandos de terminal y sigue preguntando antes de borrar, mover o cambiar la memoria del proyecto. |
+| **Confío en este proyecto** | Obligatoria para el workspace autónomo: confirmas que los scripts de prueba de este proyecto no son peligrosos, porque se ejecutarán solos. Corren con el nivel de aislamiento de **Seguridad › Comandos de terminal**. |
+| **Ejecuciones internas por tarea, como máximo** | El máximo de ejecuciones del Agente por tarea. Si se agotan sin terminar, la Misión se bloquea en lugar de seguir sin fin. |
+| **Acceso web para esta Misión** (casilla) | Permite que la Misión busque y lea páginas, solo lectura. Viene desactivada. |
+| **Búsquedas / Lecturas de páginas, como máximo** | El presupuesto de búsquedas (5 por defecto) y de páginas leídas (10). En workspace autónomo no pregunta mientras quede presupuesto; en supervisada pregunta siempre. |
+| **Dominios autorizados** | Opcional. Si pones dominios, solo lee páginas de ellos; si no, solo las que salen en sus propias búsquedas. |
+| **Autonomía y permisos… (Meta)** | Autoriza de antemano consultas a Meta como asesor, con un límite de consultas y de bytes. Meta solo aconseja: no recibe archivos ni ejecuta nada. Si no lo autorizas y la Misión se atasca, te aparece una tarjeta para que decidas tú. |
 
 Durante la Misión puedes consultar:
 

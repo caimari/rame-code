@@ -20,9 +20,9 @@ export interface AdvisoryLimits {
 /** What the user chose in the grant form; null keeps the default. */
 export type ChosenAdvisoryLimits = Partial<Record<keyof AdvisoryLimits, number | null>>;
 
-/** What the grant has used so far. */
+/** What the grant has used so far; `maxConsultations` null = no count limit (the other limits remain). */
 export interface AdvisoryUsage {
-  maxConsultations: number;
+  maxConsultations: number | null;
   used: number;
   sentBytes: number;
   usedTokens: number;
@@ -30,17 +30,18 @@ export interface AdvisoryUsage {
 
 export const ADVISORY_LIMIT_RANGES: Readonly<Record<keyof AdvisoryLimits, readonly [number, number]>> = {
   maxRequestBytes: [1000, 24000],
-  maxTotalBytes: [1000, 120000],
+  // Up to 1000 full consultations; with no count limit, these totals are what still bounds a Mission.
+  maxTotalBytes: [1000, 12_000_000],
   maxOutputTokens: [256, 8192],
-  maxTotalTokens: [1000, 200000],
+  maxTotalTokens: [1000, 14_048_000],
 };
 
 const PER_REQUEST_BYTES = 12000;
 const PER_ANSWER_TOKENS = 2048;
 
-/** Defaults for n consultations: n full requests and answers, within the ranges. */
-export function defaultAdvisoryLimits(maxConsultations: number): AdvisoryLimits {
-  const n = Math.max(1, maxConsultations);
+/** Defaults for n consultations: n full requests and answers, within the ranges; no count limit (null) takes the ceilings. */
+export function defaultAdvisoryLimits(maxConsultations: number | null): AdvisoryLimits {
+  const n = maxConsultations === null ? Number.MAX_SAFE_INTEGER : Math.max(1, maxConsultations);
   return {
     maxRequestBytes: PER_REQUEST_BYTES,
     maxTotalBytes: Math.min(ADVISORY_LIMIT_RANGES.maxTotalBytes[1], n * PER_REQUEST_BYTES),
@@ -50,7 +51,7 @@ export function defaultAdvisoryLimits(maxConsultations: number): AdvisoryLimits 
 }
 
 /** The user's values over the defaults; null fields keep the default. */
-export function chooseAdvisoryLimits(maxConsultations: number, chosen: ChosenAdvisoryLimits | null | undefined): AdvisoryLimits {
+export function chooseAdvisoryLimits(maxConsultations: number | null, chosen: ChosenAdvisoryLimits | null | undefined): AdvisoryLimits {
   const limits = defaultAdvisoryLimits(maxConsultations);
   for (const key of Object.keys(ADVISORY_LIMIT_RANGES) as Array<keyof AdvisoryLimits>) {
     const value = chosen?.[key];
@@ -85,7 +86,7 @@ export function tokenBound(requestBytes: number, limits: AdvisoryLimits): number
 
 /** null when the request may be sent; otherwise which limit it would exceed. */
 export function refuseOverLimit(limits: AdvisoryLimits, usage: AdvisoryUsage, requestBytes: number): string | null {
-  if (usage.used >= usage.maxConsultations) {
+  if (usage.maxConsultations !== null && usage.used >= usage.maxConsultations) {
     return `the consultation limit (${usage.used}/${usage.maxConsultations}) is reached`;
   }
   if (requestBytes > limits.maxRequestBytes) {
@@ -102,7 +103,7 @@ export function refuseOverLimit(limits: AdvisoryLimits, usage: AdvisoryUsage, re
 }
 
 /** Back-compatible reading of stored limits: absent fields get the defaults. */
-export function storedAdvisoryLimits(raw: Record<string, unknown>, maxConsultations: number): AdvisoryLimits | null {
+export function storedAdvisoryLimits(raw: Record<string, unknown>, maxConsultations: number | null): AdvisoryLimits | null {
   const defaults = defaultAdvisoryLimits(maxConsultations);
   const limits = { ...defaults };
   for (const key of Object.keys(ADVISORY_LIMIT_RANGES) as Array<keyof AdvisoryLimits>) {

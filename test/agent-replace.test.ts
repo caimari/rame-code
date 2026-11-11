@@ -231,7 +231,7 @@ test('three unparsed replies in a row stop the run; any other HTTP 500 is still 
   await withHarness('safe-auto', async (h) => {
     h.model.enqueue({ kind: 'json', status: 500, body: { error: { code: 500, message: 'Internal failure', type: 'server_error' } } });
     await h.provider.sendMessage('Do something.', 'agent', 'local');
-    assert.match(h.last().status, /^Local work failed \(The local runtime returned HTTP 500\.\)/);
+    assert.match(h.last().status, /^Local work failed \(The local runtime returned HTTP 500: "Internal failure"\)/, "the server's own words are shown");
     assert.equal(h.model.requests.length, 1, 'no repair for an unrelated 500');
   });
 });

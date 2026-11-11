@@ -111,7 +111,9 @@ test('the Agent path uses the same exact boundary, through the real host', async
     h.model.enqueue({ kind: 'json', body: assistantText('Done.') });
     await h.provider.sendMessage('Anything about the toolbar?', 'agent', 'local');
     const messages = h.model.requests[before]?.messages as Array<{ role: string; content: string }>;
-    const packet = messages.find((message) => /^CONTEXT CONTINUITY FROM RAME CODE/.test(message.content));
+    // Adjacent system messages travel joined (agentModel.mergeAdjacentSystemMessages): the packet starts a line in one.
+    const packet = messages.find((message) => message.role === 'system' && /(?:^|\n)CONTEXT CONTINUITY FROM RAME CODE/.test(message.content));
+    assert.ok(packet, 'the continuity packet is sent');
     const old = Number(/- (\d+) older conversational turn/.exec(packet?.content ?? '')?.[1] ?? 0);
     const sentNotes = messages.filter((message) => (message.role === 'user' || message.role === 'assistant') && /^Design note \d+:/.test(message.content)).length;
     // 151 earlier conversational turns (150 notes + the objective), plus the request itself.

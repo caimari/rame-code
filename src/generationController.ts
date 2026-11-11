@@ -8,6 +8,7 @@
 import * as remote from './remoteController.js';
 import { withBoundedRequest } from './boundedRequest.js';
 import {
+  GenerationContextError,
   REASONING_LABELS,
   UNKNOWN_LOCAL_PROPS,
   automaticOutputTokens,
@@ -26,6 +27,9 @@ import type {
   ModelGenerationProfile,
 } from './generationSettings.js';
 import { createLocalChatCompletion, createLocalMissionPlan } from './localProvider.js';
+import { LocalServerHttpError, LocalServerSetupError } from './localServerErrors.js';
+import { lmStudioReloadOffer } from './lmStudioReloadOffer.js';
+import { lmStudioLoadedContext } from './lmStudioContext.js';
 import { isLocalOrPrivateUrl } from './localServers.js';
 import { chatWebOffered, runChatWithWeb } from './chatWeb.js';
 import { createChatCompletion, missionPlanSchema, validateMissionPlan } from './meta-provider.js';
@@ -126,23 +130,33 @@ export async function probeLocalProps(
   endpoint: string,
 ): Promise<LocalServerProps> {
   let props: LocalServerProps = { ...UNKNOWN_LOCAL_PROPS };
+  // `/props` is llama-server's. LM Studio and Ollama have none (LM Studio logs it as an error and
+  // answers 200, Ollama 404): for a server chosen as one of them, ask its model list instead.
+  const external = host.settings.externalLocalEndpoint.trim();
+  const listOnly = external.length > 0 && endpoint === external && (host.settings.externalLocal.kind === 'lmstudio' || host.settings.externalLocal.kind === 'ollama');
   if (isLocalOrPrivateUrl(endpoint)) {
     try {
       const payload = await withBoundedRequest(
         undefined,
         LOCAL_PROPS_TIMEOUT_MS,
-        'Local /props timed out.',
+        listOnly ? 'Local /v1/models timed out.' : 'Local /props timed out.',
         async (signal) => {
           const response = await fetch(
-            `${endpoint.replace(/\/+$/, '')}/props`,
+            `${endpoint.replace(/\/+$/, '')}${listOnly ? '/v1/models' : '/props'}`,
             { method: 'GET', signal, redirect: 'manual' },
           );
           return response.ok ? ((await response.json()) as unknown) : null;
         },
       );
-      props = parseLlamaServerProps(payload);
-      if (payload !== null) {
+      props = listOnly ? { ...UNKNOWN_LOCAL_PROPS } : parseLlamaServerProps(payload);
+      const answered = listOnly
+        ? typeof payload === 'object' && payload !== null && Array.isArray((payload as { data?: unknown }).data)
+        : payload !== null;
+      if (answered) {
         host.localConfirmed = endpoint;
+      }
+      if (answered && host.settings.externalLocal.kind === 'lmstudio') {
+        props = { ...props, contextWindow: await lmStudioContextOf(endpoint, requestedLocalModel(host.settings, endpoint)) };
       }
     } catch {
       props = { ...UNKNOWN_LOCAL_PROPS };
@@ -150,6 +164,23 @@ export async function probeLocalProps(
   }
   host.localProps = { endpoint, props };
   return props;
+}
+
+/**
+ * The context LM Studio has the model loaded with, so a request that does not
+ * fit is refused here instead of being cut by LM Studio (lmStudioContext.ts).
+ * Null (unknown, no check) when LM Studio does not say.
+ */
+async function lmStudioContextOf(endpoint: string, model: string): Promise<number | null> {
+  try {
+    const payload = await withBoundedRequest(undefined, LOCAL_PROPS_TIMEOUT_MS, 'LM Studio /api/v1/models timed out.', async (signal) => {
+      const response = await fetch(`${endpoint.replace(/\/+$/, '')}/api/v1/models`, { method: 'GET', signal, redirect: 'manual' });
+      return response.ok ? ((await response.json()) as unknown) : null;
+    });
+    return lmStudioLoadedContext(payload, model);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -547,6 +578,17 @@ export async function handleSendError(
     }
     return;
   }
+  if (provider === 'local' && error instanceof LocalServerSetupError) {
+    // The server answered that it has no model ready: say what to do there; Spark is not the fix.
+    remote.localSetupIssue(host, threadId);
+    host.connection = 'error';
+    host.status = error.message;
+    const current = host.store.get(threadId);
+    if (current) {
+      host.store.save(appendErrorTurn(current, error.message.slice(0, 500)));
+    }
+    return;
+  }
   if (
     (error instanceof Error && error.name === 'AbortError') ||
     (error instanceof DOMException && error.name === 'AbortError')
@@ -582,7 +624,9 @@ export async function handleSendError(
     host.localEndpoint() ??
     `http://127.0.0.1:${host.settings.local.port}`;
   const unreachable = localUnreachableMessage(displayEndpoint);
+  // A server that answered with an HTTP error was reached, whatever its own words say.
   const looksUnreachable =
+    !(error instanceof LocalServerHttpError) &&
     /not running|no external endpoint|not reachable|unreachable|refused|failed to fetch|fetch failed|network|econn|socket|health/i.test(
       safe,
     );
@@ -593,6 +637,11 @@ export async function handleSendError(
   const delegated = provider === 'cloud' ? remote.delegationFailed(host, threadId, error, apiKey ?? '') : null;
   // The local actions shown depend on the request: see remote.localFailure.
   const local = provider === 'local' ? remote.localFailure(host, threadId, looksUnreachable, reason, apiKey !== undefined && apiKey.length > 0) : null;
+  // LM Studio refused for lack of context: the card also offers to reload the model with more (lmStudioReload.ts).
+  const reload = local !== null ? lmStudioReloadOffer(host, error) : null;
+  if (local !== null && host.localIssue !== null && error instanceof GenerationContextError) {
+    host.localIssue = { ...host.localIssue, context: true, ...(reload !== null ? { reload } : {}) };
+  }
   const failed = looksUnreachable ? unreachable : `Local work failed (${safe}).`;
   if (local === 'offered') {
     host.connection = 'error';
@@ -621,8 +670,13 @@ export async function handleSendError(
   }
   const current = host.store.get(threadId);
   if (current) {
+    // The thread keeps why it failed, also when the status only says escalation is waiting.
     const errorNote =
-      provider === 'local' && looksUnreachable ? unreachable : host.status;
+      provider === 'local' && looksUnreachable
+        ? unreachable
+        : local === 'offered'
+          ? `${failed} Escalation is waiting for approval.`
+          : host.status;
     host.store.save(appendErrorTurn(current, errorNote.slice(0, 500)));
   }
 }

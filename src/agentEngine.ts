@@ -47,7 +47,8 @@ import { hashContent } from './agentPatch.js';
 import { checkAgentRelPath, MAX_AGENT_STEPS } from './agentPolicy.js';
 import { agentToolFs, frozenTarget } from './missionToolGuards.js';
 import { externalToolsRefusal } from './localSourceState.js';
-import { executeExtraTool, extraToolDefinitions } from './agentExtraTools.js';
+import { limitsForModel } from './localLimits.js';
+import { boundCard, boundRefusal, confirmBound, executeBoundTool, executeExtraTool, extraToolAuto, extraToolDefinitions, isBoundTool } from './agentExtraTools.js';
 import {
   DEFAULT_AGENT_PROFILE,
   isAutoAllowed,
@@ -64,7 +65,9 @@ import {
 } from './agentTools.js';
 import {
   applyPatchViaFs,
+  autoAuditRecord,
   checkReplacement,
+  recordAgentAudit,
   commitModelProposal,
   describeMemoryProposal,
 } from './agentController.js';
@@ -101,7 +104,6 @@ import {
   MEMORY_RULES_TEXT,
 } from './projectMemory.js';
 import type { ProviderId } from './settingsStore.js';
-import { RAME_AUDIT_KEY } from './settingsStore.js';
 import type { EvidenceApproval } from './modelEvidence.js';
 import { beginRun, markFinal, recordAgentAction, recordAgentStep } from './modelEvidenceRecorder.js';
 import {
@@ -154,32 +156,6 @@ function historyText(text: string): string {
   );
 }
 
-function recordAgentAudit(
-  host: ProviderHost,
-  pending: PendingAgentAction,
-  decision: 'human' | 'profile-auto' | 'mission-grant' | 'rejected' | 'policy',
-  result: string,
-): void {
-  const entry = host.audit.append({
-    provider: pending.provider,
-    threadId: pending.threadId,
-    profile: host.settings.agentProfile,
-    tool: pending.tool,
-    digest: pending.digest,
-    decision,
-    result,
-  });
-  void host.extensionState.update(RAME_AUDIT_KEY, host.audit.list());
-  host.agentLogView = [
-    ...host.agentLogView,
-    {
-      tool: entry.tool,
-      digest: entry.digest.slice(0, 16),
-      decision: entry.decision,
-      result: entry.result,
-    },
-  ].slice(-20);
-}
 
 function failAgentWithAudit(
   host: ProviderHost, call: ValidatedToolCall, provider: string,
@@ -204,31 +180,6 @@ function recordBlockedProposal(
   const desc = { tool: call.tool, targets: described.targets, body: described.body, provider, workspaceId, threadId, preconditions: described.preconditions };
   const digest = computeActionDigest(desc);
   recordAgentAudit(host, { ...desc, actionId: `blocked_${digest.slice(0, 16)}`, digest, createdAt: Date.now(), generation: host.agentGeneration, used: true }, 'policy', reason);
-}
-
-function autoAuditRecord(
-  host: ProviderHost,
-  call: ValidatedToolCall,
-  described: { targets: string[]; body: string; preconditions: Record<string, string> },
-  provider: string,
-  workspaceId: string,
-  threadId: string,
-  digest: string,
-): PendingAgentAction {
-  return {
-    tool: call.tool,
-    targets: described.targets,
-    body: described.body,
-    provider,
-    workspaceId,
-    threadId,
-    preconditions: described.preconditions,
-    actionId: `auto_${digest.slice(0, 16)}`,
-    digest,
-    createdAt: Date.now(),
-    generation: host.agentGeneration,
-    used: true,
-  };
 }
 
 async function checkWorkspaceStillHeld(
@@ -374,6 +325,12 @@ async function executeAgentTool(
     case 'web_fetch':
     case 'run_command':
       return executeExtraTool(host, call.tool, call.args as Record<string, unknown>, provider, workspaceId, signal);
+    case 'start_job':
+    case 'job_status':
+    case 'install_package':
+    case 'check_installed':
+    case 'read_original':
+      return executeBoundTool(host, call, workspaceId, host.settings.agentProfile, signal);
     case 'create_directory':
       return executeCreateDirectory(fs, call, canonicalRoot ?? null);
     case 'move_file':
@@ -738,6 +695,8 @@ export async function sendAgent(
   let lowBudgetNoted = false;
   const changedFiles = new Set<string>();
   const testRuns: Array<{ commandId: string; exitCode: number | null; writes: number; at: number; outputDigest: string }> = [];
+  // The end of the last failing test's output, for an advisor consultation (made safe there, never sent raw).
+  const failing: { last: { commandId: string; text: string } | null } = { last: null };
   const memoryProposals = new Map<string, MemoryProposal>();
   const hostRecord: string[] = continuity.hostRecordLine ? [continuity.hostRecordLine] : [];
   // Model evidence: the inference each tool call came from, and how the host allowed its action.
@@ -773,7 +732,11 @@ export async function sendAgent(
       if (!canonicalStale.ok) {
         return 'stale';
       }
-      if (signal.aborted) {
+      // A Mission stop pressed before this run had a request to abort (between two
+      // internal runs, while the host saved the run's start or prepared it) is
+      // honoured here, before anything is sent: the Mission loop then pauses or
+      // cancels as for any stop.
+      if (signal.aborted || (host.missionAuto !== null && host.missionAuto.stop !== null)) {
         throw new DOMException('Aborted', 'AbortError');
       }
       if (host.missionAuto !== null && !lowBudgetNoted && MAX_AGENT_STEPS - step <= MISSION_LOW_BUDGET_STEPS && workspaceWrites === 0 && testRuns.length === 0) {
@@ -817,6 +780,10 @@ export async function sendAgent(
         if (!(error instanceof GenerationContextError)) {
           throw error;
         }
+        if (provider === 'local') {
+          // Same card as the server's own refusal (what it does not fit, and the LM Studio reload): nothing was sent.
+          throw new GenerationContextError(`The Agent stopped before model step ${step + 1}: ${error.message}`, error.neededTokens);
+        }
         const detail = `The Agent stopped before model step ${step + 1}: ${error.message}`;
         const current = host.store.get(threadId);
         if (current) {
@@ -835,7 +802,7 @@ export async function sendAgent(
       try {
         const modelProvider = provider === 'cloud'
           ? guardedMetaAgent(host, threadId, text, apiKey)
-          : new LocalAgentModelProvider(host.localEndpoint() as string);
+          : new LocalAgentModelProvider(host.localEndpoint() as string, undefined, limitsForModel(host.settings.localLimits, model));
         completion = await modelProvider.complete({
           model,
           messages,
@@ -913,7 +880,7 @@ export async function sendAgent(
             'For filesystem_usage, use exactly {} as its arguments. ' +
             'For apply_patch, use {"files":[{"path":"relative/path","expectedHash":"the sha256 returned by read_file, or e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 for a new file","newContent":"full replacement text"}]}.',
         });
-        host.status = `Correcting malformed tool call (${protocolRepairs}/2): waiting for the ${providerLabel} (120 s maximum)\u2026`;
+        host.status = `Correcting malformed tool call (${protocolRepairs}/2): waiting for the ${providerLabel} (within its time limits)\u2026`;
         await host.postState();
         continue agentSteps;
       }
@@ -1044,6 +1011,13 @@ export async function sendAgent(
             return 'policy-stop';
           }
           described = { targets: bound.described.targets, body: bound.described.body, preconditions: bound.described.preconditions };
+        } else if (isBoundTool(call.tool)) {
+          const card = await boundCard(host, call, workspaceId);
+          if (!card.ok) {
+            extra.push(...boundRefusal(call, card.error));
+            continue agentSteps;
+          }
+          described = card.described;
         } else if (call.tool === 'apply_patch') {
           described = {
             ...described,
@@ -1160,7 +1134,7 @@ export async function sendAgent(
           commandId: String((call.args as Record<string, unknown>).commandId ?? ''),
           packageJsonHash: hashContent(testContext.packageJsonRaw),
         });
-        const auto = byGrant || isAutoAllowed(profile, call.tool);
+        const auto = byGrant || isAutoAllowed(profile, call.tool) || (await extraToolAuto(host, profile, call, workspaceId));
         const autoDecision = byGrant ? ('mission-grant' as const) : ('profile-auto' as const);
         let approvedPending: PendingAgentAction | null = null;
         if (!auto) {
@@ -1223,6 +1197,11 @@ export async function sendAgent(
             return 'rejected';
           }
           approvedPending = pending;
+          const job = await confirmBound(host, call, described.body, workspaceId);
+          if (!job.ok) {
+            failAgentWithAudit(host, call, provider, threadId, workspaceId, 'policy', job.error, job.error);
+            return 'policy-stop';
+          }
           if (call.tool === 'run_tests') {
             const reverified = await verifyBoundTestStillApproved(
               host,
@@ -1337,6 +1316,9 @@ export async function sendAgent(
         }
         if (call.tool === 'run_tests') {
           const exit = /^exit=(\d+)/.exec(resultText);
+          if (!exit || Number(exit[1]) !== 0) {
+            failing.last = { commandId: String((call.args as Record<string, unknown>).commandId ?? ''), text: resultText.slice(-4000) };
+          }
           testRuns.push({
             commandId: String((call.args as Record<string, unknown>).commandId ?? ''),
             exitCode: exit ? Number(exit[1]) : null,
@@ -1426,6 +1408,7 @@ export async function sendAgent(
       repeatedReads,
       // The last result of each test command, for the Mission's blocking verifiers.
       verifiers: [...new Map(testRuns.map((run) => [run.commandId, { commandId: run.commandId, exitCode: run.exitCode, afterLastWrite: run.writes === workspaceWrites }])).values()],
+      ...(failing.last !== null ? { failingOutput: failing.last } : {}),
     };
   }
   let capabilityReason: string | null = null;
@@ -1439,8 +1422,9 @@ export async function sendAgent(
   if (host.lastAgentOutcome !== null && host.lastAgentOutcome.threadId === threadId) {
     host.lastAgentOutcome = { ...host.lastAgentOutcome, capabilityReason };
   }
-  if (provider === 'local' && capabilityReason !== null && host.cascadeVerification === null && host.activeMission === null) {
-    offerConsult(host, { threadId, root: target.root, task: text, reason: capabilityReason, hostRecord: [...hostRecord], scopeId: memoryScope.scopeId, verifier: lastTest });
+  // The main model that ran, local or Meta, may consult its advisor (offerConsult picks it, never the main model itself).
+  if (capabilityReason !== null && host.cascadeVerification === null && host.activeMission === null) {
+    offerConsult(host, { threadId, root: target.root, task: text, reason: capabilityReason, hostRecord: [...hostRecord], scopeId: memoryScope.scopeId, verifier: lastTest, ...(failing.last !== null ? { checkOutput: failing.last.text } : {}) });
   }
   void steps;
   void buildAgentSystemPrompt;

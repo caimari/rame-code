@@ -17,9 +17,11 @@
  * the user sends that answer on.
  */
 
+import { useAgentWebNow } from './autonomyHost.js';
 import { waitForAgentDecision } from './agentController.js';
 import { computeActionDigest, createPendingAction } from './agentApproval.js';
 import { describeAgentCall } from './agentHost.js';
+import { limitsForModel } from './localLimits.js';
 import { createLocalAgentCompletion, type AgentChatMessage, type AgentCompletion } from './agentModel.js';
 import type { AgentToolDefinition } from './agentTools.js';
 import type { PendingAgentAction } from './agentApproval.js';
@@ -77,7 +79,7 @@ export async function runChatWithWeb(
   const held = host.heldWorkspaceRoot();
   const workspaceId = held.ok ? held.root : '';
   for (let step = 0; step < CHAT_WEB_MAX_STEPS; step += 1) {
-    const completion = await observe(createLocalAgentCompletion({ endpoint: options.endpoint, model: options.model, messages, generation: options.generation, signal: options.signal, tools, toolChoice: 'auto' }));
+    const completion = await observe(createLocalAgentCompletion({ endpoint: options.endpoint, model: options.model, messages, generation: options.generation, signal: options.signal, tools, toolChoice: 'auto', limits: limitsForModel(host.settings.localLimits, options.model) }));
     usage.input += completion.usage.inputTokens;
     usage.output += completion.usage.outputTokens;
     host.recordUsage('local', completion.usage);
@@ -91,6 +93,7 @@ export async function runChatWithWeb(
     });
     for (const call of completion.toolCalls) {
       let result: string;
+      let bySession = false;
       const label = options.label ?? 'Chat';
       if (options.extra && call.tool === options.extra.definition.function.name) {
         const done = await options.extra.run(call.args as Record<string, unknown>);
@@ -103,10 +106,10 @@ export async function runChatWithWeb(
           : `${call.tool} is not available: this ${label} has no project folder. Call request_project_folder if you need one, or answer with what you have.`;
         hostRecord.push(`• ${call.tool} → refused: not a ${label} tool`);
         options.onOutcome?.(call, `blocked by policy: not a ${label} tool`, null);
-      } else if (options.autoApprove?.(call.tool) === true) {
+      } else if (options.autoApprove?.(call.tool) === true || (bySession = await useAgentWebNow(host, call.tool, call.args as Record<string, unknown>, workspaceId))) {
         const described = describeAgentCall(call);
         const pending = createPendingAction({ tool: call.tool, targets: described.targets, body: described.body, provider: 'local', workspaceId, threadId: options.threadId, preconditions: described.preconditions }, host.agentGeneration);
-        options.onApproval?.(pending, 'profile-auto', 'allowed by the permission profile');
+        options.onApproval?.(pending, 'profile-auto', bySession ? 'within the web pre-authorization or Full Access (Autonomy & Permissions)' : 'allowed by the permission profile');
         result = await executeWebTool(host, call.tool, call.args as Record<string, unknown>, 'local', options.signal);
         hostRecord.push(`• ${call.tool} ${described.targets[0] ?? ''} → ${result.split('\n')[0] ?? ''}`.slice(0, 500));
         options.onOutcome?.(call, result.split('\n')[0] ?? '', { digest: pending.digest, approval: 'profile' });
@@ -137,7 +140,7 @@ export async function runChatWithWeb(
   }
   // Out of rounds: one last answer, without tools.
   messages.push({ role: 'system', content: 'No more web calls in this reply. Answer now with what you found, citing the sources you used.' });
-  const final = await observe(createLocalAgentCompletion({ endpoint: options.endpoint, model: options.model, messages, generation: options.generation, signal: options.signal, tools, toolChoice: 'none' }));
+  const final = await observe(createLocalAgentCompletion({ endpoint: options.endpoint, model: options.model, messages, generation: options.generation, signal: options.signal, tools, toolChoice: 'none', limits: limitsForModel(host.settings.localLimits, options.model) }));
   host.recordUsage('local', final.usage);
   return { text: final.text, hostRecord, usage };
 }

@@ -7,6 +7,7 @@
  * calls are all rejected before anything runs.
  */
 
+import { validateInstallRequest } from './installPlan.js';
 import {
   MAX_PATCH_BYTES,
   MAX_PATCH_FILES,
@@ -14,7 +15,7 @@ import {
   MAX_TOOL_CALLS_PER_TURN,
   MAX_TOOL_OUTPUT_BYTES,
 } from './agentPolicy.js';
-import { HOST_TOOL_NAMES, MEMORY_TOOL_NAMES, WEB_TOOL_NAMES, type AgentToolName } from './agentProfiles.js';
+import { HOST_TOOL_NAMES, INSTALL_TOOL_NAMES, JOB_TOOL_NAMES, MEMORY_TOOL_NAMES, WEB_TOOL_NAMES, type AgentToolName } from './agentProfiles.js';
 import type { ProviderUsage } from './usage.js';
 
 export const AGENT_TOOL_LIST: readonly AgentToolName[] = [
@@ -459,6 +460,14 @@ export function validateToolArgs(tool: string, raw: unknown): Record<string, unk
       return validateRunTestsArgs(raw) as unknown as Record<string, unknown>;
     case 'read_decisions':
       return validateReadDecisionsArgs(raw);
+    case 'read_original': {
+      const keys = isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, 'path') ? ['path'] : [];
+      const args = requireExactArgs(tool, raw, keys);
+      if (keys.length === 1 && (typeof args.path !== 'string' || args.path.length > 512)) {
+        failArgs(tool, 'path must be a project path of at most 512 characters');
+      }
+      return keys.length === 1 ? { path: args.path as string } : {};
+    }
     case 'propose_decision':
       return validateProposeDecisionArgs(raw) as unknown as Record<string, unknown>;
     case 'bind_artifact':
@@ -480,6 +489,48 @@ export function validateToolArgs(tool: string, raw: unknown): Record<string, unk
         failArgs(tool, 'timeoutSec must be an integer from 1 to 600');
       }
       return args.timeoutSec === undefined ? { command: args.command } : { command: args.command, timeoutSec: args.timeoutSec };
+    }
+    case 'start_job': {
+      const keys = isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, 'timeoutSec') ? ['commandId', 'timeoutSec'] : ['commandId'];
+      const args = requireExactArgs(tool, raw, keys);
+      if (typeof args.commandId !== 'string' || !/^npm:[A-Za-z0-9:_-]{1,64}$/.test(args.commandId)) {
+        failArgs(tool, 'commandId must be npm:<script name>');
+      }
+      if (args.timeoutSec !== undefined && (typeof args.timeoutSec !== 'number' || !Number.isInteger(args.timeoutSec) || args.timeoutSec < 1 || args.timeoutSec > 21600)) {
+        failArgs(tool, 'timeoutSec must be an integer from 1 to 21600');
+      }
+      return args.timeoutSec === undefined ? { commandId: args.commandId } : { commandId: args.commandId, timeoutSec: args.timeoutSec };
+    }
+    case 'job_status': {
+      const record = isRecord(raw) ? raw : {};
+      const keys = ['jobId', 'waitSec'].filter((key) => Object.prototype.hasOwnProperty.call(record, key));
+      const args = requireExactArgs(tool, raw, keys);
+      if (args.jobId !== undefined && (typeof args.jobId !== 'string' || !/^[a-z0-9-]{8,64}$/.test(args.jobId))) {
+        failArgs(tool, 'jobId must be a job id returned by start_job');
+      }
+      if (args.waitSec !== undefined && (typeof args.waitSec !== 'number' || !Number.isInteger(args.waitSec) || args.waitSec < 0 || args.waitSec > 120)) {
+        failArgs(tool, 'waitSec must be an integer from 0 to 120');
+      }
+      return { ...(args.jobId !== undefined ? { jobId: args.jobId } : {}), ...(args.waitSec !== undefined ? { waitSec: args.waitSec } : {}) };
+    }
+    case 'install_package':
+    case 'check_installed': {
+      const record = isRecord(raw) ? raw : {};
+      const extra = tool === 'install_package' ? 'reason' : 'waitSec';
+      const keys = ['manager', 'name', ...['version', 'runtime', extra].filter((key) => Object.prototype.hasOwnProperty.call(record, key) || (key === 'reason' && tool === 'install_package'))];
+      const args = requireExactArgs(tool, raw, keys);
+      const { reason, waitSec, ...request } = args;
+      const checked = validateInstallRequest(request);
+      if (!checked.ok) {
+        failArgs(tool, checked.error);
+      }
+      if (tool === 'install_package' && (typeof reason !== 'string' || reason.trim().length === 0 || reason.length > 300)) {
+        failArgs(tool, 'reason must say in 1 to 300 characters why it is needed');
+      }
+      if (waitSec !== undefined && (typeof waitSec !== 'number' || !Number.isInteger(waitSec) || waitSec < 0 || waitSec > 120)) {
+        failArgs(tool, 'waitSec must be an integer from 0 to 120');
+      }
+      return { ...checked.request, ...(tool === 'install_package' ? { reason: String(reason).trim() } : waitSec !== undefined ? { waitSec } : {}) };
     }
     case 'request_project_folder': {
       const args = requireExactArgs(tool, raw, ['reason']);
@@ -539,7 +590,7 @@ export function validateOneToolCall(raw: unknown): ValidatedToolCall {
   }
   if (
     typeof fn.name !== 'string' ||
-    (!(AGENT_TOOL_LIST as readonly string[]).includes(fn.name) && !(MEMORY_TOOL_NAMES as readonly string[]).includes(fn.name) && !(WEB_TOOL_NAMES as readonly string[]).includes(fn.name) && !(HOST_TOOL_NAMES as readonly string[]).includes(fn.name))
+    (!(AGENT_TOOL_LIST as readonly string[]).includes(fn.name) && !(MEMORY_TOOL_NAMES as readonly string[]).includes(fn.name) && !(WEB_TOOL_NAMES as readonly string[]).includes(fn.name) && !(HOST_TOOL_NAMES as readonly string[]).includes(fn.name) && !(JOB_TOOL_NAMES as readonly string[]).includes(fn.name) && !(INSTALL_TOOL_NAMES as readonly string[]).includes(fn.name) && fn.name !== 'read_original')
   ) {
     fail('Unknown tool.');
   }
@@ -547,7 +598,7 @@ export function validateOneToolCall(raw: unknown): ValidatedToolCall {
   // as an empty string or null. This is unambiguous only for this exact
   // zero-argument tool; every other tool keeps the strict JSON contract.
   const argsDecoded =
-    (fn.name === 'filesystem_usage' || fn.name === 'read_decisions') && (fn.arguments === '' || fn.arguments === null)
+    (fn.name === 'filesystem_usage' || fn.name === 'read_decisions' || fn.name === 'read_original') && (fn.arguments === '' || fn.arguments === null)
       ? {}
       : parseArgumentsField(fn.arguments);
   const args = validateToolArgs(fn.name as string, argsDecoded);

@@ -6,9 +6,11 @@
  * - `ask`: every tool action pauses for a visible approve/reject decision.
  * - `safe-auto`: low-risk workspace reads run automatically after policy
  *   validation; writes and test commands still require approval.
- * - `workspace-full`: policy-valid reads, patch applications, allowlisted
- *   tests and enabled read-only web calls may run without per-action prompts.
- *   The optional terminal remains separately gated and always needs approval.
+ * - `workspace-full`: policy-valid reads, patch applications and allowlisted
+ *   tests may run without per-action prompts. The profile never grants
+ *   anything outside the computer: web calls follow Autonomy & Permissions
+ *   (a card, a web pre-authorization or Full Access), and the optional
+ *   terminal is separately gated.
  *
  * Only the profile id is persisted; transient approvals are never stored.
  * Unknown or corrupt persisted state falls back to `ask`.
@@ -66,10 +68,19 @@ export type WebToolName = (typeof WEB_TOOL_NAMES)[number];
 export function isWebToolName(value: unknown): value is WebToolName {
   return (WEB_TOOL_NAMES as readonly unknown[]).includes(value);
 }
+/** Long background jobs (jobTools.ts), offered only when the user enabled them. */
+export const JOB_TOOL_NAMES = ['start_job', 'job_status'] as const;
+export type JobToolName = (typeof JOB_TOOL_NAMES)[number];
+/** Installs with permission (installTool.ts). */
+export const INSTALL_TOOL_NAMES = ['install_package', 'check_installed'] as const;
+export type InstallToolName = (typeof INSTALL_TOOL_NAMES)[number];
+/** Read-only tools offered only in a Mission's runs: read_original (originalTool.ts). */
+export const MISSION_TOOL_NAMES = ['read_original'] as const;
+export type MissionToolName = (typeof MISSION_TOOL_NAMES)[number];
 /** Host-side tools offered only by Agent without a project folder (agentNoProject.ts). */
 export const HOST_TOOL_NAMES = ['request_project_folder'] as const;
 export type HostToolName = (typeof HOST_TOOL_NAMES)[number];
-export type AgentToolName = AgentWorkspaceToolName | MemoryToolName | WebToolName | HostToolName;
+export type AgentToolName = AgentWorkspaceToolName | MemoryToolName | WebToolName | HostToolName | JobToolName | InstallToolName | MissionToolName;
 
 export function isMemoryToolName(value: unknown): value is MemoryToolName {
   return (MEMORY_TOOL_NAMES as readonly unknown[]).includes(value);
@@ -83,6 +94,7 @@ const READ_TOOLS: readonly AgentToolName[] = [
   'search_text',
   'read_file',
   'read_decisions',
+  'read_original',
 ];
 
 export interface AgentProfileOption {
@@ -189,9 +201,14 @@ export function isAutoAllowed(
   profile: AgentProfileId,
   tool: AgentToolName,
 ): boolean {
-  if ((USER_APPROVAL_ONLY_TOOLS as readonly string[]).includes(tool) || tool === 'run_command') {
-    // Memory changes and terminal commands are never automatic, whatever the profile.
+  if ((USER_APPROVAL_ONLY_TOOLS as readonly string[]).includes(tool) || tool === 'run_command' || tool === 'start_job' || tool === 'install_package') {
+    // Memory changes, terminal commands, long jobs and installs are never automatic by profile alone
+    // (automatic installs are a separate choice of the user: installTool.ts).
     return false;
+  }
+  if (tool === 'job_status' || tool === 'check_installed') {
+    // Read-only: a job's state and the end of its output.
+    return profile !== ASK_PROFILE_ID;
   }
   if (profile === ASK_PROFILE_ID) {
     return false;
@@ -199,8 +216,9 @@ export function isAutoAllowed(
   if (profile === SAFE_AUTO_PROFILE_ID) {
     return (READ_TOOLS as readonly string[]).includes(tool);
   }
-  // workspace-full: every allowlisted tool may run without a prompt once
-  // policy, patch preconditions, and the test allowlist all pass.
-  // Web tools too, once enabled: each call is still shown in the action log and host record (terminal commands never: above).
-  return (AGENT_TOOL_NAMES as readonly string[]).includes(tool) || tool === 'read_decisions' || isWebToolName(tool);
+  // workspace-full: every allowlisted workspace tool may run without a prompt
+  // once policy, patch preconditions, and the test allowlist all pass. Never
+  // the web: leaving the computer is for Autonomy & Permissions to allow
+  // (autonomyHost.ts), so Ask always holds whatever the profile.
+  return (AGENT_TOOL_NAMES as readonly string[]).includes(tool) || tool === 'read_decisions' || tool === 'read_original';
 }

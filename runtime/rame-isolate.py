@@ -43,6 +43,11 @@ class RulesetAttr(ctypes.Structure):
 
 
 class PathBeneath(ctypes.Structure):
+    # struct landlock_path_beneath_attr is __attribute__((packed)): 12 bytes.
+    # Python 3.14 warns on stderr unless the layout of a packed structure is
+    # explicit; 'ms' is the layout ctypes always used here, and for these two
+    # plain fields it equals GCC's packed layout. Older Pythons ignore it.
+    _layout_ = 'ms'
     _pack_ = 1
     _fields_ = [('allowed_access', ctypes.c_uint64), ('parent_fd', ctypes.c_int32)]
 

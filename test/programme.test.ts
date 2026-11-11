@@ -28,9 +28,14 @@ const sha = (text: string): string => createHash('sha256').update(text, 'utf8').
 const BENCH =
   "const { latencyMs } = require('../app.js');\n" +
   'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, latencyMs);\n';
-const SLOW = 'module.exports = { latencyMs: 1200 };\n';
+// The waits dominate the start-up cost of a check run, so "twice as fast" is decided by the code, not by the
+// machine. CI evidence (2026-11-11, ubuntu-latest): the frozen check's acceptance runs carry RAME's trace hooks,
+// the baseline jobs do not, and start-up there cost ~360-540 ms for the baseline but ~800-950 ms for acceptance; with
+// a 1200 ms wait even latency 0 missed "<= half" (806.7 vs 778.5). The criterion is unchanged (factor 0.5); the
+// partial fix stays at 75% of SLOW, so it can never meet it, whatever the start-up cost.
+const SLOW = 'module.exports = { latencyMs: 2400 };\n';
 const FAST = 'module.exports = { latencyMs: 0 };\n';
-const LITTLE = 'module.exports = { latencyMs: 900 };\n';
+const LITTLE = 'module.exports = { latencyMs: 1800 };\n';
 const PHASES = [
   { title: 'Measure the baseline', kind: 'measure' },
   { title: 'Make it at least twice as fast', kind: 'mission', relative: [{ metric: 'wall_ms', op: '<=', factor: 0.5 }] },

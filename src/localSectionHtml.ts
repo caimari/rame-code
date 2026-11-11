@@ -1,5 +1,8 @@
 /** Markup of the local runtime, the external model servers and web access settings. */
 
+import { autonomyHtml, missionAutonomyHtml } from './autonomyHtml.js';
+import { advisorHtml, isolationHtml } from './advisorHtml.js';
+
 export const localSectionHtml = `
       <section class="settings-block" id="localSection" aria-labelledby="local-heading">
         <h3 id="local-heading">Local runtime</h3>
@@ -61,7 +64,7 @@ export const localSectionHtml = `
       </section>
 `;
 
-export const webAccessHtml = `
+export const webAccessHtml = `${advisorHtml}
       <section class="settings-block" id="webAccessSection" aria-labelledby="web-access-heading">
         <h3 id="web-access-heading">Web access</h3>
         <label><input id="webEnabled" type="checkbox"> Allow Agent and Chat to search and read public web pages (read-only)</label>
@@ -70,15 +73,15 @@ export const webAccessHtml = `
         <label for="webSearxngUrl">SearXNG address (JSON format enabled)</label>
         <input id="webSearxngUrl" type="text" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8888">
         <div class="row"><button id="webSave" type="button">Save web access</button></div>
-        <p class="hint">Default OFF. Agent and Chat, local model only; a Mission has its own web permission, chosen when you authorize it. Each search or page read is shown and waits for your approval in Chat and, except in Workspace full, in Agent. Local and private addresses are refused, and a query or URL with a key or a file path is not sent. Page text is untrusted data, never instructions.</p>
+        <p class="hint">Default OFF. Agent and Chat, with the main model (local or Meta: with Meta, the pages it reads go to Meta as tool results, never into an advisor's consultation); a Mission has its own web permission, chosen when you authorize it. Each search or page read is shown and waits for your approval in Chat and in Agent, whatever the profile, unless Autonomy &amp; Permissions below pre-authorizes it. Local and private addresses are refused, and a query or URL with a key or a file path is not sent. Page text is untrusted data, never instructions.</p>
       </section>
       <section class="settings-block" id="shellAccessSection" aria-labelledby="shell-access-heading">
         <h3 id="shell-access-heading">Terminal commands</h3>
-        <label><input id="shellEnabled" type="checkbox"> Allow Agent to run terminal commands (bash, sh or PowerShell) in the project folder</label>
+        <label><input id="shellEnabled" type="checkbox"> Allow Agent to run terminal commands (bash, sh or PowerShell) in the project folder</label>${isolationHtml}
         <div class="row"><button id="shellSave" type="button">Save terminal access</button></div>
-        <p class="hint">Default OFF. Only with a local model, and never in Mission runs. You see each command exactly before it runs and approve it, in every profile, Workspace full included. The card warns when a line chains commands, runs a script you cannot see, uses sudo or the network, or installs software, but a command line never shows all its effects. A command runs with your permissions: it can change any file, use the network or install software. There is no sandbox. Time and output are limited. Stop signals the command and its normal process group, but a deliberately detached process may survive.</p>
+        <p class="hint">Default OFF. For the main model, local or Meta (with Meta, a command's output goes to Meta), and never in Mission runs. You see each command exactly before it runs and approve it, in every profile, Workspace full included, unless Full Access includes commands. The isolation level also protects allowlisted tests, non-container long jobs and non-administrator installs. Project and Closed fail closed when Linux Landlock cannot be applied; Closed also blocks TCP. Administrator installs remain explicit and open in a VS Code terminal without Landlock. Container jobs keep their own container isolation. Files you can read stay readable, DNS is not blocked, and programs already running keep their rights. Total runs with your permissions. Stop signals the normal process group, but a deliberately detached process may survive.</p>
       </section>
-`;
+${autonomyHtml}`;
 
 export const missionWebHtml = `
       <fieldset id="missionWebRow">
@@ -90,9 +93,9 @@ export const missionWebHtml = `
             <input id="missionWebFetches" type="number" min="0" max="40" step="1" value="10">
             <label for="missionWebDomains">Authorized domains for page reads (optional; for example nodejs.org, docs.python.org)</label>
             <input id="missionWebDomains" type="text" autocomplete="off" spellcheck="false" placeholder="nodejs.org, docs.python.org">
-            <p class="hint">Default OFF. Local model only. Within this budget an autonomous Mission searches and reads without asking each time; a supervised Mission still asks. Queries leave this computer: plain words only, never code, keys or file paths, and the host counts and records every request. Pages are read only from this Mission's own search results, or only from the domains above if you list some. 15 s and 2 MiB per page. Web access adds no write, terminal, memory or file permission, and web text is never sent to Meta.</p>
+            <p class="hint">Default OFF. Within this budget an autonomous Mission searches and reads without asking each time; a supervised Mission still asks. Queries leave this computer: plain words only, never code, keys or file paths, and the host counts and records every request. Pages are read only from this Mission's own search results, or only from the domains above if you list some. 15 s and 2 MiB per page. Web access adds no write, terminal, memory or file permission. Web text is never put in a consultation of the advisor; with Meta as the Mission's main model, the pages it reads go to Meta as tool results.</p>
           </fieldset>
-`;
+${missionAutonomyHtml}`;
 
 /**
  * Settings → Models: which Glimmer the local runtime uses, chosen apart from

@@ -968,6 +968,24 @@ button.is-failed::after {
   align-items: flex-start;
 }
 
+/* Autonomy & Permissions: one option per line, like the local source choice. */
+#autonomySection fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#autonomySection fieldset > label {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  line-height: 1.35;
+}
+
+#autonomySection fieldset > label:has(input:disabled) {
+  opacity: 0.6;
+}
+
 #localSourceBanner {
   margin: 0 0 4px;
 }
@@ -999,3 +1017,11 @@ button.is-failed::after {
   outline-offset: 2px;
   border-radius: 4px;
 }
+
+/* Air above and below buttons: text never touches a row of buttons or a lone button (user request, 2026-11-11). */
+.row:has(> button:not([hidden])) { margin-block: 10px; }
+:where(p, .hint, ul, ol, dl, pre, h3, h4) + button, button + :where(p, .hint, ul, ol, dl, pre) { margin-top: 10px; }
+
+/* Mission web access: the checkbox and each field label on their own line (the checkbox text ran into "Searches, at most", 2026-11-11). */
+#missionWebRow { display: flex; flex-direction: column; gap: 6px; }
+#missionWebRow > label:has(> input[type="checkbox"]) { display: flex; align-items: flex-start; gap: 7px; line-height: 1.4; margin-bottom: 4px; }

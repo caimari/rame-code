@@ -481,6 +481,8 @@ test('Delegated: Spark proposed the tool, RAME applied the existing profile; a l
 test('a Mission with an Advisory consultation keeps its Advisory evidence in Mission mode, across a reload', async () => {
   await withHarness({ mode: 'mission', agentProfile: 'safe-auto' }, async (h) => {
     h.secretValues.set(API_KEY_SECRET, KEY);
+    // The user pre-authorized Meta for Missions of this workspace (Autonomy & Permissions).
+    await h.preauthorize({ meta: 5 });
     await h.writeFile('package.json', JSON.stringify({ name: 'm', private: true, scripts: { test: 'node t.js', check: 'node c.js' } }));
     await h.writeFile('t.js', 'process.exit(0);\n');
     await h.writeFile('c.js', "process.exit(require('node:fs').existsSync('a.txt') && require('node:fs').readFileSync('a.txt', 'utf8') === 'final' ? 0 : 1);\n");

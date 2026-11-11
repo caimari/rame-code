@@ -14,11 +14,11 @@ import { isAbortError, withBoundedRequest } from './boundedRequest.js';
 import {
   OutputCutOffError,
   generationRequestFields,
-  localContextRefusal,
   stoppedAtLength,
   type GenerationRequest,
 } from './generationSettings.js';
 import { isLocalOrPrivateUrl, refuseRedirect } from './localServers.js';
+import { localHttpError } from './localServerErrors.js';
 import { validateMissionPlan } from './meta-provider.js';
 import type { MissionPlan } from './types.js';
 import { parseUsage, type ProviderUsage } from './usage.js';
@@ -104,9 +104,7 @@ export async function createLocalChatCompletion(
     },
   );
   if (!response.ok) {
-    throw localContextRefusal(payload) ?? new Error(
-      `The local runtime returned HTTP ${response.status}.`,
-    );
+    throw localHttpError(response.status, payload, model);
   }
   if (stoppedAtLength(payload)) {
     // An incomplete reply (possibly only reasoning) is never shown as an answer.
@@ -217,7 +215,7 @@ export async function createLocalMissionPlan(
     },
   );
   if (!response.ok) {
-    throw localContextRefusal(payload) ?? new Error(`The local runtime returned HTTP ${response.status}.`);
+    throw localHttpError(response.status, payload, model);
   }
   if (stoppedAtLength(payload)) {
     throw new OutputCutOffError(options.generation.maxCompletionTokens);

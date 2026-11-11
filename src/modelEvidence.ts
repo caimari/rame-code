@@ -174,7 +174,7 @@ export class ModelEvidenceStore {
 // Validation
 // ---------------------------------------------------------------------------
 
-const READ_TOOLS = new Set(['list_files', 'inspect_workspace', 'filesystem_usage', 'search_history', 'search_text', 'read_file', 'read_decisions']);
+const READ_TOOLS = new Set(['list_files', 'inspect_workspace', 'filesystem_usage', 'search_history', 'search_text', 'read_file', 'read_decisions', 'read_original']);
 const ID = /^[A-Za-z0-9_.:-]{1,64}$/;
 const TOOL = /^[a-z_]{1,40}$/;
 const COMMAND = /^[A-Za-z0-9:._@/-]{1,80}$/;
@@ -514,7 +514,7 @@ export function pruneEvidence(state: ModelEvidenceState, liveThreadIds: Readonly
 // View and Mission summary
 // ---------------------------------------------------------------------------
 
-export type AcceptanceEvidence = 'none' | 'not_run' | 'passed' | 'failed' | 'tampered';
+export type AcceptanceEvidence = 'none' | 'not_run' | 'passed' | 'failed' | 'inconclusive' | 'tampered';
 
 export interface EvidenceNowView {
   local: {
@@ -631,7 +631,7 @@ function sanitizeMission(value: unknown): EvidenceMissionView | null {
   return {
     status: value.status.replace(/[^a-z_]/g, '').slice(0, 24),
     completedByHost: value.completedByHost === true,
-    acceptance: oneOf(value.acceptance, ['none', 'not_run', 'passed', 'failed', 'tampered'] as const) ? value.acceptance : 'none',
+    acceptance: oneOf(value.acceptance, ['none', 'not_run', 'passed', 'failed', 'inconclusive', 'tampered'] as const) ? value.acceptance : 'none',
     acceptanceCommand: typeof value.acceptanceCommand === 'string' && COMMAND.test(value.acceptanceCommand) ? value.acceptanceCommand : null,
     lastCommand:
       isRecord(last) && typeof last.commandId === 'string' && COMMAND.test(last.commandId) && countOrNull(last.exitCode, 255)

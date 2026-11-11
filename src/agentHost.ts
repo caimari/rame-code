@@ -166,6 +166,15 @@ export function describeAgentCall(call: ValidatedToolCall): {
       const notes = commandNotes(command);
       return { targets: [`terminal command in the project folder: ${command.slice(0, 600)}`, ...(notes.length > 0 ? [`Note: this line ${notes.join('; ')}. Approve only if you know what it does.`] : [])], body, preconditions: {} };
     }
+    case 'start_job':
+      return { targets: [`long job: ${String((call.args as Record<string, unknown>).commandId ?? '').slice(0, 80)}`], body, preconditions: {} };
+    case 'install_package':
+    case 'check_installed': {
+      const args = call.args as Record<string, unknown>;
+      return { targets: [`${call.tool === 'install_package' ? 'install' : 'check'}: ${String(args.manager ?? '')} ${String(args.name ?? '').slice(0, 120)}`], body, preconditions: {} };
+    }
+    case 'job_status':
+      return { targets: [`long job status: ${String((call.args as Record<string, unknown>).jobId ?? 'all jobs of this project')}`], body, preconditions: {} };
     case 'search_text': {
       const dir = typeof (call.args as Record<string, unknown>).dir === 'string'
         ? ((call.args as Record<string, unknown>).dir as string)

@@ -25,7 +25,7 @@ import * as https from 'node:https';
 import * as net from 'node:net';
 import * as zlib from 'node:zlib';
 
-import { redactSecrets } from './cloudEgress.js';
+import { redactSecrets, scrubLocalPaths } from './cloudEgress.js';
 
 export const WEB_TIMEOUT_MS = 15_000;
 export const WEB_MAX_BYTES = 2 * 1024 * 1024;
@@ -146,6 +146,17 @@ export function egressRefusal(text: string): string | null {
     return 'it contains a local file path';
   }
   return null;
+}
+
+/**
+ * Under Full Access with web: the query that may leave without a card. Keys,
+ * tokens and passwords are removed (never sent, never asked about), and the
+ * user's home and project folders hidden; code, error text and other paths
+ * stay, so a technical search still works. Empty when nothing is left.
+ */
+export function fullAccessQuery(text: string, folders: ReadonlyArray<readonly [string, string]>): string {
+  const withoutSecrets = redactSecrets(text).text.replace(/\[redacted by RAME Code:[^\]]*\]/g, ' ');
+  return scrubLocalPaths(withoutSecrets, folders).replace(/\s+/g, ' ').trim();
 }
 
 function decodeURIComponentSafe(text: string): string {

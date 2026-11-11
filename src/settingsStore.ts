@@ -8,6 +8,8 @@
  * `globalState` through the versioned {@link RAME_SETTINGS_KEY}.
  */
 
+import { type JobContainerSettings, validateContainerSettings } from './jobContainer.js';
+import { parseLimitsByModel } from './localLimits.js';
 import {
   LOCAL_RUNTIME_SUGGESTIONS,
   validateLocalSettings,
@@ -30,6 +32,7 @@ import {
   type GenerationSettings,
 } from './generationSettings.js';
 import { EMPTY_USAGE, type ProviderUsage } from './usage.js';
+import { DEFAULT_ADVISOR, legacyAdvisor, parseAdvisorModel } from './advisorModels.js';
 
 export const RAME_SETTINGS_KEY = 'rameCode.settings.v1';
 export const RAME_USAGE_KEY = 'rameCode.usage.v1';
@@ -118,13 +121,21 @@ export interface RameSettings {
   externalLocal: ExternalLocalChoice;
   /** Read-only web access for Agent (web_search, web_fetch). Default OFF. */
   web: WebSettings;
-  /** Terminal commands for Agent (run_command). Default OFF. */
-  shell: { enabled: boolean };
+  /** Terminal commands for Agent (run_command). Default OFF; isolation `project` (shellIsolation.ts). */
+  shell: { enabled: boolean; isolation: CommandIsolation };
+  /** Long background jobs for Agent (start_job, job_status). Default OFF; container isolation optional. */
+  jobs: JobSettings;
+  /** Installs with permission for Agent (install_package, check_installed). ON (each one on a card); `auto` lets Workspace full install without a card when no administrator rights are needed. */
+  installs: { enabled: boolean; auto: boolean };
+  /** Idle and total limits of Agent requests, per local model id (localLimits.ts); a model not listed gets 180 s idle and 10 min total. */
+  localLimits: Record<string, { idleSec: number; totalSec: number }>;
   /**
    * Cloud escalation preference. Default OFF. Escalation is only ever a
    * pending user-visible choice; silent fallback is not implemented.
    */
   allowCloudEscalation: boolean;
+  /** The model the main model may consult when stuck ('' = none); never the main model itself (advisorModels.ts). */
+  advisorModel: string;
   /** Persisted Agent permission profile id only (never transient approvals). */
   agentProfile: AgentProfileId;
   /** Reasoning level per provider/model and manual output maxima. */
@@ -134,6 +145,27 @@ export interface RameSettings {
 }
 
 export type ViewLanguage = 'en' | 'es';
+
+/** What the system lets a terminal command do: `total` = no isolation, `project` = writes only in the project and temporary folders, `closed` = that and no network. */
+export type CommandIsolation = 'total' | 'project' | 'closed';
+
+export function parseCommandIsolation(value: unknown): CommandIsolation {
+  return value === 'total' || value === 'closed' ? value : 'project';
+}
+
+export interface JobSettings {
+  enabled: boolean;
+  /** `null`: jobs run on this computer with the user's permissions. */
+  container: JobContainerSettings | null;
+}
+
+function parseJobs(raw: unknown): JobSettings {
+  if (!isRecord(raw)) {
+    return { enabled: false, container: null };
+  }
+  const container = raw.container == null ? null : validateContainerSettings(raw.container);
+  return { enabled: raw.enabled === true, container: container !== null && container.ok ? container.settings : null };
+}
 
 export interface ExternalLocalChoice {
   /** '' = send the configured local model id. */
@@ -207,8 +239,12 @@ export function defaultSettings(): RameSettings {
     externalLocalEndpoint: '',
     externalLocal: { ...EMPTY_EXTERNAL_LOCAL },
     web: { ...DEFAULT_WEB },
-    shell: { enabled: false },
+    shell: { enabled: false, isolation: 'project' },
+    jobs: { enabled: false, container: null },
+    installs: { enabled: true, auto: false },
+    localLimits: {},
     allowCloudEscalation: false,
+    advisorModel: DEFAULT_ADVISOR,
     agentProfile: DEFAULT_AGENT_PROFILE,
     generation: defaultGenerationSettings(),
     language: 'en',
@@ -335,8 +371,12 @@ export function validateSettings(value: unknown): RameSettings {
     externalLocalEndpoint,
     externalLocal: parseExternalLocal(value.externalLocal),
     web: parseWeb(value.web),
-    shell: { enabled: typeof value.shell === 'object' && value.shell !== null && (value.shell as Record<string, unknown>).enabled === true },
+    shell: { enabled: isRecord(value.shell) && value.shell.enabled === true, isolation: parseCommandIsolation(isRecord(value.shell) ? value.shell.isolation : undefined) },
+    jobs: parseJobs(value.jobs),
+    installs: { enabled: !(isRecord(value.installs) && value.installs.enabled === false), auto: isRecord(value.installs) && value.installs.auto === true },
+    localLimits: parseLimitsByModel(value.localLimits),
     allowCloudEscalation: value.allowCloudEscalation === true,
+    advisorModel: parseAdvisorModel(value.advisorModel) ?? legacyAdvisor(cloudModel),
     agentProfile: parseAgentProfile(value.agentProfile),
     generation: validateGenerationSettings(value.generation),
     language: isViewLanguage(value.language) ? value.language : 'en',

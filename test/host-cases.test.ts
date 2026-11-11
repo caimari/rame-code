@@ -45,16 +45,15 @@ test('a correct implementation passes; a wrong one fails without quoting the exp
   });
 });
 
-test('process.exit(0) when the module loads, or in the middle of the cases, is incomplete, never a pass', async () => {
+test('process.exit(0) while a fresh case loads is incomplete; process state never carries to the next case', async () => {
   await withModule('process.exit(0);\nexports.add = (a, b) => a + b;\n', async (root) => {
     const outcome = await runHostCases(root, SPEC);
     assert.equal(outcome.status, 'incomplete');
-    assert.match((outcome as { reason: string }).reason, /ended before every case returned \(0 of 3\)/);
+    assert.match((outcome as { reason: string }).reason, /ended before every case returned \(0 of 1\)/);
   });
   await withModule('let n = 0;\nexports.add = (a, b) => { if (++n === 2) process.exit(0); return a + b; };\n', async (root) => {
     const outcome = await runHostCases(root, SPEC);
-    assert.equal(outcome.status, 'incomplete');
-    assert.match((outcome as { reason: string }).reason, /\(1 of 3\)/);
+    assert.deepEqual(outcome, { status: 'passed', total: 3 });
   });
 });
 

@@ -87,9 +87,10 @@ test('off by default: not offered, and refused if a model calls it anyway', asyn
   });
 });
 
-test('on: offered to a local model only, never in a Mission run; each command is shown exactly and runs after approval', async () => {
+test('on: offered to the main model (local or Meta), never in a Mission run; each command is shown exactly and runs after approval', async () => {
   await withHost({ shell: { enabled: true } }, async (h) => {
-    assert.deepEqual(shellToolDefinitions(h.provider, 'cloud'), []);
+    // P5h (decision of 08-11): Meta as the main model uses RAME's tools too.
+    assert.deepEqual(shellToolDefinitions(h.provider, 'cloud').map((entry) => entry.function.name), ['run_command']);
     h.provider.missionAuto = { missionId: 'mis_000000000000000000000000', stop: null, holdAutonomy: false };
     assert.deepEqual(shellToolDefinitions(h.provider, 'local'), []);
     h.provider.missionAuto = null;
@@ -100,7 +101,8 @@ test('on: offered to a local model only, never in a Mission run; each command is
       'run_command terminal command in the project folder: echo hi > out.txt && cat out.txt && pwd Note: this line runs 3 commands in a row. Approve only if you know what it does.',
       'run_command terminal command in the project folder: rm -rf / Note: this line may change files outside the project folder; deletes files or rewrites git state. Approve only if you know what it does.',
     ]);
-    assert.match(result(h, 'c'), /^(?:bash|sh) in the project folder \(exit=0\): echo hi > out\.txt && cat out\.txt && pwd\nexit=0\nstdout:\nhi\n/);
+    // The default isolation level (Project): Landlock on this Linux, so the command still runs in the project.
+    assert.match(result(h, 'c'), /^(?:bash|sh) in the project folder, isolated: writes only in the project, temporary and package-cache folders; network allowed \(exit=0\): echo hi > out\.txt && cat out\.txt && pwd\nexit=0\nstdout:\nhi\n/);
     assert.ok(result(h, 'c').includes(h.workspace), 'it ran in the project folder');
     assert.equal(await h.readFile('out.txt'), 'hi\n');
     assert.match(result(h, 'r'), /^Not run: RAME refuses this command because it would delete the root or home folder/);
@@ -134,7 +136,8 @@ test('no profile runs a terminal command without approval; the card names what t
   for (const profile of ['ask', 'safe-auto', 'workspace-full'] as const) {
     assert.equal(isAutoAllowed(profile, 'run_command'), false, profile);
   }
-  assert.equal(isAutoAllowed('workspace-full', 'web_fetch'), true, 'unchanged for the read-only web tools');
+  // 08-11-2026, the user's decision: a profile never grants anything outside the computer (web included).
+  assert.equal(isAutoAllowed('workspace-full', 'web_fetch'), false, 'the web follows Autonomy & Permissions, not the profile');
   assert.deepEqual(commandNotes('node --version'), []);
   assert.deepEqual(commandNotes('git status'), []);
   assert.deepEqual(commandNotes('npm install express && npm run build'), ['runs 2 commands in a row', 'runs a script or package script whose content this card does not show', 'installs or downloads software (its install scripts can run code)']);

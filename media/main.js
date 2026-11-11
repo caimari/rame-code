@@ -267,9 +267,6 @@
     cancelled: 'cancelled',
     blocked: 'blocked',
   };
-  // Mission phases as the view names them. "Completed — acceptance passed"
-  // only when the host's own acceptance run exited 0; a created plan is
-  // "Plan ready — awaiting authorization", never "Completed".
   var MISSION_PHASE_LABELS = {
     planning: 'Planning',
     plan_ready: 'Plan ready — awaiting authorization',
@@ -1672,11 +1669,9 @@
     if (!acc) {
       return live.grant ? t('Standard Mission: no acceptance check') : '';
     }
-    if (acc.state === 'passed') {
-      return tf('{0}: passed — {1}', acc.commandId, acc.summary);
-    }
-    if (acc.state === 'failed') {
-      return tf('{0}: failed — {1}', acc.commandId, acc.summary);
+    var text = { passed: '{0}: passed — {1}', failed: '{0}: failed — {1}', inconclusive: '{0}: inconclusive, not a failure — {1}' }[acc.state];
+    if (text) {
+      return tf(text, acc.commandId, acc.summary);
     }
     if (acc.state === 'tampered') {
       return tf('{0}: its files changed — the Mission is blocked', acc.commandId);
@@ -1816,13 +1811,15 @@
     if (!report) {
       return;
     }
-    factRow(missionReportFactsEl, t('Tasks done'), report.tasks.join('; ') || t('none'));
-    factRow(missionReportFactsEl, t('Files changed'), report.files.join(', ') || t('none'));
-    factRow(missionReportFactsEl, t('Tests and exit codes'), report.tests.join(' | ') || t('none'));
-    factRow(missionReportFactsEl, t('Frozen acceptance'), report.acceptance || t('none (Standard Mission)'));
-    factRow(missionReportFactsEl, t('Internal runs and time'), tf('{0} run(s), {1} min', report.internalRuns, report.minutes));
-    factRow(missionReportFactsEl, t('Models and providers'), report.models.join('; '));
-    factRow(missionReportFactsEl, t('Meta consultations'), report.metaConsultations);
+    var el = missionReportFactsEl;
+    factRow(el, t('Tasks done'), report.tasks.join('; ') || t('none'));
+    factRow(el, t('Files changed'), report.files.join(', ') || t('none'));
+    factRow(el, t('Tests and exit codes'), report.tests.join(' | ') || t('none'));
+    factRow(el, t('Test isolation'), (report.isolation || []).map(t).join(' | ') || t('not recorded'));
+    factRow(el, t('Frozen acceptance'), report.acceptance || t('none (Standard Mission)'));
+    factRow(el, t('Internal runs and time'), tf('{0} run(s), {1} min', report.internalRuns, report.minutes));
+    factRow(el, t('Models and providers'), report.models.join('; '));
+    factRow(el, t('Meta consultations'), report.metaConsultations);
   }
 
   // A blocked Mission gets a red card: why, how far it got, what never ran,
@@ -2361,8 +2358,8 @@
         missionId: live.missionId,
         revision: live.revision,
         mode: missionModeEl && missionModeEl.value === 'autonomous-workspace' ? 'autonomous-workspace' : 'supervised',
-        maxConsultations: Number.isInteger(consults) && consults >= 0 && consults <= 5 ? consults : 0,
-        advisoryLimits: consults > 0 && window.RAME_REMOTE ? window.RAME_REMOTE.advisoryLimits() : null,
+        maxConsultations: Number.isInteger(consults) && consults >= -1 && consults <= 1e3 ? consults : 0,
+        advisoryLimits: consults !== 0 && window.RAME_REMOTE ? window.RAME_REMOTE.advisoryLimits() : null,
         trustedProject: Boolean(missionTrustedEl && missionTrustedEl.checked),
         acceptanceCommand: acceptanceCommand,
         acceptanceFiles: acceptanceFiles,

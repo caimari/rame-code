@@ -20,9 +20,13 @@
  * - Unreadable stored state is never overwritten.
  */
 
+import { describeScopedFile, MAX_FINITE_CONSULTATIONS, parseMetaBinding, type MetaBinding } from './autonomyPolicy.js';
 import { copyManifest, parseAcceptanceManifest, type AcceptanceManifest } from './acceptanceManifest.js';
+import { copyMetricSpec, parseMetricSpec, type MetricSpec } from './metricAcceptance.js';
+import { copyFrozenReferences, parseFrozenReferences, type FrozenReference } from './referenceCheck.js';
 import { describeMissionWeb, parseMissionWebGrant, type MissionWebGrant } from './missionWeb.js';
 import { createHash, randomBytes } from 'node:crypto';
+import { measureProgress, parseProgressMemory, runBudget, validRunsPerTask, type ProgressMemory } from './missionProgress.js';
 
 import { ADVISORY_DATA_CLASSES } from './remoteAuthority.js';
 import { checkAdvisoryLimits, storedAdvisoryLimits, type AdvisoryLimits } from './missionAdvisoryLimits.js';
@@ -66,7 +70,8 @@ export const MAX_AUTO_MISSION_RUNS = 40;
 export interface MissionGrant {
   missionId: string;
   scopeId: string;
-  provider: 'local';
+  /** The main model's provider: it does the Mission's work (Glimmer or another local model, or Meta). Never switched during the Mission. */
+  provider: 'local' | 'cloud';
   model: string;
   /** supervised: every write and test still asks. autonomous-workspace: see AUTONOMOUS_TOOLS. */
   mode: 'supervised' | 'autonomous-workspace';
@@ -78,7 +83,8 @@ export interface MissionGrant {
    * never authorizes a delegated run.
    */
   /** Advisory only; its limits are fixed at authorization (missionAdvisoryLimits.ts). */
-  escalation: ({ model: string; maxConsultations: number; used: number; validResponses: number; dataClasses: string[]; sentBytes: number; usedTokens: number } & AdvisoryLimits) | null;
+  /** `preauth`: the workspace pre-authorization it was given under (Autonomy & Permissions); without it nothing is sent without a card. */
+  escalation: ({ model: string; maxConsultations: number | null; used: number; validResponses: number; dataClasses: string[]; sentBytes: number; usedTokens: number; preauth?: MetaBinding | null } & AdvisoryLimits) | null;
   /**
    * Autonomous only: the user marked this project as trusted, and the test
    * commands it may run without a card, bound to the package.json they come
@@ -93,7 +99,7 @@ export interface MissionGrant {
    * package.json it is declared in. The agent may read and run them but never
    * change them; the host itself runs the check before `completed`.
    */
-  acceptance: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }>; scope?: AcceptanceManifest } | null;
+  acceptance: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }>; scope?: AcceptanceManifest; metrics?: MetricSpec; references?: FrozenReference[] } | null;
   /** Web access for this Mission's runs (budget, domains, used); absent = off. See missionWeb.ts. */
   web?: MissionWebGrant;
   /**
@@ -113,6 +119,7 @@ export const AUTONOMOUS_TOOLS: readonly string[] = [
   'search_text',
   'read_file',
   'read_decisions',
+  'read_original',
   'create_directory',
   'apply_patch',
   'replace_in_file',
@@ -143,7 +150,12 @@ export interface MissionAutoState {
   blockers: BlockingVerifier[];
   /** Recoveries of blocking verifiers, kept (and invalidated) as evidence. */
   recoveries: VerifierRecovery[];
+  /** What "progress" is measured against (missionProgress.ts); absent in older records. */
+  fileState?: ProgressMemory['fileState'];
+  seenStates?: ProgressMemory['seenStates'];
+  lastResults?: ProgressMemory['lastResults'];
 }
+
 
 export const MAX_RUN_NOTES = 1200;
 export const MAX_USER_GUIDANCE = 1000;
@@ -193,6 +205,8 @@ export interface MissionRecord {
   evidence: MissionEvidence[];
   taskRunsUsed: number;
   maxTaskRuns: number;
+  /** Runs per task the user chose (missionProgress.ts runBudget); never raised. */
+  runsPerTask?: number;
   createdAt: number;
   updatedAt: number;
   revision: number;
@@ -259,7 +273,7 @@ function parseGrant(raw: unknown, missionId: string, scopeId: string): MissionGr
     !isRecord(raw) ||
     raw.missionId !== missionId ||
     raw.scopeId !== scopeId ||
-    raw.provider !== 'local' ||
+    (raw.provider !== 'local' && raw.provider !== 'cloud') ||
     !isBoundedString(raw.model, 128) ||
     (raw.mode !== 'supervised' && raw.mode !== 'autonomous-workspace') ||
     !isCount(raw.grantedAt) ||
@@ -273,17 +287,17 @@ function parseGrant(raw: unknown, missionId: string, scopeId: string): MissionGr
     if (
       !isRecord(e) ||
       !isBoundedString(e.model, 128) ||
-      !isCount(e.maxConsultations) ||
-      e.maxConsultations > 5 ||
+      !(e.maxConsultations === null || (isCount(e.maxConsultations) && e.maxConsultations <= MAX_FINITE_CONSULTATIONS)) ||
       !isCount(e.maxOutputTokens) ||
       e.maxOutputTokens > 32768 ||
       storedAdvisoryLimits(e, e.maxConsultations) === null ||
       (e.sentBytes !== undefined && !isCount(e.sentBytes)) ||
       (e.usedTokens !== undefined && !isCount(e.usedTokens)) ||
       !isCount(e.used) ||
-      e.used > e.maxConsultations ||
+      (e.maxConsultations !== null && e.used > e.maxConsultations) ||
       (e.validResponses !== undefined && (!isCount(e.validResponses) || e.validResponses > e.used)) ||
-      (e.dataClasses !== undefined && (!Array.isArray(e.dataClasses) || e.dataClasses.length > 8 || e.dataClasses.some((entry) => !isBoundedString(entry, 160))))
+      (e.dataClasses !== undefined && (!Array.isArray(e.dataClasses) || e.dataClasses.length > 8 || e.dataClasses.some((entry) => !isBoundedString(entry, 160)))) ||
+      parseMetaBinding(e.preauth) === undefined
     ) {
       return undefined;
     }
@@ -296,6 +310,7 @@ function parseGrant(raw: unknown, missionId: string, scopeId: string): MissionGr
       used: e.used,
       validResponses: isCount(e.validResponses) ? e.validResponses : 0,
       dataClasses: Array.isArray(e.dataClasses) ? (e.dataClasses as string[]) : [...ADVISORY_DATA_CLASSES],
+      preauth: parseMetaBinding(e.preauth) ?? null,
     };
   }
   let tests: MissionGrant['tests'] = null;
@@ -335,7 +350,9 @@ function parseGrant(raw: unknown, missionId: string, scopeId: string): MissionGr
       return undefined;
     }
     const scope = a.scope === undefined ? null : parseAcceptanceManifest(a.scope);
-    if (scope === undefined) {
+    const metrics = a.metrics === undefined ? null : parseMetricSpec(a.metrics);
+    const references = a.references === undefined ? null : parseFrozenReferences(a.references);
+    if (scope === undefined || metrics === undefined || references === undefined) {
       return undefined;
     }
     acceptance = {
@@ -343,6 +360,8 @@ function parseGrant(raw: unknown, missionId: string, scopeId: string): MissionGr
       packageJsonHash: a.packageJsonHash,
       files: (a.files as Array<{ path: string; hash: string }>).map((f) => ({ path: f.path, hash: f.hash })),
       ...(scope === null ? {} : { scope }),
+      ...(metrics === null ? {} : { metrics }),
+      ...(references === null ? {} : { references }),
     };
   }
   if (bootstrap && acceptance !== null) {
@@ -356,7 +375,7 @@ function parseGrant(raw: unknown, missionId: string, scopeId: string): MissionGr
     ...(web === null ? {} : { web }),
     missionId,
     scopeId,
-    provider: 'local',
+    provider: raw.provider,
     model: raw.model,
     mode: raw.mode,
     grantedAt: raw.grantedAt,
@@ -402,6 +421,7 @@ function parseAuto(raw: unknown): MissionAutoState | null | undefined {
     acceptanceFeedback: typeof raw.acceptanceFeedback === 'string' ? raw.acceptanceFeedback : '',
     lastRunNotes: typeof raw.lastRunNotes === 'string' ? raw.lastRunNotes : '',
     userGuidance: typeof raw.userGuidance === 'string' ? raw.userGuidance : '',
+    ...parseProgressMemory(raw),
     blockers,
     recoveries,
   };
@@ -491,6 +511,7 @@ function parseMission(raw: unknown): MissionRecord | null {
     evidence,
     taskRunsUsed: raw.taskRunsUsed,
     maxTaskRuns: raw.maxTaskRuns,
+    ...(validRunsPerTask(raw.runsPerTask) ? { runsPerTask: raw.runsPerTask } : {}),
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
     revision: raw.revision,
@@ -765,6 +786,26 @@ export function canRunTask(mission: MissionRecord): MissionResult<MissionTask> {
   return { ok: true, value: task };
 }
 
+export const ACCEPTANCE_CONTINUED = 'acceptance (continued): ';
+
+/** Split a host note at spaces into evidence-sized parts (at most 4); rejoin with a space. */
+export function splitHostNote(text: string): string[] {
+  const parts: string[] = [];
+  let rest = text;
+  while (rest.length > 0 && parts.length < 4) {
+    const room = MAX_EVIDENCE_TEXT - (parts.length === 0 ? 0 : ACCEPTANCE_CONTINUED.length);
+    if (rest.length <= room) {
+      parts.push(rest);
+      break;
+    }
+    const cut = rest.lastIndexOf(' ', room);
+    const at = cut > room / 2 ? cut : room;
+    parts.push(rest.slice(0, at));
+    rest = rest.slice(at).trimStart();
+  }
+  return parts;
+}
+
 function evidence(taskId: string, kind: MissionEvidence['kind'], text: string, at: number): MissionEvidence {
   return { taskId, kind, text: clean(text, MAX_EVIDENCE_TEXT), at };
 }
@@ -909,15 +950,19 @@ export function buildTaskPrompt(mission: MissionRecord, options: { autonomous?: 
 export function grantMission(
   mission: MissionRecord,
   grant: {
+    /** Omitted: local (records before Meta could be a Mission's main model). */
+    provider?: MissionGrant['provider'];
     model: string;
     mode: MissionGrant['mode'];
-    escalation: ({ model: string; maxConsultations: number } & AdvisoryLimits) | null;
+    escalation: ({ model: string; maxConsultations: number | null; preauth?: MetaBinding | null } & AdvisoryLimits) | null;
     /** Autonomous only: the user marked the project trusted; the test commands and the package.json they come from. */
     tests: { trustedProject: boolean; packageJsonHash: string; commandIds: string[] } | null;
     /** The user's frozen acceptance check, or null for none. */
-    acceptance?: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }>; scope?: AcceptanceManifest } | null;
+    acceptance?: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }>; scope?: AcceptanceManifest; metrics?: MetricSpec; references?: FrozenReference[] } | null;
     /** Empty-project first stage; never carries tests or frozen acceptance. */
     bootstrap?: boolean;
+    /** Runs per task chosen by the user (1 to 8). */
+    runsPerTask?: number;
     /** Web access the user chose for this Mission, validated (null = off). */
     web?: MissionWebGrant | null;
   },
@@ -953,9 +998,18 @@ export function grantMission(
   ) {
     return { ok: false, error: 'The acceptance check needs an allowlisted command and 1 to 20 existing files to freeze.' };
   }
+  if (acceptance?.metrics !== undefined && parseMetricSpec(acceptance.metrics) === undefined) {
+    return { ok: false, error: 'The metric criteria of the acceptance check are not valid.' };
+  }
   const escalation = grant.escalation;
-  if (escalation !== null && (escalation.maxConsultations < 1 || escalation.maxConsultations > 5)) {
-    return { ok: false, error: 'Mission escalation allows 1 to 5 consultations.' };
+  if (escalation !== null && escalation.maxConsultations === null && !escalation.preauth) {
+    return { ok: false, error: 'A Mission without a count limit on Meta consultations needs a Meta pre-authorization that allows it.' };
+  }
+  if (escalation !== null && escalation.maxConsultations !== null && (escalation.maxConsultations < 1 || escalation.maxConsultations > MAX_FINITE_CONSULTATIONS)) {
+    return { ok: false, error: `Mission escalation allows 1 to ${MAX_FINITE_CONSULTATIONS} consultations, or no count limit under a pre-authorization.` };
+  }
+  if (escalation !== null && grant.provider === 'cloud' && escalation.model === grant.model) {
+    return { ok: false, error: 'The advisor cannot be the Mission\'s main model itself.' };
   }
   const limitError = escalation === null ? null : checkAdvisoryLimits(escalation);
   if (limitError !== null) {
@@ -964,11 +1018,14 @@ export function grantMission(
   mission.grant = {
     missionId: mission.id,
     scopeId: mission.scopeId,
-    provider: 'local',
+    provider: grant.provider ?? 'local',
     model: grant.model,
     mode: grant.mode,
     grantedAt: now,
-    escalation: escalation === null ? null : { ...escalation, used: 0, validResponses: 0, dataClasses: [...ADVISORY_DATA_CLASSES], sentBytes: 0, usedTokens: 0 },
+    escalation:
+      escalation === null
+        ? null
+        : { ...escalation, used: 0, validResponses: 0, dataClasses: [...ADVISORY_DATA_CLASSES, ...(escalation.preauth?.files.length ? [`files you chose: ${escalation.preauth.files.map(describeScopedFile).join(', ')}`.slice(0, 160)] : [])], sentBytes: 0, usedTokens: 0 },
     tests:
       !bootstrap && grant.mode === 'autonomous-workspace' && grant.tests !== null
         ? { trustedProject: true, packageJsonHash: grant.tests.packageJsonHash, commandIds: grant.tests.commandIds.slice(0, 16) }
@@ -981,6 +1038,8 @@ export function grantMission(
             packageJsonHash: acceptance.packageJsonHash,
             files: acceptance.files.map((file) => ({ path: file.path, hash: file.hash })),
             ...(acceptance.scope ? { scope: copyManifest(acceptance.scope) } : {}),
+            ...(acceptance.metrics ? { metrics: copyMetricSpec(acceptance.metrics) } : {}),
+            ...(acceptance.references ? { references: copyFrozenReferences(acceptance.references) } : {}),
           },
     ...(bootstrap ? { bootstrap: true as const } : {}),
     ...(grant.web ? { web: { ...grant.web, domains: [...grant.web.domains], searches: 0, fetches: 0 } } : {}),
@@ -988,9 +1047,13 @@ export function grantMission(
   delete mission.awaitingVerification;
   // Keep the review as evidence of what the user considered, but it cannot
   // alter the grant or the hashes frozen below.
-  if (grant.mode === 'autonomous-workspace') {
-    // Safety ceiling for chained runs; the normal stop is verification or no progress.
-    mission.maxTaskRuns = Math.max(mission.maxTaskRuns, Math.min(MAX_AUTO_MISSION_RUNS, mission.tasks.length * MAX_AUTO_RUNS_PER_TASK));
+  const budget = runBudget({ mode: grant.mode, chosen: grant.runsPerTask, stored: mission.runsPerTask, tasks: mission.tasks.length, current: mission.maxTaskRuns });
+  if (!budget.ok) {
+    return { ok: false, error: budget.error };
+  }
+  mission.maxTaskRuns = budget.maxTaskRuns;
+  if (budget.runsPerTask !== undefined) {
+    mission.runsPerTask = budget.runsPerTask;
   }
   mission.auto = {
     runs: 0,
@@ -1005,10 +1068,13 @@ export function grantMission(
     userGuidance: '',
     blockers: mission.auto?.blockers ?? [],
     recoveries: mission.auto?.recoveries ?? [],
+    fileState: { ...(mission.auto?.fileState ?? {}) },
+    seenStates: [...(mission.auto?.seenStates ?? [])],
+    lastResults: { ...(mission.auto?.lastResults ?? {}) },
   };
   mission.note = bootstrap
-    ? `Bootstrap stage authorized (${grant.mode === 'autonomous-workspace' ? 'autonomous workspace' : 'supervised'}, local ${grant.model}). RAME Code may scaffold the project, but it cannot run tests or complete the Mission before a second authorization.`
-    : `Mission authorized (${grant.mode === 'autonomous-workspace' ? 'autonomous workspace' : 'supervised'}, local ${grant.model}${escalation ? `, up to ${escalation.maxConsultations} Meta consultation(s)` : ', no escalation'}; ${describeMissionWeb(grant.web)}).`;
+    ? `Bootstrap stage authorized (${grant.mode === 'autonomous-workspace' ? 'autonomous workspace' : 'supervised'}, ${grant.provider === 'cloud' ? 'Meta' : 'local'} ${grant.model}). RAME Code may scaffold the project, but it cannot run tests or complete the Mission before a second authorization.`
+    : `Mission authorized (${grant.mode === 'autonomous-workspace' ? 'autonomous workspace' : 'supervised'}, ${grant.provider === 'cloud' ? 'Meta' : 'local'} ${grant.model}${escalation ? (escalation.maxConsultations === null ? ', Meta consultations with no count limit' : `, up to ${escalation.maxConsultations} Meta consultation(s)`) : ', no escalation'}; ${describeMissionWeb(grant.web)}).`;
   return { ok: true, value: mission };
 }
 
@@ -1177,6 +1243,8 @@ export interface RunAssessment {
   verifierUpdate: VerifierUpdate;
   signature: string;
   summary: string;
+  /** The progress memory after this run (recordRun stores it). */
+  memory?: ProgressMemory;
 }
 
 /**
@@ -1205,8 +1273,8 @@ export function assessRun(mission: MissionRecord, observation: RunObservation): 
       }),
     )
     .digest('hex');
-  const changed = observation.writes.length > 0 || observation.lastTest !== null;
-  const progress = changed && signature !== (auto?.lastSignature ?? '');
+  // Only a demonstrable improvement in a new file state is progress (missionProgress.ts).
+  const measured = measureProgress(auto, observation);
   // A test that failed blocks every task until that same test passes again.
   const verifierUpdate = updateVerifiers(auto?.blockers ?? [], auto?.recoveries ?? [], observation.verifiers ?? [], observation.conditions ?? '', (auto?.runs ?? 0) + 1, 'agent', mission.id);
   const cleanRun = observation.outcome === 'done' && observation.uncertain === 0 && !needs;
@@ -1222,8 +1290,11 @@ export function assessRun(mission: MissionRecord, observation: RunObservation): 
     parts.push(`blocking: ${verifierUpdate.blockers.map((blocker) => blocker.commandId).join(', ')}`);
   }
   const summary = parts.length > 0 ? parts.join('; ') : 'no file change and no test';
-  return { progress, needs, verified, blockedByVerifier: cleanRun && !verified, verifierUpdate, signature, summary };
+  const recovered = verifierUpdate.blockers.length < (auto?.blockers ?? []).length;
+  const progress = (measured.improved || recovered) && measured.newState;
+  return { progress, needs, verified, blockedByVerifier: cleanRun && !verified, verifierUpdate, signature, summary, memory: measured.memory };
 }
+
 
 /**
  * Record the host's own re-run of the open blocking verifiers after a run
@@ -1274,6 +1345,11 @@ export function recordRun(
   auto.runs += 1;
   auto.needsVerification = assessment.needs;
   auto.lastSignature = assessment.signature;
+  if (assessment.memory !== undefined) {
+    auto.fileState = assessment.memory.fileState;
+    auto.seenStates = assessment.memory.seenStates;
+    auto.lastResults = assessment.memory.lastResults;
+  }
   if (assessment.progress) {
     auto.noProgressStreak = 0;
     auto.lastProgress = clean(`run ${auto.runs}: ${assessment.summary}`, MAX_EVIDENCE_TEXT);
@@ -1310,7 +1386,7 @@ export function recordRun(
   if (auto.noProgressStreak >= MAX_NO_PROGRESS_RUNS) {
     return { ok: true, value: { mission, next: 'blocked' } };
   }
-  if (task.runs >= MAX_AUTO_RUNS_PER_TASK || mission.taskRunsUsed >= mission.maxTaskRuns) {
+  if (task.runs >= (mission.runsPerTask ?? MAX_AUTO_RUNS_PER_TASK) || mission.taskRunsUsed >= mission.maxTaskRuns) {
     return { ok: true, value: { mission, next: 'blocked' } };
   }
   return { ok: true, value: { mission, next: 'continue' } };
@@ -1398,7 +1474,8 @@ export function recordAcceptance(
   if (task === null || mission.auto === null) {
     return { ok: false, error: 'This Mission has no current task.' };
   }
-  mission.evidence.push(evidence(task.id, 'note', `acceptance (run by the host): ${result.summary}`, now));
+  // A long host record (levels, differences, host record) continues in up to 3 more notes, never cut short.
+  splitHostNote(`acceptance (run by the host): ${clean(result.summary, 1200)}`).forEach((part, index) => mission.evidence.push(evidence(task.id, 'note', index === 0 ? part : `${ACCEPTANCE_CONTINUED}${part}`, now)));
   if (result.passed) {
     mission.auto.acceptanceFeedback = '';
     return { ok: true, value: { mission, next: 'complete-task' } };
@@ -1406,7 +1483,7 @@ export function recordAcceptance(
   mission.auto.needsVerification = true;
   mission.auto.noProgressStreak += 1;
   mission.auto.acceptanceFeedback =
-    `ACCEPTANCE FAILED: the host ran the user's frozen acceptance check and it did not pass (${clean(result.summary, 200)}). Output (bounded):\n` +
+    `ACCEPTANCE FAILED: the host ran the user's frozen acceptance check and it did not pass (${clean(result.summary, 900)}). Output (bounded):\n` +
     result.output.slice(-1500) +
     '\nFix the code so this check passes; do not change the acceptance files.';
   if (mission.auto.noProgressStreak >= MAX_NO_PROGRESS_RUNS) {

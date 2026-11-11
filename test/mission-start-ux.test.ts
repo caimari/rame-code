@@ -391,7 +391,7 @@ test('the final report appears only after the host\'s acceptance run exited 0', 
     // The level is stated: exit code of a protected check, not host-compared cases.
     assert.equal(
       report.acceptance,
-      `npm:check — npm:check exit=0 with every frozen file intact; protected level (frozen check exit code; ${changeTimesTrusted() ? 'host file record before, during and after the run' : 'host file record at start and end only'}; no host-compared cases); Node ${process.version} (frozen: acceptance/accept.test.js, package.json)`,
+      `npm:check — npm:check exit=0 with every frozen file intact; protected verification (frozen check exit code; ${changeTimesTrusted() ? 'host file record before, during and after the run' : 'host file record at start and end only'}; no host-compared cases); Node ${process.version}; verification: protected (frozen: acceptance/accept.test.js, package.json)`,
       'the level and the Node version the check really ran on (AUD-05) are stated',
     );
     assert.equal(report.internalRuns, 2);
@@ -402,7 +402,17 @@ test('the final report appears only after the host\'s acceptance run exited 0', 
     const lines = record.hostRecord.join('\n');
     assert.match(lines, /mission: tests run run_tests npm:test → exit=0/);
     assert.match(lines, /mission: models local-glimmer \(Muse Glimmer — Local\); Meta consultations none allowed/);
-    assert.match(lines, /mission: no sandbox: test scripts ran with your user permissions/);
+    // Since the isolation levels (08-11), tests run with the chosen level. Since 11-11 the host notes the level
+    // each test really got, and the report states that, never a fixed sentence ("no sandbox", "your user permissions").
+    assert.deepEqual(report.isolation, [
+      'isolated: writes only in the project, temporary and package-cache folders; network allowed',
+      'protected verifier: exact project reads, no ambient files, no TCP',
+    ], 'project tests at the Project level, the frozen acceptance check in the protected verifier');
+    for (const label of report.isolation) {
+      assert.match(lines, new RegExp(`mission: test isolation [^\\n]*${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    }
+    assert.match(lines, /mission: test isolation [^\n]*; files you can read stayed readable/);
+    assert.doesNotMatch(lines, /path checks are not an operating-system sandbox|No sandbox/);
     assert.match(lines, /mission: time [\d.]+ min since authorization/);
   }, true);
   // Pure: a completed record whose last acceptance run failed, or a tampered one, has no report.

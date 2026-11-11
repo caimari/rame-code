@@ -70,6 +70,7 @@ import {
   REPLACE_NOT_UNIQUE_MESSAGE,
 } from './toolResultSummary.js';
 import { validateChosenWorkspace } from './workspaceSelect.js';
+import { isFullApproved } from './autonomyHost.js';
 
 // ---- Local constants ----
 
@@ -227,7 +228,8 @@ export function recordAgentAudit(
     profile: host.settings.agentProfile,
     tool: pending.tool,
     digest: pending.digest,
-    decision,
+    // Let through by Full Access, not by the profile (see autoAuditRecord).
+    decision: decision === 'profile-auto' && pending.actionId.startsWith('full_') ? 'full-access' : decision,
     result,
   });
   void host.extensionState.update(RAME_AUDIT_KEY, host.audit.list());
@@ -443,7 +445,7 @@ export function autoAuditRecord(
     workspaceId,
     threadId,
     preconditions: described.preconditions,
-    actionId: `auto_${digest.slice(0, 16)}`,
+    actionId: `${isFullApproved(call) ? 'full' : 'auto'}_${digest.slice(0, 16)}`,
     digest,
     createdAt: Date.now(),
     generation: host.agentGeneration,

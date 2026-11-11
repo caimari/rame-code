@@ -5,7 +5,9 @@
  */
 
 import { META_FAILURE_CATEGORIES, type MetaFailureCategory } from './metaFailures.js';
-import type { DelegationState } from './remoteAuthority.js';
+import type { DelegationState, LocalIssue } from './remoteAuthority.js';
+import { ACCEPTANCE_REVIEW_COUNTS, ACCEPTANCE_REVIEW_MAX_TOTAL_TOKENS } from './missionAcceptanceReview.js';
+import { parseAutonomyMessage, sanitizeAutonomyView, type AutonomyMessage, type AutonomyView } from './autonomyView.js';
 import { parseLocalSourceMessage, sanitizeLocalSourceView, type LocalSourceMessage, type LocalSourceView } from './localSourceView.js';
 
 export interface EscalateApproveMessage {
@@ -18,6 +20,8 @@ export interface ConsultIncludeFilesMessage {
   type: 'consultIncludeFiles';
   digest: string;
   files: string[];
+  /** Include the end of the failing check's output (made safe); omitted = keep the current choice. */
+  output?: boolean;
 }
 
 export interface DelegationRunLocalMessage {
@@ -27,6 +31,11 @@ export interface DelegationRunLocalMessage {
 /** Start the saved local server after a failed request; only when the host offered it. */
 export interface LocalIssueStartMessage {
   type: 'localIssueStart';
+}
+
+/** Reload the LM Studio model with more context after a context refusal; only when the host offered it. */
+export interface LocalIssueReloadMessage {
+  type: 'localIssueReload';
 }
 
 /** The user's answer on the Meta disclosure card, bound to the digest shown. */
@@ -49,6 +58,7 @@ export interface AcceptanceReviewPrepareMessage {
   revision: number;
   commandId: string;
   files: string[];
+  /** One of ACCEPTANCE_REVIEW_COUNTS; -1 = no count limit. */
   maxConsultations: number;
   maxRequestBytes: number | null;
   maxOutputTokens: number | null;
@@ -71,9 +81,9 @@ export interface AcceptanceReviewDecideMessage {
 }
 
 export type RemoteMessage =
-  | EscalateApproveMessage | ConsultIncludeFilesMessage | DelegationRunLocalMessage | LocalIssueStartMessage
+  | EscalateApproveMessage | ConsultIncludeFilesMessage | DelegationRunLocalMessage | LocalIssueStartMessage | LocalIssueReloadMessage
   | DisclosureDecideMessage | DisclosureStopMessage | AcceptanceReviewPrepareMessage
-  | AcceptanceReviewActionMessage | AcceptanceReviewDecideMessage | LocalSourceMessage;
+  | AcceptanceReviewActionMessage | AcceptanceReviewDecideMessage | LocalSourceMessage | AutonomyMessage;
 
 const DIGEST = /^[0-9a-f]{64}$/;
 
@@ -95,7 +105,7 @@ export function parseRemoteMessage(record: Record<string, unknown>): RemoteMessa
       return { type: 'escalateApprove', digest: record.digest };
     case 'consultIncludeFiles':
       if (
-        !exactKeys(record, ['type', 'digest', 'files']) ||
+        (!exactKeys(record, ['type', 'digest', 'files']) && !(exactKeys(record, ['type', 'digest', 'files', 'output']) && typeof record.output === 'boolean')) ||
         typeof record.digest !== 'string' ||
         !DIGEST.test(record.digest) ||
         !Array.isArray(record.files) ||
@@ -104,7 +114,7 @@ export function parseRemoteMessage(record: Record<string, unknown>): RemoteMessa
       ) {
         throw new Error('Invalid consultIncludeFiles message.');
       }
-      return { type: 'consultIncludeFiles', digest: record.digest, files: [...(record.files as string[])] };
+      return { type: 'consultIncludeFiles', digest: record.digest, files: [...(record.files as string[])], ...(typeof record.output === 'boolean' ? { output: record.output } : {}) };
     case 'delegationRunLocal':
       if (!exactKeys(record, ['type'])) {
         throw new Error('Invalid delegationRunLocal message.');
@@ -115,6 +125,11 @@ export function parseRemoteMessage(record: Record<string, unknown>): RemoteMessa
         throw new Error('Invalid localIssueStart message.');
       }
       return { type: 'localIssueStart' };
+    case 'localIssueReload':
+      if (!exactKeys(record, ['type'])) {
+        throw new Error('Invalid localIssueReload message.');
+      }
+      return { type: 'localIssueReload' };
     case 'disclosureDecide':
       if (
         !(exactKeys(record, ['type', 'digest', 'choice']) || (exactKeys(record, ['type', 'digest', 'choice', 'toolResults']) && typeof record.toolResults === 'boolean')) ||
@@ -131,13 +146,13 @@ export function parseRemoteMessage(record: Record<string, unknown>): RemoteMessa
       }
       return { type: 'disclosureStop' };
     case 'acceptanceReviewPrepare': {
-      const numeric = (value: unknown): value is number | null => value === null || (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 1_000_000);
+      const numeric = (value: unknown): value is number | null => value === null || (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= ACCEPTANCE_REVIEW_MAX_TOTAL_TOKENS);
       if (
         !exactKeys(record, ['type', 'missionId', 'revision', 'commandId', 'files', 'maxConsultations', 'maxRequestBytes', 'maxOutputTokens', 'maxTotalTokens']) || !mission() ||
         typeof record.commandId !== 'string' || record.commandId.length === 0 || record.commandId.length > 128 ||
         !Array.isArray(record.files) || record.files.length === 0 || record.files.length > 3 ||
         record.files.some((file) => typeof file !== 'string' || file.length === 0 || file.length > 512) ||
-        typeof record.maxConsultations !== 'number' || !Number.isInteger(record.maxConsultations) || record.maxConsultations < 1 || record.maxConsultations > 5 ||
+        typeof record.maxConsultations !== 'number' || !ACCEPTANCE_REVIEW_COUNTS.includes(record.maxConsultations) ||
         !numeric(record.maxRequestBytes) || !numeric(record.maxOutputTokens) || !numeric(record.maxTotalTokens)
       ) {
         throw new Error('Invalid acceptanceReviewPrepare message.');
@@ -163,7 +178,7 @@ export function parseRemoteMessage(record: Record<string, unknown>): RemoteMessa
       }
       return { type: 'acceptanceReviewDecide', missionId: record.missionId as string, revision: record.revision as number, digest: record.digest, decision: record.decision };
     default:
-      return parseLocalSourceMessage(record);
+      return parseLocalSourceMessage(record) ?? parseAutonomyMessage(record);
   }
 }
 
@@ -174,6 +189,8 @@ export type OfferedMessages = Array<{ turn: number; role: 'user' | 'assistant' |
 export interface RemoteView {
   /** External model servers (Ollama, LM Studio...) and web access. */
   servers?: LocalSourceView | null;
+  /** Autonomy & Permissions of the open workspace and its record of external requests. */
+  autonomy?: AutonomyView | null;
   consult: {
     mode: 'advisory';
     localModel: string;
@@ -185,6 +202,9 @@ export interface RemoteView {
     authorizedFiles: string[];
     attempts: number;
     lastFailure: MetaFailureCategory | null;
+    /** A safe end of the failing check's output exists, and whether the exact text includes it now. */
+    outputAvailable?: boolean;
+    outputIncluded?: boolean;
   } | null;
   delegation: {
     mode: 'delegated';
@@ -203,7 +223,7 @@ export interface RemoteView {
     selected: 'local' | 'cloud';
   };
   /** A failed local request: which local actions apply and why delegation is (not) offered. */
-  localIssue: { kind: 'unreachable' | 'failed'; canStart: boolean; delegation: DelegationState } | null;
+  localIssue: { kind: LocalIssue['kind']; canStart: boolean; delegation: DelegationState; reload?: number; context?: true } | null;
   /** A Meta request waiting on the disclosure card: exactly what it would add from local sessions. */
   disclosure: {
     model: string;
@@ -235,18 +255,19 @@ export const EMPTY_REMOTE_VIEW: RemoteView = {
   disclosure: null,
   sharing: null,
   servers: null,
+  autonomy: null,
   waitingElsewhere: null,
 };
 
 const LOCAL_RUNTIME_STATES: ReadonlyArray<RemoteView['runtime']['local']> = ['running', 'starting', 'connected', 'configured', 'stopped', 'not-configured'];
 const CLOUD_RUNTIME_STATES: ReadonlyArray<RemoteView['runtime']['cloud']> = ['connected', 'configured', 'not-configured'];
 
-const DELEGATION_STATES: readonly DelegationState[] = ['offered', 'off', 'no-key', 'not-agent', 'internal', 'not-sent'];
+const DELEGATION_STATES: readonly DelegationState[] = ['offered', 'off', 'no-key', 'not-agent', 'internal', 'not-sent', 'setup'];
 
 /** Mission Advisory state for the live card. */
 export interface MissionRemoteView {
   model: string;
-  maxConsultations: number;
+  maxConsultations: number | '∞';
   attempts: number;
   validResponses: number;
   /** The grant's fixed limits and what has been used against them; null without a grant. */
@@ -299,6 +320,7 @@ export function sanitizeRemoteView(value: unknown): RemoteView {
   const disclosure = object(record.disclosure);
   return {
     servers: sanitizeLocalSourceView(record.servers),
+    autonomy: sanitizeAutonomyView(record.autonomy),
     disclosure:
       disclosure === null || typeof disclosure.digest !== 'string' || !DIGEST.test(disclosure.digest)
         ? null
@@ -355,6 +377,8 @@ export function sanitizeRemoteView(value: unknown): RemoteView {
             authorizedFiles: strings(consult.authorizedFiles, 3, 512),
             attempts: count(consult.attempts),
             lastFailure: category(consult.lastFailure),
+            outputAvailable: consult.outputAvailable === true,
+            outputIncluded: consult.outputIncluded === true,
           },
     delegation:
       delegation === null || typeof delegation.digest !== 'string' || !DIGEST.test(delegation.digest)
@@ -373,9 +397,15 @@ export function sanitizeRemoteView(value: unknown): RemoteView {
         ? null
         : { category: category(failure.category) as MetaFailureCategory, confirmedActions: count(failure.confirmedActions) },
     localIssue:
-      issue === null || (issue.kind !== 'unreachable' && issue.kind !== 'failed') || !DELEGATION_STATES.includes(issue.delegation as DelegationState)
+      issue === null || (issue.kind !== 'unreachable' && issue.kind !== 'failed' && issue.kind !== 'setup') || !DELEGATION_STATES.includes(issue.delegation as DelegationState)
         ? null
-        : { kind: issue.kind, canStart: issue.canStart === true, delegation: issue.delegation as DelegationState },
+        : {
+            kind: issue.kind,
+            canStart: issue.canStart === true,
+            delegation: issue.delegation as DelegationState,
+            ...(typeof issue.reload === 'number' && Number.isInteger(issue.reload) && issue.reload > 0 && issue.reload <= 1_048_576 ? { reload: issue.reload } : {}),
+            ...(issue.context === true ? { context: true as const } : {}),
+          },
   };
 }
 
@@ -399,7 +429,7 @@ export function sanitizeMissionRemote(value: unknown): MissionRemoteView | null 
             maxTotalTokens: count(limits.maxTotalTokens),
             usedTokens: count(limits.usedTokens),
           },
-    maxConsultations: count(record.maxConsultations),
+    maxConsultations: record.maxConsultations === '∞' ? '∞' : count(record.maxConsultations),
     attempts: count(record.attempts),
     validResponses: count(record.validResponses),
     dataClasses: strings(record.dataClasses, 8, 160),

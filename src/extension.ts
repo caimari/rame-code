@@ -4,6 +4,8 @@ import { ChatRunner } from './chatRunner.js';
 import { MAIN_VIEW_ID, RameCodeViewProvider } from './mainProvider.js';
 import { API_KEY_SECRET } from './mainProvider.js';
 import { MissionRunner } from './missionRunner.js';
+import { setInstallTerminal } from './installTool.js';
+import { noticeUncertainJobs, runInstallsMenu, runJobsMenu, runLocalLimitsMenu } from './jobCommands.js';
 import { ThreadStore } from './threadStore.js';
 import { redactKeyFromText, validateGoalInput } from './webviewMessages.js';
 
@@ -36,6 +38,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.Uri.joinPath(context.globalStorageUri, 'shared-state').fsPath,
   );
 
+  // An install that needs administrator rights opens here: the user types the password, RAME never sees it.
+  setInstallTerminal((title, commandLine) => {
+    const terminal = vscode.window.terminals.find((entry) => entry.name === title) ?? vscode.window.createTerminal({ name: title });
+    terminal.show(false);
+    terminal.sendText(commandLine, true);
+  });
+  context.subscriptions.push({ dispose: () => setInstallTerminal(null) });
+  // Long jobs outlive a reload; tell the user about any whose result RAME no longer knows.
+  const jobNotice = setTimeout(() => void noticeUncertainJobs(main, vscode.window), 3000);
+  context.subscriptions.push({ dispose: () => clearTimeout(jobNotice) });
+
   context.subscriptions.push(
     output,
     main,
@@ -53,6 +66,15 @@ export function activate(context: vscode.ExtensionContext): void {
       await revealMain();
       await main.navigate('settings');
       await setMetaApiKey(context.secrets, main);
+    }),
+    vscode.commands.registerCommand('rameCode.showJobs', async () => {
+      await runJobsMenu(main, vscode.window);
+    }),
+    vscode.commands.registerCommand('rameCode.installs', async () => {
+      await runInstallsMenu(main, vscode.window);
+    }),
+    vscode.commands.registerCommand('rameCode.localLimits', async () => {
+      await runLocalLimitsMenu(main, vscode.window);
     }),
     vscode.commands.registerCommand('rameCode.startMission', async () => {
       await revealMain();

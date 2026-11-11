@@ -27,14 +27,19 @@ export interface LocalSourceView {
   scan: { endpoint: string; kind: LocalServerKind; scope: 'loopback' | 'private'; version: string; models: LocalSourceModelView[] } | null;
   scanError: string;
   web: { enabled: boolean; search: 'duckduckgo' | 'searxng'; searxngUrl: string };
-  shell: { enabled: boolean };
+  /** Terminal commands: on or off, the isolation level, and why it cannot be applied here ('' = it can; null = not checked yet). */
+  shell: { enabled: boolean; isolation: 'total' | 'project' | 'closed'; problem: string | null };
+  /** The advisor model for the main model selected now, and every catalog model with whether it may advise it. */
+  advisor: { selected: string; main: string; mainProvider: 'local' | 'cloud'; options: Array<{ id: string; eligible: boolean; reason: string }>; problem: string };
 }
 
 export type LocalSourceMessage =
   | { type: 'localServerScan'; endpoint: string }
   | { type: 'localServerUse'; endpoint: string; model: string; lan: boolean }
   | { type: 'webAccessSet'; enabled: boolean; search: 'duckduckgo' | 'searxng'; searxngUrl: string }
-  | { type: 'shellAccessSet'; enabled: boolean }
+  | { type: 'shellAccessSet'; enabled: boolean; isolation?: 'total' | 'project' | 'closed' }
+  | { type: 'advisorModelSet'; model: string }
+  | { type: 'missionRunsSet'; missionId: string; runsPerTask: number }
   | { type: 'missionWebSet'; missionId: string; enabled: boolean; maxSearches: number; maxFetches: number; domains: string[] }
   /** Check the identity of the local server in use, or compute / cancel the SHA-256 of the managed GGUF. */
   | { type: 'localIdentity'; action: 'check' | 'hash' | 'cancel-hash' };
@@ -89,11 +94,24 @@ export function parseLocalSourceMessage(record: Record<string, unknown>): LocalS
         throw new Error('Invalid localIdentity message.');
       }
       return { type: 'localIdentity', action: record.action };
-    case 'shellAccessSet':
-      if (!exact(record, ['type', 'enabled']) || typeof record.enabled !== 'boolean') {
+    case 'shellAccessSet': {
+      const levels = ['total', 'project', 'closed'];
+      const withLevel = exact(record, ['type', 'enabled', 'isolation']) && levels.includes(record.isolation as string);
+      if ((!exact(record, ['type', 'enabled']) && !withLevel) || typeof record.enabled !== 'boolean') {
         throw new Error('Invalid shellAccessSet message.');
       }
-      return { type: 'shellAccessSet', enabled: record.enabled };
+      return withLevel ? { type: 'shellAccessSet', enabled: record.enabled, isolation: record.isolation as 'total' | 'project' | 'closed' } : { type: 'shellAccessSet', enabled: record.enabled };
+    }
+    case 'missionRunsSet':
+      if (!exact(record, ['type', 'missionId', 'runsPerTask']) || typeof record.missionId !== 'string' || !/^mis_[a-z0-9]{1,64}$/.test(record.missionId) || !Number.isInteger(record.runsPerTask) || (record.runsPerTask as number) < 1 || (record.runsPerTask as number) > 8) {
+        throw new Error('Invalid missionRunsSet message.');
+      }
+      return { type: 'missionRunsSet', missionId: record.missionId, runsPerTask: record.runsPerTask as number };
+    case 'advisorModelSet':
+      if (!exact(record, ['type', 'model']) || typeof record.model !== 'string' || !/^(?:|muse-[A-Za-z0-9._-]{1,120})$/.test(record.model)) {
+        throw new Error('Invalid advisorModelSet message.');
+      }
+      return { type: 'advisorModelSet', model: record.model };
     default:
       return null;
   }
@@ -133,6 +151,29 @@ export function sanitizeLocalSourceView(value: unknown): LocalSourceView | null 
           },
     scanError: text(v.scanError, 400),
     web: { enabled: web.enabled === true, search: web.search === 'searxng' ? 'searxng' : 'duckduckgo', searxngUrl: text(web.searxngUrl, 512) },
-    shell: { enabled: typeof v.shell === 'object' && v.shell !== null && (v.shell as Record<string, unknown>).enabled === true },
+    shell: sanitizeShell(v.shell),
+    advisor: sanitizeAdvisor(v.advisor),
+  };
+}
+
+function sanitizeShell(raw: unknown): LocalSourceView['shell'] {
+  const v = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  const isolation = v.isolation === 'total' || v.isolation === 'closed' ? v.isolation : 'project';
+  return { enabled: v.enabled === true, isolation, problem: typeof v.problem === 'string' ? v.problem.slice(0, 300) : null };
+}
+
+function sanitizeAdvisor(raw: unknown): LocalSourceView['advisor'] {
+  const v = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  const id = (value: unknown): string => (typeof value === 'string' && /^muse-[A-Za-z0-9._-]{1,120}$/.test(value) ? value : '');
+  const words = (value: unknown, max: number): string => (typeof value === 'string' ? value.slice(0, max) : '');
+  return {
+    selected: id(v.selected),
+    main: words(v.main, 200),
+    mainProvider: v.mainProvider === 'cloud' ? 'cloud' : 'local',
+    options: (Array.isArray(v.options) ? v.options : []).slice(0, 100).flatMap((entry) => {
+      const o = typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>) : null;
+      return o === null || id(o.id) === '' ? [] : [{ id: id(o.id), eligible: o.eligible === true, reason: words(o.reason, 300) }];
+    }),
+    problem: words(v.problem, 300),
   };
 }

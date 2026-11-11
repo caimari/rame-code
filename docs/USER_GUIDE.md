@@ -36,7 +36,7 @@ Do not start with confidential source code or real personal data. RAME Code 0.2.
 ### It cannot promise
 
 - That passing tests proves the whole product is correct.
-- An operating-system sandbox. Project test scripts run with your VS Code user's permissions.
+- A complete operating-system sandbox. Project test scripts run with the isolation level of **Security › Terminal commands**: with Project or Closed (Linux with Landlock) they can write only in the project, the temporary folder and package caches, but can still read your files; with Total they have your user permissions.
 - Unrestricted shell or computer control.
 - Perfect memory or recovery of every old paraphrase.
 - Complete functional verification for every language or platform. Autonomous verification currently uses supported Node/npm scripts.
@@ -204,7 +204,7 @@ Agent and Mission use separate permission decisions:
 
 Changing the Agent selector does not expand, reduce or replace an existing Mission grant. A Mission may use the Agent execution engine internally, but that does not turn it into an Agent request: its authority still comes from the Mission card shown before it started. The interface identifies these internal runs as Mission work and keeps the Mission permission visible instead of presenting the Agent selector as their authority. During a Mission, use the permission shown in its status and evidence as the source of truth.
 
-Autonomous workspace requires **I trust this project**. This trust is limited to that Mission, folder, local provider and model. It is not an operating-system sandbox. Test scripts can reach files, the network or other processes with your user permissions.
+Autonomous workspace requires **I trust this project**. This trust is limited to that Mission, folder, local provider and model. It is not a complete operating-system sandbox: test scripts run with the isolation level of **Security › Terminal commands** (Project or Closed: writes only in the project, the temporary folder and package caches, and Closed also without network; Total: your user permissions). At every level they can read your files. The Mission's final report states the level each test really ran with.
 
 For a prepared project, this can be one initial authorization covering the permitted writes and checks for that specific Mission. It is never a general authorization for other folders or operations on the computer. An empty-folder Mission still uses two authorizations: the first may create the scaffold, package scripts and proposed tests; the second lets you review those new verification commands and authorize the implementation and checks. After that second authorization, allowlisted work inside the grant proceeds without an approval for every ordinary write or test.
 
@@ -249,13 +249,30 @@ A green check proves only what that check covers. A weak test can miss broken be
   "cases": [ { "call": "add", "args": [19, 23], "expect": 42 } ] }
 ```
 
-RAME then calls those functions in a separate process and compares the results itself; the expected values are never sent to that process, and RAME's tools do not show them to the agent. An early exit or a fake "all passed" message cannot pass. The Mission report states which level was reached and the Node version the check ran on. The values are not secret: code running with your permissions can still read the file, so keep the cases varied.
+RAME then calls each function in a fresh process and compares the result itself. On supported Linux that process is confined with Landlock and seccomp. If this boundary is unavailable, the check runs without isolation, with a warning in authorization, progress, result and evidence, and the result is labelled unprotected. Full Access and Total cannot weaken isolation when it is available. Equivalent protection on Windows and macOS remains the goal.
+
+**Measured acceptance and Programmes.** Numeric criteria state whether they are observed by the host (`wall_ms`, `exit_code`) or declared by the frozen project check (`p95_ms`, `errors`, and other valid names). Declarations count only through the private per-run channel and warn that malicious same-process code can alter them. Arbitrary files, command output and JSON never count. Older records need no new authorization.
 
 **Not verifiable.** After each run of the check, RAME compares the project with what it recorded when you authorized. If a file the check uses changed (on Linux and macOS, even if it was restored before the end), a file appeared in a sealed folder, an existing data or document file changed, or RAME saw the check use something outside the scope you approved, the Mission stops as **not verifiable**: it is not counted as a pass, and your acceptance stays as you authorized it. If only other code changed, RAME shows the files and asks you (a scope review); approve them only if they are code under test, not tests or expected values. See [How to verify it](VERIFICATION.md).
 
 ### 6. Authorize and follow progress
 
 Review the goal, verification level, permission and optional Meta Advisory grant. Select **Authorize and start** only when they match your intention.
+
+**What each option on the authorization card does**
+
+| Option | What it does |
+| --- | --- |
+| **Verification level → Standard Mission** | A task is done when the project's normal tests pass. |
+| **Verification level → Verified Mission** | You also choose an acceptance check and RAME **freezes** its files: if they change, the Mission is not considered verified. Only this level shows «verification: protected» (or «unprotected» when this computer cannot isolate it). |
+| **Permission → Supervised** | Every write and every test asks for confirmation on a card. |
+| **Permission → Autonomous workspace** | Edits and runs the allowlisted tests without asking, inside the project. It never touches `.git`, `.env` or keys, runs no terminal commands, and still asks before deleting, moving or changing project memory. |
+| **I trust this project** | Required for autonomous workspace: you confirm that this project's test scripts are not dangerous, because they will run on their own. They run with the isolation level of **Security › Terminal commands**. |
+| **Internal runs per task, at most** | The most Agent runs per task. If they run out before the task is done, the Mission stops as blocked instead of going on forever. |
+| **Web access for this Mission** (checkbox) | Lets the Mission search and read pages, read-only. Off by default. |
+| **Searches / Page reads, at most** | The budget of searches (5 by default) and page reads (10). In autonomous workspace it does not ask while budget remains; supervised always asks. |
+| **Authorized domains** | Optional. If you list domains, it reads pages only from them; otherwise only pages from its own search results. |
+| **Autonomy & Permissions… (Meta)** | Pre-authorizes Meta consultations as an advisor, with a limit on consultations and bytes. Meta only advises: it receives no files and runs nothing. If you do not authorize it and the Mission gets stuck, a card lets you decide. |
 
 During the Mission, inspect:
 

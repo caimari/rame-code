@@ -192,11 +192,55 @@ const missionModule = require('../../src/missionRunner.js') as typeof import('..
 const chatModule = require('../../src/chatRunner.js') as typeof import('../../src/chatRunner.js');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const storeModule = require('../../src/threadStore.js') as typeof import('../../src/threadStore.js');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const autonomyEntry = require('../../src/autonomyEntry.js') as typeof import('../../src/autonomyEntry.js');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const autonomyStoreModule = require('../../src/autonomyStore.js') as typeof import('../../src/autonomyStore.js');
+
+/**
+ * For tests that drive the Mission Advisory with a partial host: a store
+ * holding a Meta pre-authorization in force for `scopeId` and `model`, the
+ * binding a Mission authorized under it carries, and the host fields the
+ * check reads (the user, the key revision, the selected model).
+ */
+export function fakeMetaPreauth(scopeId: string, model: string, maxPerMission = 5): {
+  autonomy: InstanceType<typeof autonomyStoreModule.AutonomyStore>;
+  binding: { preauthId: string; user: string; scopeId: string; envId: string; provider: 'Meta Model API'; model: string; credentialRevision: string; expiresAt: number; files: [] };
+  metaCredential: string;
+  selectedCloudModel: () => string;
+} {
+  const memory = new Map<string, unknown>();
+  const autonomy = new autonomyStoreModule.AutonomyStore({ get: (key) => memory.get(key), update: async (key, value) => void memory.set(key, JSON.parse(JSON.stringify(value))) });
+  let user = 'unknown';
+  try {
+    user = os.userInfo().username || 'unknown';
+  } catch {
+    user = process.env.USER ?? process.env.USERNAME ?? 'unknown';
+  }
+  const credential = 'c'.repeat(32);
+  const now = Date.now();
+  const env = autonomy.env();
+  const meta = {
+    id: 'pre_0123456789abcdef', user, envId: env.id, envLabel: env.label, scopeId, project: 'p', provider: 'Meta Model API' as const, model, credentialRevision: credential,
+    maxPerMission, dataScope: 'instructions' as const, tokenBudget: null, usedTokens: 0, adviceUses: {}, grantedAt: now, expiresAt: now + 3_600_000,
+  };
+  // Stored the way the store itself writes it: sealed, for this environment.
+  const sealed = autonomy.seal(scopeId, { mode: 'supervised', meta, missionWeb: null, agentWeb: null, full: null, log: [] });
+  memory.set('rameCode.autonomy.v1', { version: 2, workspaces: { [sealed.slot]: sealed.record } });
+  return {
+    autonomy,
+    binding: { preauthId: meta.id, user, scopeId, envId: env.id, provider: 'Meta Model API', model, credentialRevision: credential, expiresAt: meta.expiresAt, files: [] },
+    metaCredential: credential,
+    selectedCloudModel: () => model,
+  };
+}
 
 export type ModelReply =
   | { kind: 'json'; body: unknown; status?: number }
   | { kind: 'hang' }
-  | { kind: 'partial' };
+  | { kind: 'partial' }
+  /** HTTP 200 and an event stream that carries only an error, as LM Studio sends a refusal. */
+  | { kind: 'stream-error'; error: unknown };
 
 /** Scripted loopback model: each request consumes the next reply. */
 export class FakeModelServer {
@@ -242,6 +286,12 @@ export class FakeModelServer {
           res.end(JSON.stringify(meta));
           return;
         }
+        if (req.method === 'GET') {
+          // A GET is never a chat completion: it does not consume a scripted reply.
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { code: 404, message: 'Not Found' } }));
+          return;
+        }
         try {
           this.requests.push(JSON.parse(raw) as Record<string, unknown>);
         } catch {
@@ -256,6 +306,11 @@ export class FakeModelServer {
           this.open.add(res);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.write('{"choices":[');
+          return;
+        }
+        if (reply.kind === 'stream-error') {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          res.end(`data: ${JSON.stringify({ error: reply.error })}\n\n`);
           return;
         }
         res.writeHead(reply.status ?? 200, { 'Content-Type': 'application/json' });
@@ -433,6 +488,29 @@ export class HostHarness {
 
   send(raw: unknown): void {
     this.handler?.(raw);
+  }
+
+  /**
+   * The user's pre-authorizations in Settings → Security → Autonomy &
+   * Permissions, given through the real view messages and an accepted modal
+   * confirmation (the user clicked its action).
+   */
+  async preauthorize(options: { meta?: number; dataScope?: 'instructions' | 'files'; missionWeb?: boolean; hours?: number }): Promise<void> {
+    const host = this.provider as unknown as Parameters<typeof autonomyEntry.onAutonomyMessage>[0];
+    const confirm = this.provider.confirmAutonomy;
+    this.provider.confirmAutonomy = async () => true;
+    try {
+      await this.provider.refreshHasKey();
+      await autonomyEntry.onAutonomyMessage(host, { type: 'autonomyMode', mode: 'supervised' });
+      if (options.meta !== undefined) {
+        await autonomyEntry.onAutonomyMessage(host, { type: 'autonomyMeta', maxPerMission: options.meta, validityHours: options.hours ?? 8, dataScope: options.dataScope ?? 'instructions' });
+      }
+      if (options.missionWeb === true) {
+        await autonomyEntry.onAutonomyMessage(host, { type: 'autonomyMissionWeb', validityHours: options.hours ?? 8 });
+      }
+    } finally {
+      this.provider.confirmAutonomy = confirm;
+    }
   }
 
   last(): PostedState {

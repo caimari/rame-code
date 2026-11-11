@@ -37,9 +37,12 @@ import {
   type DisclosurePlan,
   type DisclosureScope,
 } from './cloudDisclosure.js';
-import { processingClass } from './metaRecipient.js';
 import type { AuthorizedDecisionSummary } from './continuityCheckpoint.js';
 import type { ProviderHost } from './providerTypes.js';
+import { fullMainModelNow, recordExternal } from './autonomyHost.js';
+import { currentScope, runScope } from './cloudScope.js';
+
+export { currentScope, runScope };
 import type { ChatThread } from './threadStore.js';
 
 /** The authorized decisions of the project the thread is bound to (none when unbound or closed). */
@@ -65,12 +68,6 @@ export async function decisionsForThread(
   }
 }
 
-/** The scope a Meta request is under now: the selected model's processing class and the API key's revision. */
-export function currentScope(host: ProviderHost): DisclosureScope {
-  return { processing: processingClass(host.selectedCloudModel()), credential: host.metaCredential };
-}
-
-/** The tool-results permission key: one thread, one class, one credential. */
 function grantKey(threadId: string, scope: DisclosureScope): string {
   return `${threadId}|${scope.processing}|${scope.credential}`;
 }
@@ -92,7 +89,7 @@ export function credentialChanged(host: ProviderHost, revision: string): void {
   persist(host);
 }
 
-async function planFor(host: ProviderHost, thread: ChatThread, text: string, mode: 'chat' | 'agent', delegated: boolean): Promise<{ plan: DisclosurePlan; decisions: AuthorizedDecisionSummary[] }> {
+async function planFor(host: ProviderHost, thread: ChatThread, text: string, mode: 'chat' | 'agent', delegated: boolean): Promise<{ plan: DisclosurePlan; decisions: AuthorizedDecisionSummary[]; scopeId: string }> {
   const decisions = await decisionsForThread(host, thread);
   const scope = currentScope(host);
   const plan = planDisclosure(thread, text, threadDisclosure(host.cloudDisclosure, thread.id, scope), decisions, {
@@ -101,7 +98,27 @@ async function planFor(host: ProviderHost, thread: ChatThread, text: string, mod
     delegated,
     askToolResults: mode === 'agent' && !delegated && !host.cloudToolGrants.has(grantKey(thread.id, scope)),
   });
-  return { plan, decisions: decisions.list };
+  return { plan, decisions: decisions.list, scopeId: decisions.scopeId };
+}
+
+/**
+ * A Meta main-model run that goes without the disclosure card: the run of a
+ * Mission whose authorization chose this Meta model as its main model (that
+ * card was the consent), or an Agent run under Full Access's own "Meta as
+ * the main model" part, given for this Meta model and API key in this
+ * workspace (its confirmation says that requests and tool results go to
+ * Meta). Full Access's tool parts never cover it, and its `meta` part only
+ * covers bounded advisor consultations. Local messages not answered on a
+ * card stay local, and project decisions go only if they were answered
+ * before (project memory always keeps its card).
+ */
+function coveredWithoutCard(host: ProviderHost, thread: ChatThread, mode: 'chat' | 'agent', scopeId: string): 'mission' | 'full-access' | null {
+  const active = host.activeMission;
+  const grant = active === null ? null : (host.missions.get(active.id)?.grant ?? null);
+  if (grant !== null && grant.provider === 'cloud' && grant.model === host.selectedCloudModel() && host.missions.get(grant.missionId)?.threadId === thread.id) {
+    return 'mission';
+  }
+  return mode === 'agent' && fullMainModelNow(host, scopeId) ? 'full-access' : null;
 }
 
 /**
@@ -130,16 +147,26 @@ export async function cloudGate(
   }
   const delegated = host.delegatedRun !== null && host.delegatedRun.threadId === threadId;
   const kind = mode === 'agent' ? 'agent' : 'chat';
-  const { plan, decisions } = await planFor(host, thread, text, kind, delegated);
-  if (!plan.needed) {
+  const { plan, decisions, scopeId } = await planFor(host, thread, text, kind, delegated);
+  const covered = plan.needed ? coveredWithoutCard(host, thread, kind, scopeId) : null;
+  if (!plan.needed || covered !== null) {
     host.cloudRun = {
       threadId,
       ...scope,
       allowed: plan.decisionsAllowed,
       decisions: plan.decisionsAllowed ? decisions : [],
-      // A delegated run's own card lists tool output; otherwise this session's answer for this class and key.
-      toolResults: delegated || host.cloudToolGrants.get(grantKey(threadId, scope)) === true,
+      // A delegated run's own card lists tool output; a covered run sends its own; otherwise this session's answer for this class and key.
+      toolResults: delegated || covered !== null || host.cloudToolGrants.get(grantKey(threadId, scope)) === true,
     };
+    if (covered !== null && scopeId !== '') {
+      await recordExternal(host, scopeId, {
+        provider: 'Meta Model API', destination: host.selectedCloudModel(),
+        reason: covered === 'mission' ? 'Mission run with Meta as its main model' : 'Agent run with Meta as the main model',
+        data: `this run's request and tool results; ${plan.messages.length} earlier local message(s) not sent; project decisions ${plan.decisionsAllowed ? 'as answered before' : 'not sent'}`,
+        approval: covered === 'mission' ? 'card' : 'full-access', preauthId: null, missionId: host.activeMission?.id ?? null, bytes: null,
+        outcome: covered === 'mission' ? 'sent under the Mission authorization' : 'sent under Full Access (Meta as the main model)',
+      });
+    }
     recordRequestSent(host.cloudDisclosure, thread, currentRequestTurn(thread, text), Date.now(), scope);
     persist(host);
     return true;
@@ -265,11 +292,6 @@ export function threadForRun(host: ProviderHost, threadId: string, provider: 'lo
   return provider === 'local' ? withoutRetrievalLines(thread) : cloudVisibleThread(thread, text, threadDisclosure(host.cloudDisclosure, threadId, runScope(host, threadId)));
 }
 
-/** The scope of the Meta request running for this thread (fixed at its card), else the current one. */
-export function runScope(host: ProviderHost, threadId: string): DisclosureScope {
-  const run = host.cloudRun;
-  return run !== null && run.threadId === threadId ? { processing: run.processing, credential: run.credential } : currentScope(host);
-}
 
 /** Local-session messages a Meta request leaves out, so the model can be told (0 for local runs). */
 export function withheldForRun(host: ProviderHost, threadId: string, provider: 'local' | 'cloud', text: string): number {

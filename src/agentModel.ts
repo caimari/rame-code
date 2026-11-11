@@ -12,11 +12,12 @@ import { MetaHttpError } from './metaFailures.js';
 import { isAbortError, withBoundedRequest } from './boundedRequest.js';
 import {
   generationRequestFields,
-  localContextRefusal,
   type GenerationRequest,
 } from './generationSettings.js';
 import { isLocalOrPrivateUrl, refuseRedirect } from './localServers.js';
+import { localHttpError, localStreamRefusal } from './localServerErrors.js';
 import { META_API_ENDPOINT } from './meta-provider.js';
+import { limitedRequest, LocalLimitError, readStreamedCompletion, type LocalRequestLimits } from './localLimits.js';
 import { parseUsage, type ProviderUsage } from './usage.js';
 import {
   AgentToolProtocolError,
@@ -154,6 +155,20 @@ export function buildAgentRequestBody(
     store: false,
     stream: false,
   };
+}
+
+/** Join only adjacent system messages, in order, so local templates do not repeat their tool preamble. */
+export function mergeAdjacentSystemMessages(messages: AgentChatMessage[]): AgentChatMessage[] {
+  const merged: AgentChatMessage[] = [];
+  for (const message of messages) {
+    const previous = merged[merged.length - 1];
+    if (message.role === 'system' && previous?.role === 'system' && typeof previous.content === 'string' && typeof message.content === 'string') {
+      merged[merged.length - 1] = { ...previous, content: `${previous.content}\n\n${message.content}` };
+    } else {
+      merged.push(message);
+    }
+  }
+  return merged;
 }
 
 function finishReason(payload: unknown): unknown {
@@ -308,6 +323,8 @@ export async function createLocalAgentCompletion(options: {
   fetchImpl?: FetchLike;
   timeoutMs?: number;
   toolChoice?: AgentToolChoice;
+  /** This model's idle and total limits (localLimits.ts): the answer is then streamed. */
+  limits?: LocalRequestLimits;
 }): Promise<AgentCompletion> {
   if (!isLocalOrPrivateUrl(options.endpoint)) {
     throw new Error('The local endpoint must stay on this computer or the private network.');
@@ -315,6 +332,9 @@ export async function createLocalAgentCompletion(options: {
   assertAgentModelForProvider('local', options.model);
   const fetchImpl = options.fetchImpl ?? fetch;
   const url = `${options.endpoint.replace(/\/+$/, '')}/v1/chat/completions`;
+  if (options.limits !== undefined && options.timeoutMs === undefined) {
+    return limitedLocalAgentCompletion(options as typeof options & { limits: LocalRequestLimits }, fetchImpl, url);
+  }
   // The deadline and cancellation cover the body read as well as headers.
   const { response, payload } = await withBoundedRequest(
     options.signal,
@@ -329,7 +349,7 @@ export async function createLocalAgentCompletion(options: {
           signal,
           redirect: 'manual',
           body: JSON.stringify(
-            buildAgentRequestBody(options.model, options.messages, options.generation, options.toolChoice ?? 'auto', options.tools),
+            buildAgentRequestBody(options.model, mergeAdjacentSystemMessages(options.messages), options.generation, options.toolChoice ?? 'auto', options.tools),
           ),
         });
       } catch (error) {
@@ -346,7 +366,86 @@ export async function createLocalAgentCompletion(options: {
     if (isLocalMalformedToolCall(response.status, payload)) {
       throw new LocalMalformedToolCallError();
     }
-    throw localContextRefusal(payload) ?? new Error(`The local runtime returned HTTP ${response.status}.`);
+    throw localHttpError(response.status, payload, options.model);
+  }
+  return parseAgentPayload(payload, options.generation.maxCompletionTokens);
+}
+
+/**
+ * The local Agent call under this model's limits: streamed, so the host can
+ * tell a model that is still producing output from one that went quiet or
+ * only repeats itself. The payload is rebuilt and parsed exactly as a
+ * non-streamed answer.
+ */
+async function limitedLocalAgentCompletion(
+  options: { model: string; messages: AgentChatMessage[]; generation: GenerationRequest; tools?: AgentToolDefinition[]; signal?: AbortSignal; toolChoice?: AgentToolChoice; limits: LocalRequestLimits },
+  fetchImpl: FetchLike,
+  url: string,
+): Promise<AgentCompletion> {
+  const request = limitedRequest(options.signal, options.limits);
+  let status = 0;
+  let inStream = false;
+  let payload: unknown;
+  try {
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: request.signal,
+        redirect: 'manual',
+        body: JSON.stringify({
+          ...buildAgentRequestBody(options.model, mergeAdjacentSystemMessages(options.messages), options.generation, options.toolChoice ?? 'auto', options.tools),
+          stream: true,
+          stream_options: { include_usage: true },
+        }),
+      });
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+      throw new Error('The local runtime is unreachable.');
+    }
+    refuseRedirect(response);
+    status = response.status;
+    if (response.ok && /text\/event-stream/i.test(response.headers.get('content-type') ?? '')) {
+      payload = await readStreamedCompletion(response, (delta) => request.output(delta));
+      if (typeof payload === 'object' && payload !== null && 'error' in payload) {
+        // An error sent inside the stream: judged like the same error sent as HTTP 500.
+        status = 500;
+        inStream = true;
+      }
+    } else {
+      // Answered in one piece: no progress can be seen, only the total limit applies now.
+      request.unmeasurable();
+      payload = await readPayload(response);
+    }
+  } catch (error) {
+    const stop = request.stopped();
+    if (stop !== null) {
+      throw new LocalLimitError(stop, options.limits);
+    }
+    if (options.signal?.aborted) {
+      throw isAbortError(error) ? error : new DOMException('Aborted', 'AbortError');
+    }
+    throw error;
+  } finally {
+    request.dispose();
+  }
+  if (status < 200 || status > 299) {
+    if (isLocalMalformedToolCall(status, payload)) {
+      throw new LocalMalformedToolCallError();
+    }
+    if (inStream) {
+      // A context or setup refusal keeps its meaning (and its actions) when it arrives in the stream.
+      const known = localStreamRefusal(payload, options.model);
+      if (known !== null) {
+        throw known;
+      }
+      const detail = (payload as { error?: { message?: unknown } } | undefined)?.error?.message;
+      throw new Error(`The local runtime reported an error${typeof detail === 'string' && detail.trim() ? `: ${detail.trim().slice(0, 200)}` : ''}.`);
+    }
+    throw localHttpError(status, payload, options.model);
   }
   return parseAgentPayload(payload, options.generation.maxCompletionTokens);
 }

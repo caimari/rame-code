@@ -14,6 +14,9 @@
  * and stops only its tracked child, never an external endpoint.
  */
 
+import { agentScratchResults } from './metricRun.js';
+import { ProgrammeStore } from './programmeStore.js';
+import { defaultJobsRoot, JobStore } from './jobStore.js';
 import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
 import * as path from 'node:path';
@@ -35,6 +38,8 @@ import {
 import { AgentRunner } from './agentLoop.js';
 import type { AgentChatMessage } from './agentModel.js';
 import { formatProcessResult, runBoundedProcess } from './agentProcess.js';
+import { isolateTest } from './testIsolation.js';
+import { noteTestIsolation } from './missionPhase.js';
 import {
   MAX_TEST_OUTPUT_BYTES,
   resolveSingleWorkspaceRoot,
@@ -62,6 +67,9 @@ import { npmTestContext } from './projectAdapters/npmProjectAdapter.js';
 import { createVscodeWorkspaceFs } from './projectAdapters/vscodeWorkspaceFs.js';
 import { guardDisposedWrites } from './hostLifecycle.js';
 import { confirmAcceptanceScopeChangeDialog, confirmAcceptanceScopeDialog } from './acceptanceScopeDialog.js';
+import { autonomyRuntime, confirmAutonomyDialog } from './autonomyDialog.js';
+import { isAutonomyMessage, onAutonomyMessage } from './autonomyEntry.js';
+import { AutonomyStore } from './autonomyStore.js';
 import { withBoundedRequest } from './boundedRequest.js';
 import { ChatRunner } from './chatRunner.js';
 import {
@@ -156,12 +164,12 @@ import {
   type ViewLanguage,
 } from './settingsStore.js';
 
-// Extracted controller modules — all delegation goes through ProviderHost.
 import * as genCtrl from './generationController.js';
 import * as memCtrl from './memoryController.js';
 import * as agentCtrl from './agentController.js';
 import * as missionCoord from './missionCoordinator.js';
 import * as remote from './remoteController.js';
+import { reloadAfterLocalIssue } from './lmStudioReload.js';
 import * as acceptanceReview from './missionAcceptanceReviewHost.js';
 import * as localSource from './localSource.js';
 import { idleConnectionOf } from './connectionState.js';
@@ -187,10 +195,6 @@ export const RAME_ACTIVE_RUN_KEY = 'rameCode.activeRun.v1';
 const INTERRUPTED_RUN_NOTE =
   'This run was interrupted because VS Code reloaded or closed before it finished. Its outcome was not recorded; check the workspace before retrying.';
 
-// ---------------------------------------------------------------------------
-// Class
-// ---------------------------------------------------------------------------
-
 export class RameCodeViewProvider implements vscode.WebviewViewProvider, ProviderHost {
   private view: vscode.WebviewView | undefined;
   private readonly disposables: vscode.Disposable[] = [];
@@ -202,7 +206,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   settings: RameSettings = defaultSettings();
   private usage: UsageTotals = defaultUsageTotals();
   private usageLast: ProviderUsage = { ...EMPTY_USAGE };
-  private cloudCatalog: CloudModelInfo[] = fallbackCatalog();
+  cloudCatalog: CloudModelInfo[] = fallbackCatalog();
   private localSettingsRev = 1;
   private readonly localRuntime = new LocalRuntimeManager({
     publish: async (status, message) => {
@@ -261,6 +265,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   cascadeVerification: { threadId: string } | null = null;
   hostPromptText: string | null = null;
   readonly missions: MissionStore;
+  readonly jobs: JobStore;
+  readonly programmes: ProgrammeStore;
+  readonly autonomy: AutonomyStore;
   missionRecovery: Promise<number> = Promise.resolve(0);
   activeMission: { id: string; revision: number } | null = null;
   missionProfileCap: AgentProfileId | null = null;
@@ -312,6 +319,11 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         };
     this.memory = new DecisionStore(backend);
     this.missions = new MissionStore(backend);
+    this.jobs = new JobStore(backend, defaultJobsRoot(sharedStateDir));
+    this.programmes = new ProgrammeStore(backend);
+    this.autonomy = new AutonomyStore(backend, autonomyRuntime(secrets, sharedStateDir));
+    // After a reload: attach to, close or mark uncertain every live job; never start one.
+    void this.jobs.recover().catch(() => undefined);
     this.about = readBuildInfo(this.extensionUri.fsPath);
     this.settings = validateSettings(state.get(RAME_SETTINGS_KEY));
     this.settings = this.reconcileCloudModel(this.settings, this.cloudCatalog);
@@ -326,8 +338,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       this.missionRecovery = this.missions.recoverInterrupted((lease) => this.isLeaseAlive(lease));
     }
   }
-
-  // ----- VS Code lifecycle -----
 
   private recoverInterruptedRun(): boolean {
     const raw = this.extensionState.get(RAME_ACTIVE_RUN_KEY);
@@ -361,26 +371,19 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       localResourceRoots: [mediaRoot],
     };
     const nonce = createViewNonce();
+    const ux = (file: string): string => view.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, file)).toString();
     view.webview.html = buildViewHtml({
       cspSource: view.webview.cspSource,
-      scriptUri: view.webview
-        .asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'main.js'))
-        .toString(),
-      styleUri: view.webview
-        .asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'main.css'))
-        .toString(),
-      i18nUri: view.webview
-        .asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'i18n.js'))
-        .toString(),
-      settingsTabsUri: view.webview
-        .asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'settingsTabs.js'))
-        .toString(),
-      composerUxUri: view.webview
-        .asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'composerUx.js'))
-        .toString(),
-      remoteUxUri: view.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'remoteUx.js')).toString(),
-      evidenceUxUri: view.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'evidenceUx.js')).toString(),
-      localServersUxUri: view.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'localServersUx.js')).toString(),
+      scriptUri: ux('main.js'),
+      styleUri: ux('main.css'),
+      i18nUri: ux('i18n.js'),
+      settingsTabsUri: ux('settingsTabs.js'),
+      composerUxUri: ux('composerUx.js'),
+      remoteUxUri: ux('remoteUx.js'),
+      evidenceUxUri: ux('evidenceUx.js'),
+      localServersUxUri: ux('localServersUx.js'),
+      autonomyUxUri: ux('autonomyUx.js'),
+      advisorUxUri: ux('advisorUx.js'),
       nonce,
     });
     const messageHandler = view.webview.onDidReceiveMessage((raw: unknown) => {
@@ -405,8 +408,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     this.disposables.length = 0;
     this.view = undefined;
   }
-
-  // ----- ProviderHost callback implementations -----
 
   selectedCloudModel(): string {
     return validateCloudModelSelection(this.settings.cloudModel, this.cloudCatalog);
@@ -493,11 +494,15 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     signal: AbortSignal,
     boundRoot?: string,
     env?: Record<string, string>,
+    protectedAccess?: import('./shellIsolation.js').ProtectedInvocationAccess,
+    verificationMode?: import('./shellIsolation.js').VerificationMode,
   ): Promise<string> {
     if (this.disposed) {
       return 'not started: this RAME Code window was closed or reloaded';
     }
     const spec = buildTestSpawnSpec(command);
+    // Legacy telemetry only; official acceptance uses host observations.
+    const scratch = env === undefined && this.activeMission !== null ? agentScratchResults(this.missions.get(this.activeMission.id), command.id) : undefined;
     const held = this.heldWorkspaceRoot();
     const cwd = boundRoot ?? (held.ok ? held.root : undefined);
     const invocation = resolveTestInvocation(spec, {
@@ -512,21 +517,27 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         }
       },
     });
+    const isolated = await isolateTest(this, invocation.executable, invocation.argv, cwd ?? process.cwd(), env ?? scratch, protectedAccess, verificationMode);
+    if (!isolated.ok) return isolated.error;
+    if (this.activeMission !== null) await this.updateActiveMission((m) => noteTestIsolation(m, isolated.label));
     const result = await runBoundedProcess(
       {
-        executable: invocation.executable,
-        argv: invocation.argv,
+        executable: isolated.executable,
+        argv: isolated.argv,
         cwd,
         timeoutMs: spec.timeoutMs,
         maxOutputBytes: spec.maxOutputBytes,
-        ...(env ? { env } : {}),
+        ...((env ?? scratch) ? { env: env ?? scratch } : {}),
       },
       signal,
     );
+    // Keep `exit=…` first: acceptance parsing is deliberately strict. The
+    // chosen level is shown in Settings/cards and bound into long-job specs.
     return truncateToolOutput(formatProcessResult(result, spec.timeoutMs, MAX_TEST_OUTPUT_BYTES));
   }
 
   confirmAcceptanceScope = confirmAcceptanceScopeDialog;
+  confirmAutonomy = confirmAutonomyDialog;
   confirmAcceptanceScopeChange = confirmAcceptanceScopeChangeDialog;
 
   recordUsage(provider: 'cloud' | 'local', usage: ProviderUsage): void {
@@ -558,8 +569,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       : npmTestContext(this.agentFsFor(root));
   }
 
-  // ----- Delegation to extracted generation controller -----
-
   generationModel(provider: ProviderId): string {
     return genCtrl.generationModel(this, provider);
   }
@@ -576,8 +585,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     return genCtrl.generationRequest(run, body, calibration);
   }
 
-  // ----- Delegation to extracted memory controller -----
-
   async refreshMemoryView(): Promise<void> {
     return memCtrl.refreshMemoryView(
       this,
@@ -593,8 +600,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     return memCtrl.liveArtifactHashes(this, scopeId, fs);
   }
 
-  // ----- Delegation to extracted agent controller -----
-
   async liveApprovalContext(pending: PendingAgentAction): Promise<{
     workspaceId: string;
     threadId: string;
@@ -604,8 +609,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   }> {
     return agentCtrl.liveApprovalContext(this, pending);
   }
-
-  // ----- Delegation to extracted mission coordinator -----
 
   async createMissionFromPlan(threadId: string, plan: MissionPlan): Promise<void> {
     return missionCoord.createMissionFromPlan(this, threadId, plan);
@@ -626,8 +629,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       return (error as NodeJS.ErrnoException).code === 'EPERM';
     }
   }
-
-  // ----- Shell: navigation and threading -----
 
   private reconcileCloudModel(
     settings: RameSettings,
@@ -737,8 +738,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     }
     await this.postState();
   }
-
-  // ----- Shell: send message dispatch -----
 
   async sendMessage(
     rawText: string,
@@ -932,9 +931,8 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     }
     await this.refreshMemoryView();
     await this.postState();
+    if (mode === 'agent') await remote.autoConsult(this);
   }
-
-  // ----- Shell: generation settings -----
 
   async setReasoning(provider: ProviderId, model: string, rawLevel: string): Promise<void> {
     const current = this.generationModel(this.settings.provider);
@@ -983,8 +981,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     await this.postState();
   }
 
-  // ----- Shell: agent delegation -----
-
   async setAgentProfile(rawProfile: string): Promise<void> {
     return agentCtrl.setAgentProfile(this, rawProfile);
   }
@@ -996,8 +992,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
   async rejectAgentAction(actionId: string, digest: string): Promise<void> {
     return agentCtrl.rejectAgentAction(this, actionId, digest);
   }
-
-  // ----- Shell: memory delegation -----
 
   async selectMemoryProject(rawPath: string): Promise<void> {
     return memCtrl.selectMemoryProject(
@@ -1035,8 +1029,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     );
   }
 
-  // ----- Shell: mission delegation -----
-
   async runMissionTask(missionId: string, expectedRevision: number): Promise<void> {
     return missionCoord.runMissionTask(this, missionId, expectedRevision);
   }
@@ -1047,7 +1039,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     mode: MissionGrant['mode'],
     consultConfig: { maxConsultations: number; limits?: ChosenAdvisoryLimits | null } | null,
     trustedProject = false,
-    acceptance: { commandId: string; files: string[] } | null = null,
+    acceptance: { commandId: string; files: string[]; metrics?: unknown } | null = null,
   ): Promise<void> {
     return missionCoord.startMission(this, missionId, expectedRevision, mode, consultConfig, trustedProject, acceptance);
   }
@@ -1072,8 +1064,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     return missionCoord.retryMission(this, missionId, expectedRevision, guidance);
   }
 
-  // ----- Shell: Meta paths (Advisory and delegated; see remoteController) -----
-
   async approveConsult(digest: string): Promise<void> {
     return remote.approveConsult(this, digest);
   }
@@ -1082,11 +1072,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     return remote.dismissConsult(this);
   }
 
-  async includeConsultFiles(digest: string, files: string[]): Promise<void> {
-    return remote.includeConsultFiles(this, digest, files);
+  async includeConsultFiles(digest: string, files: string[], output?: boolean): Promise<void> {
+    return remote.includeConsultFiles(this, digest, files, output);
   }
-
-  // ----- Shell: language -----
 
   async setLanguage(language: ViewLanguage): Promise<void> {
     this.settings = { ...this.settings, language };
@@ -1148,8 +1136,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     return true;
   }
 
-  // ----- Shell: cloud key management -----
-
   async saveKey(rawKey: string): Promise<void> {
     const checked = validateApiKeyInput(rawKey);
     if (!checked.ok || checked.apiKey === undefined) {
@@ -1162,6 +1148,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     await this.secrets.store(API_KEY_SECRET, checked.apiKey);
     this.hasKey = true;
     this.cloudConfirmed = false;
+    remote.refreshLocalIssueDelegation(this);
     if (!this.running) {
       this.connection = 'ready';
     }
@@ -1175,14 +1162,13 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     await this.secrets.delete(API_KEY_SECRET);
     this.hasKey = false;
     this.cloudConfirmed = false;
+    remote.refreshLocalIssueDelegation(this);
     if (!this.running) {
       this.connection = 'missing-key';
     }
     this.status = 'API key cleared. Save a key to run cloud requests.';
     await this.postState();
   }
-
-  // ----- Shell: non-secret settings -----
 
   async updateSettings(
     runtime: string,
@@ -1211,6 +1197,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       allowCloudEscalation,
     };
     this.persistSettings();
+    remote.refreshLocalIssueDelegation(this);
     this.status = 'Settings saved.';
     this.connection = idleConnectionOf(this);
     const endpoint = provider === 'local' && !this.running ? this.localEndpoint() : null;
@@ -1342,8 +1329,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     this.local = nextLocalRuntimeStatus(this.local, event);
   }
 
-  // ----- Shell: local runtime lifecycle -----
-
   async startLocalRuntime(value?: {
     executablePath: string;
     modelPath: string;
@@ -1394,8 +1379,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     );
   }
 
-  // ----- Shell: state plumbing -----
-
   private ensureActiveThreadStillExists(): void {
     if (
       this.activeThreadId !== null &&
@@ -1420,7 +1403,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       await this.postState();
       return;
     }
-
+    if (isAutonomyMessage(message)) {
+      return onAutonomyMessage(this, message);
+    }
     switch (message.type) {
       case 'ready':
       case 'refresh':
@@ -1508,6 +1493,8 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       case 'localServerUse':
       case 'webAccessSet':
       case 'shellAccessSet':
+      case 'advisorModelSet':
+      case 'missionRunsSet':
       case 'missionWebSet':
       case 'localIdentity':
         await localSource.handleLocalSourceMessage(this, message);
@@ -1527,6 +1514,9 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
       case 'localIssueStart':
         await this.startAfterLocalIssue();
         return;
+      case 'localIssueReload':
+        await reloadAfterLocalIssue(this);
+        return;
       case 'acceptanceReviewPrepare':
       case 'acceptanceReviewSend':
       case 'acceptanceReviewCancel':
@@ -1534,7 +1524,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         await acceptanceReview.handleAcceptanceReviewMessage(this, message);
         return;
       case 'consultIncludeFiles':
-        await this.includeConsultFiles(message.digest, message.files);
+        await this.includeConsultFiles(message.digest, message.files, message.output);
         return;
       case 'escalateDismiss':
         await this.dismissEscalation();
@@ -1572,7 +1562,7 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
             message.missionId,
             message.revision,
             message.mode,
-            message.maxConsultations > 0 ? { maxConsultations: message.maxConsultations, limits: message.advisoryLimits ?? null } : null,
+            message.maxConsultations !== 0 ? { maxConsultations: message.maxConsultations, limits: message.advisoryLimits ?? null } : null,
             message.trustedProject,
             message.acceptanceCommand.length > 0 ? { commandId: message.acceptanceCommand, files: message.acceptanceFiles } : null,
           ),
@@ -1610,6 +1600,8 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     if (this.disposed || !this.view) {
       return;
     }
+    // An expired Spark offer leaves the view instead of waiting for a click it would refuse.
+    remote.expireDelegationOffer(this);
     const threads = this.store.list();
     const active = this.activeTurns();
     const inRunThread = active !== undefined && active.id === this.runThreadId;
@@ -1643,7 +1635,11 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
         },
         localSettings: { ...this.settings.local },
         localSettingsRev: this.localSettingsRev,
-        escalation: this.escalation,
+        // The Spark card belongs to the thread whose request failed; other threads never show it.
+        escalation:
+          this.escalation.pending && this.delegationOffer !== null && active !== undefined && this.delegationOffer.threadId === active.id
+            ? this.escalation
+            : { pending: false, reason: '' },
         allowCloudEscalation: this.settings.allowCloudEscalation,
         externalLocalEndpoint: this.settings.externalLocalEndpoint,
         agentProfile: this.settings.agentProfile,
@@ -1702,10 +1698,6 @@ export class RameCodeViewProvider implements vscode.WebviewViewProvider, Provide
     };
   }
 }
-
-// ---------------------------------------------------------------------------
-// Free functions
-// ---------------------------------------------------------------------------
 
 function isProcessAlive(pid: number): boolean {
   try {

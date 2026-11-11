@@ -1,3 +1,4 @@
+import { ORIGINAL_REFUSALS } from './originalCopy.js';
 import { REGEX_SEARCH_TIMEOUT_MESSAGE } from './agentHost.js';
 
 /**
@@ -37,6 +38,7 @@ export function summarizeToolResult(tool: string, resultText: string): string {
 
 export const REPLACE_NOT_FOUND_MESSAGE = 'The text to replace is not in the file; read it again and copy the fragment exactly.';
 export const HIDDEN_ANSWERS_MESSAGE = 'That file holds the expected values of the host-compared cases; they are hidden from the agent during this Mission.';
+export const HIDDEN_REFERENCE_MESSAGE = 'That file tells the host how to compare your code with the frozen original (its inputs); it is hidden from the agent during this Mission.';
 export const REPLACE_NOT_UNIQUE_MESSAGE = 'The text to replace appears more than once; include more surrounding lines so it is unique.';
 
 /** Failures with no side effects that the bounded loop may inspect and repair. */
@@ -53,5 +55,6 @@ export function isRecoverableAgentToolError(detail: string): boolean {
     'The file changed; re-read and re-propose the action.',
     REGEX_SEARCH_TIMEOUT_MESSAGE,
     HIDDEN_ANSWERS_MESSAGE,
-  ].includes(detail);
+    HIDDEN_REFERENCE_MESSAGE,
+  ].includes(detail) || ORIGINAL_REFUSALS.some((prefix) => detail.startsWith(prefix));
 }

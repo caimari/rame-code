@@ -34,7 +34,7 @@ import type { AgentFs } from './agentHost.js';
 import { insideFolder, MAX_OBSERVED_PATHS, MAX_SEALED_FOLDERS } from './acceptanceTrace.js';
 import { ACCEPTANCE_ENVIRONMENT_FILES } from './projectAdapters/npmProjectAdapter.js';
 import { MAX_SNAPSHOT_FILES } from './projectSnapshot.js';
-import { HIDDEN_ANSWERS_MESSAGE } from './toolResultSummary.js';
+import { HIDDEN_ANSWERS_MESSAGE, HIDDEN_REFERENCE_MESSAGE } from './toolResultSummary.js';
 
 export { MAX_SNAPSHOT_FILES as MAX_BASELINE_FILES } from './projectSnapshot.js';
 const MAX_LIST = 200;
@@ -202,7 +202,7 @@ export function hideFromAgent(fs: AgentFs, hidden: () => readonly string[]): Age
     writeText: fs.writeText.bind(fs),
     readText: async (rel: string) => {
       if (isHidden(rel)) {
-        throw new Error(HIDDEN_ANSWERS_MESSAGE);
+        throw new Error(/\.rame-reference\.json$/i.test(rel) ? HIDDEN_REFERENCE_MESSAGE : HIDDEN_ANSWERS_MESSAGE);
       }
       return fs.readText(rel);
     },

@@ -15,6 +15,7 @@
  */
 
 import type { ChosenAdvisoryLimits } from './missionAdvisoryLimits.js';
+import { MISSION_CONSULT_CHOICES } from './autonomyPolicy.js';
 import { sanitizeEvidenceView, type ModelEvidenceView } from './modelEvidence.js';
 import { sanitizeContinuityLogView, type ContinuityLogView } from './continuityLog.js';
 import { sanitizeMissionAcceptanceReviewView, type MissionAcceptanceReviewView } from './missionAcceptanceReviewView.js';
@@ -270,7 +271,7 @@ function isChosenLimits(value: unknown): boolean {
     hasExactKeys(value as Record<string, unknown>, keys) &&
     keys.every((key) => {
       const entry = (value as Record<string, unknown>)[key];
-      return entry === null || (typeof entry === 'number' && Number.isInteger(entry) && entry >= 0 && entry <= 1_000_000);
+      return entry === null || (typeof entry === 'number' && Number.isInteger(entry) && entry >= 0 && entry <= 20_000_000);
     })
   );
 }
@@ -736,9 +737,7 @@ export function parseViewInboundMessage(raw: unknown): ViewInboundMessage {
         record.revision < 1 ||
         (record.mode !== 'supervised' && record.mode !== 'autonomous-workspace') ||
         typeof record.maxConsultations !== 'number' ||
-        !Number.isInteger(record.maxConsultations) ||
-        record.maxConsultations < 0 ||
-        record.maxConsultations > 5
+        !MISSION_CONSULT_CHOICES.includes(record.maxConsultations)
       ) {
         fail('Invalid missionStart message.');
       }
@@ -1084,7 +1083,7 @@ export interface MissionView {
     startedAt: number | null;
     lastProgress: string;
     lastTest: string;
-    escalation: { used: number; max: number; model: string } | null;
+    escalation: { used: number; max: number | '∞'; model: string } | null;
     canStart: boolean;
     canResume: boolean;
     canPause: boolean;
@@ -1111,7 +1110,7 @@ function sanitizeAutonomy(value: unknown): MissionView['autonomy'] {
     startedAt: typeof record.startedAt === 'number' ? record.startedAt : null,
     lastProgress: typeof record.lastProgress === 'string' ? record.lastProgress.slice(0, 300) : '',
     lastTest: typeof record.lastTest === 'string' ? record.lastTest.slice(0, 300) : '',
-    escalation: escalation === null ? null : { used: num(escalation.used), max: num(escalation.max), model: typeof escalation.model === 'string' ? escalation.model.slice(0, 128) : '' },
+    escalation: escalation === null ? null : { used: num(escalation.used), max: escalation.max === '∞' ? '∞' : num(escalation.max), model: typeof escalation.model === 'string' ? escalation.model.slice(0, 128) : '' },
     canStart: record.canStart === true,
     canResume: record.canResume === true,
     canPause: record.canPause === true,
@@ -1457,7 +1456,7 @@ function sanitizeAbout(value: unknown): AboutView {
   };
 }
 
-const ACCEPTANCE_STATES: readonly AcceptanceState[] = ['none', 'not_run', 'passed', 'failed', 'tampered'];
+const ACCEPTANCE_STATES: readonly AcceptanceState[] = ['none', 'not_run', 'passed', 'failed', 'inconclusive', 'tampered'];
 
 function sanitizeMissionLive(value: unknown): MissionLiveView | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -1540,6 +1539,7 @@ function sanitizeMissionLive(value: unknown): MissionLiveView | null {
             minutes: count(report.minutes),
             models: strings(report.models, 4, 200),
             metaConsultations: text(report.metaConsultations, 200),
+            isolation: strings(report.isolation, 4, 300),
           },
     blocked:
       object(record.blocked) === null

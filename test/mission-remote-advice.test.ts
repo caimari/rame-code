@@ -17,6 +17,7 @@ import { markUnrecoverable, updateVerifiers } from '../src/missionVerifiers.js';
 import type { ProviderHost } from '../src/providerTypes.js';
 import type { MissionLiveView } from '../src/viewMessages.js';
 import { assistantText, fakeCloud, HostHarness, toolCallReply, type PostedState } from './helpers/hostHarness.js';
+import { fakeMetaPreauth } from './helpers/hostHarness.js';
 
 const API_KEY_SECRET = 'rameCode.metaModelApiKey';
 const KEY = 'fake-meta-key-MISSION-91c2';
@@ -34,6 +35,8 @@ async function withMission(body: (h: HostHarness, mission: MissionRecord) => Pro
   const h = new HostHarness();
   await h.start({ agentProfile: 'safe-auto', mode: 'mission', allowCloudEscalation: true });
   h.secretValues.set(API_KEY_SECRET, KEY);
+  // The user pre-authorized Meta for Missions of this workspace (Autonomy & Permissions).
+  await h.preauthorize({ meta: 5 });
   fakeCloud.requests.length = 0;
   fakeCloud.handler = null;
   try {
@@ -146,8 +149,8 @@ test('after advice, authority stays restricted: another passing test does not re
     assert.equal(final?.validResponses, 1);
     // Visible while it happens, and after: which Meta model, which consultation of how many.
     const statuses = h.posted.map((state) => String(state.status));
-    assert.ok(statuses.some((status) => /^Consulting Meta muse-spark-1\.3 for advice \(consultation 1 of 1\); only the bounded text shown in Remote advice is sent, and Glimmer keeps control\.$/.test(status)), 'shown while Meta is consulted');
-    assert.ok(statuses.some((status) => /^Meta muse-spark-1\.3 answered \(consultation 1 of 1\); Glimmer continues locally/.test(status)), 'shown when Meta answered');
+    assert.ok(statuses.some((status) => /^Consulting Meta muse-spark-1\.3 for advice \(consultation 1 of 1\); only the bounded text shown in Remote advice is sent, and local-glimmer keeps control\.$/.test(status)), 'shown while Meta is consulted');
+    assert.ok(statuses.some((status) => /^Meta muse-spark-1\.3 answered \(consultation 1 of 1\); local-glimmer continues with the tools/.test(status)), 'shown when Meta answered');
   });
 });
 
@@ -207,11 +210,12 @@ test('a Mission internal run is never offered for delegated execution', async ()
 test('cancelled before sending is not counted; cancelled after sending is', async () => {
   const memory = new Map<string, unknown>();
   const missions = new MissionStore({ get: (key) => memory.get(key), update: async (key, value) => void memory.set(key, JSON.parse(JSON.stringify(value))) });
+  const preauth = fakeMetaPreauth('ws_1', 'muse-spark-1.3');
   const created = await missions.create({ scopeId: 'ws_1', scopeLabel: 'p', threadId: 't1', goal: 'G', steps: [{ id: 't1', title: 'T', successCriterion: 'npm:check' }], decisions: [] });
   assert.ok(created.ok);
   const id = created.value.id;
   const seeded = await missions.update(id, created.value.revision, (draft) => {
-    draft.grant = { missionId: id, scopeId: 'ws_1', provider: 'local', model: 'local-glimmer', mode: 'supervised', grantedAt: 1, escalation: { model: 'muse-spark-1.3', maxConsultations: 2, ...defaultAdvisoryLimits(2), used: 0, validResponses: 0, dataClasses: [], sentBytes: 0, usedTokens: 0 }, tests: null, acceptance: null };
+    draft.grant = { missionId: id, scopeId: 'ws_1', provider: 'local', model: 'local-glimmer', mode: 'supervised', grantedAt: 1, escalation: { model: 'muse-spark-1.3', maxConsultations: 2, ...defaultAdvisoryLimits(2), used: 0, validResponses: 0, dataClasses: [], sentBytes: 0, usedTokens: 0, preauth: preauth.binding }, tests: null, acceptance: null };
     draft.auto = { runs: 1, startedAt: 1, noProgressStreak: 0, lastSignature: '', lastProgress: '', needsVerification: true, pendingAdvice: '', acceptanceFeedback: '', lastRunNotes: '', userGuidance: '', blockers: updateVerifiers([], [], [{ commandId: 'npm:check', exitCode: 1, afterLastWrite: true }], 'c', 1, 'agent', id).blockers, recoveries: [] };
     return { ok: true, value: draft };
   });
@@ -221,6 +225,8 @@ test('cancelled before sending is not counted; cancelled after sending is', asyn
   };
   const host = {
     missions,
+    // A Meta pre-authorization in force for this workspace (Autonomy & Permissions).
+    ...preauth,
     settings: { allowCloudEscalation: true },
     missionAuto: null,
     getApiKey: async () => KEY,

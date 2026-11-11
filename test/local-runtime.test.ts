@@ -24,14 +24,11 @@ const VALID = {
   idleTimeoutSec: 600,
 };
 
-test('suggestions carry the detected machine paths and loopback port', () => {
-  assert.equal(
-    LOCAL_RUNTIME_SUGGESTIONS.executablePath,
-    '/workspace/src/llama.cpp-oficial/build/bin/llama-server',
-  );
-  assert.match(LOCAL_RUNTIME_SUGGESTIONS.modelPath, /Muse-Glimmer-30B/);
-  assert.match(LOCAL_RUNTIME_SUGGESTIONS.projectorPath, /mmproj/);
-  assert.match(LOCAL_RUNTIME_SUGGESTIONS.draftModelPath, /dflash/);
+test('portable suggestions use placeholders and keep safe defaults', () => {
+  assert.equal(LOCAL_RUNTIME_SUGGESTIONS.executablePath, '/path/to/llama-server');
+  assert.equal(LOCAL_RUNTIME_SUGGESTIONS.modelPath, '/path/to/model.gguf');
+  assert.equal(LOCAL_RUNTIME_SUGGESTIONS.projectorPath, '/path/to/mmproj.gguf');
+  assert.equal(LOCAL_RUNTIME_SUGGESTIONS.draftModelPath, '/path/to/draft-model.gguf');
   assert.equal(LOCAL_RUNTIME_SUGGESTIONS.port, 8775);
   assert.equal(LOCAL_RUNTIME_SUGGESTIONS.contextSize, 32768);
   assert.equal(STARTUP_TIMEOUT_MS, 180000);

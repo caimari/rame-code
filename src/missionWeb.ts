@@ -27,6 +27,8 @@ export interface MissionWebGrant {
   /** Used so far, counted by the host before each request. */
   searches: number;
   fetches: number;
+  /** The workspace's web pre-authorization this budget was given under (autonomous Missions; Autonomy & Permissions). */
+  preauthId?: string;
 }
 
 export const MISSION_WEB_MAX_SEARCHES = 20;
@@ -81,11 +83,15 @@ export function parseMissionWebGrant(raw: unknown): MissionWebGrant | null | und
     (v.fetches as number) > (v.maxFetches as number) ||
     !Array.isArray(v.domains) ||
     v.domains.length > MISSION_WEB_MAX_DOMAINS ||
-    !v.domains.every((domain) => typeof domain === 'string' && DOMAIN.test(domain))
+    !v.domains.every((domain) => typeof domain === 'string' && DOMAIN.test(domain)) ||
+    (v.preauthId !== undefined && (typeof v.preauthId !== 'string' || !/^pre_[0-9a-f]{16}$/.test(v.preauthId)))
   ) {
     return undefined;
   }
-  return { maxSearches: v.maxSearches as number, maxFetches: v.maxFetches as number, domains: [...(v.domains as string[])], searches: v.searches as number, fetches: v.fetches as number };
+  return {
+    maxSearches: v.maxSearches as number, maxFetches: v.maxFetches as number, domains: [...(v.domains as string[])], searches: v.searches as number, fetches: v.fetches as number,
+    ...(typeof v.preauthId === 'string' ? { preauthId: v.preauthId } : {}),
+  };
 }
 
 /** Whether a host belongs to an authorized domain (or one of its subdomains). */

@@ -3,6 +3,7 @@
  * after runs without progress, the host's operational summary.
  */
 
+import { describeMetricSpec } from './metricAcceptance.js';
 import { blockingVerifierPrompt } from './missionVerifiers.js';
 import { describeMissionWeb } from './missionWeb.js';
 import { buildTaskPrompt, currentTask, filesAlreadyRead, filesReadInMission, MAX_NO_PROGRESS_RUNS, repeatedReads, type MissionEvidence, type MissionRecord } from './missionStore.js';
@@ -115,7 +116,16 @@ export function buildAutoTaskPrompt(
     parts.push(
       `The user's acceptance check ${acceptance.commandId} must also pass before the Mission can end. Its files are frozen: ${acceptance.files.map((file) => file.path).join(', ')} and package.json. ` +
         `You may read and run them; you can never change, move, or delete them${(acceptance.scope?.sealed.length ?? 0) > 0 ? `, nor add files to ${acceptance.scope!.sealed.join(', ')}` : ''}.` +
-        ((acceptance.scope?.hidden.length ?? 0) > 0 ? ` The expected values in ${acceptance.scope!.hidden.join(', ')} are hidden from you.` : ''),
+        ((acceptance.scope?.hidden.length ?? 0) > 0 ? ` The expected values in ${acceptance.scope!.hidden.join(', ')} are hidden from you.` : '') +
+        (acceptance.metrics
+          ? ` The host judges: ${describeMetricSpec(acceptance.metrics)}. Host-observed values have maximum trust. Project-declared values count only through the frozen check's private channel; malicious code in that same process can alter them.`
+          : '') +
+        ((acceptance.references?.length ?? 0) > 0
+          ? " At every check the host also compares your code with a frozen copy of the original on fresh edge and random inputs, some of which are never shown to you: a different result for any input fails the check, however fast the code is. When results differ it shows a few of those inputs, never the original's results; keep the results exactly the same as the original's for every input (large values, precision, limits)." +
+            (acceptance.references!.some((reference) => reference.visible)
+              ? ' You can read the original as it was when the Mission was authorized with read_original (read-only; it is not the file you edit, and even after you change your file it still shows the original).'
+              : '')
+          : ''),
     );
   }
   if (auto !== null && auto.userGuidance.length > 0) {

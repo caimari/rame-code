@@ -16,12 +16,15 @@ import {
 import { currentFileHash } from './agentController.js';
 import type { AcceptanceManifest } from './acceptanceManifest.js';
 import { runAcceptance } from './acceptanceRun.js';
+import { UNPROTECTED_VERIFICATION_WARNING } from './shellIsolation.js';
 import { buildAutoTaskPrompt } from './missionPrompt.js';
 import { describeMissionWeb, takeMissionWebRequest, validateMissionWebRequest } from './missionWeb.js';
 import { externalToolsRefusal } from './localSourceState.js';
 import { protectAcceptanceScope } from './acceptanceScopeHost.js';
 import { CASES_FILE, parseCasesSpec } from './hostCases.js';
+import { type FrozenReference, freezeReferencesFor } from './referenceCheck.js';
 import { memoryScopeForUi } from './memoryController.js';
+import { describeMetricSpec, type MetricSpec, validateMetricSpec } from './metricAcceptance.js';
 import {
   assessRun,
   awaitBootstrapVerification,
@@ -41,6 +44,8 @@ import {
   leaseHeldByOther,
   MAX_NO_PROGRESS_RUNS,
   MAX_USER_GUIDANCE,
+  ACCEPTANCE_CONTINUED,
+  splitHostNote,
   pauseMission,
   recordAcceptance,
   recordVerifierRecheck,
@@ -55,7 +60,11 @@ import {
 } from './missionRuntime.js';
 import { buildMissionReportEntry } from './missionReport.js';
 import { missionEvidenceLines } from './modelEvidence.js';
-import { consultForMission } from './missionAdvice.js';
+import { consultForMission, offerMissionConsult } from './missionAdvice.js';
+import { autoConsult } from './remoteController.js';
+import { MAX_AUTO_RETRIES } from './autonomyPolicy.js';
+import { metaAllowance, metaRefusalNow, missionMetaBinding, missionWebPreauthId, missionWebRefusalNow, takeMissionMetaScope } from './autonomyHost.js';
+import type { MetaBinding } from './autonomyPolicy.js';
 import { chooseAdvisoryLimits, type ChosenAdvisoryLimits } from './missionAdvisoryLimits.js';
 import { markUnrecoverable } from './missionVerifiers.js';
 import {
@@ -66,6 +75,8 @@ import {
 import { ACCEPTANCE_ENVIRONMENT_FILES, listAcceptanceCandidates, testScriptFiles } from './projectAdapters/npmProjectAdapter.js';
 import { createCascadeAdvice } from './meta-provider.js';
 import { providerToRuntime } from './settingsStore.js';
+import { advisorFor, mainModelName, mainModelOf, missionMain } from './advisorHost.js';
+import { takeMissionRunsRequest } from './missionProgress.js';
 import { appendHostNoteTurn } from './threadStore.js';
 import { redactKeyFromText } from './webviewMessages.js';
 
@@ -201,7 +212,7 @@ export async function runMissionTask(
   host.pinnedRunRoot = scope.root;
   host.hostPromptText = prompt.trim();
   try {
-    await host.sendMessage(prompt, 'agent', providerToRuntime(host.settings.provider));
+    await host.sendMessage(prompt, 'agent', providerToRuntime(mission.grant?.provider ?? host.settings.provider));
   } finally {
     host.pinnedRunRoot = null;
     host.hostPromptText = null;
@@ -232,10 +243,12 @@ export async function startMission(
   mode: MissionGrant['mode'],
   escalation: { maxConsultations: number; limits?: ChosenAdvisoryLimits | null } | null,
   trustedProject = false,
-  acceptance: { commandId: string; files: string[] } | null = null,
+  acceptance: { commandId: string; files: string[]; metrics?: unknown } | null = null,
 ): Promise<void> {
+  // The Mission's main model is the one selected now; it does every task and is never switched (advisorHost.ts).
+  const main = mainModelOf(host);
   // A local model the server says cannot call tools never starts a Mission run: nothing is sent.
-  const noTools = externalToolsRefusal(host);
+  const noTools = main.provider === 'local' ? externalToolsRefusal(host) : null;
   if (noTools !== null) {
     host.status = noTools;
     await host.postState();
@@ -253,6 +266,27 @@ export async function startMission(
     await host.postState();
     return;
   }
+  const advisor = escalation === null ? null : advisorFor(host, main);
+  if (advisor !== null && !advisor.ok) {
+    host.status = `This Mission cannot consult an advisor: ${advisor.reason}. Authorize it without consultations, or choose an advisor in Settings → Security → Escalation. Nothing was authorized.`;
+    await host.postState();
+    return;
+  }
+  if (main.provider === 'cloud' && !(await host.getApiKey())) {
+    host.status = `The Mission's main model is Meta ${main.model}, and no Meta Model API key is stored. Nothing was authorized.`;
+    await host.postState();
+    return;
+  }
+  // Automatic Meta consultations only under the workspace's pre-authorization (Autonomy & Permissions).
+  const metaFiles = takeMissionMetaScope(host, missionId);
+  const metaProblem = escalation === null ? null : metaRefusalNow(host, scope.scopeId, null);
+  if (metaProblem !== null) {
+    host.status = `Meta consultations in a Mission need a pre-authorization in Settings → Security → Autonomy & Permissions (${metaProblem}). Nothing was authorized.`;
+    await host.postState();
+    return;
+  }
+  // The run budget per task the user chose on this card, if any (missionProgress.ts runBudget).
+  const runsPerTask = takeMissionRunsRequest(host, missionId);
   // Web access the user chose in this authorization card, if any (off otherwise).
   const webChoice = takeMissionWebRequest(host, missionId);
   const webChecked = webChoice === null ? { ok: true as const, grant: null } : validateMissionWebRequest(webChoice);
@@ -262,6 +296,17 @@ export async function startMission(
     return;
   }
   const webGrant = webChecked.grant;
+  // An autonomous Mission searches without a card: only under the workspace's web pre-authorization.
+  const webProblem = webGrant !== null && mode === 'autonomous-workspace' ? missionWebRefusalNow(host, scope.scopeId, null) : null;
+  if (webProblem !== null) {
+    host.status = `Web access for an autonomous Mission needs a pre-authorization in Settings → Security → Autonomy & Permissions (${webProblem}). Nothing was authorized.`;
+    await host.postState();
+    return;
+  }
+  const webPreauth = webGrant !== null && mode === 'autonomous-workspace' ? missionWebPreauthId(host, scope.scopeId) : null;
+  if (webGrant !== null && webPreauth !== null) {
+    webGrant.preauthId = webPreauth;
+  }
   // The test commands are bound to the exact package.json they come from now.
   const testContext = await host.testCommandContext(scope.root);
   const bootstrap = testContext.packageJsonRaw.length === 0 || testContext.allowlist.length === 0;
@@ -271,8 +316,15 @@ export async function startMission(
     return;
   }
   // The user's acceptance check is frozen now: its command and its files by hash.
-  let frozen: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }>; scope: AcceptanceManifest } | null = null;
+  let frozen: { commandId: string; packageJsonHash: string; files: Array<{ path: string; hash: string }>; scope: AcceptanceManifest; metrics?: MetricSpec; references?: FrozenReference[] } | null = null;
   let scopeNotes: string[] = [];
+  // Numeric criteria (optional): only numbers the host measures itself can meet them.
+  const metrics = acceptance?.metrics === undefined ? null : validateMetricSpec(acceptance.metrics);
+  if (metrics !== null && !metrics.ok) {
+    host.status = `The acceptance criteria are not valid: ${metrics.error}. Nothing was authorized.`;
+    await host.postState();
+    return;
+  }
   if (acceptance !== null) {
     const files: Array<{ path: string; hash: string }> = [];
     // Also frozen, when present: what decides how the check runs.
@@ -316,23 +368,46 @@ export async function startMission(
       return;
     }
     files.push(...protectedScope.freeze);
-    scopeNotes = protectedScope.notes;
-    frozen = { commandId: acceptance.commandId, packageJsonHash: hashContent(testContext.packageJsonRaw), files, scope: protectedScope.manifest };
+    // The original of the code under test, copied outside the project for the differential comparison.
+    const references = await freezeReferencesFor(scope.root, files, (file) => scope.fs.readText(file), host.jobs.root, missionId);
+    if (!references.ok) {
+      host.status = `${references.error} Nothing was authorized.`;
+      await host.postState();
+      return;
+    }
+    scopeNotes = [...protectedScope.notes, ...(metrics?.ok ? [`measured acceptance: ${describeMetricSpec(metrics.spec)}; host observations have maximum trust; project-declared figures come only from the frozen check's private channel, but malicious code in that same process can alter them`] : []), ...references.notes];
+    frozen = { commandId: acceptance.commandId, packageJsonHash: hashContent(testContext.packageJsonRaw), files, scope: protectedScope.manifest, ...(metrics?.ok ? { metrics: metrics.spec } : {}), ...(references.references.length > 0 ? { references: references.references } : {}) };
+  }
+  // What Meta may receive, bound to the pre-authorization; never a file of the acceptance check or the host.
+  // The card sends -1 for "no count limit" (within the pre-authorization).
+  const consultations = escalation === null || escalation.maxConsultations < 0 ? null : escalation.maxConsultations;
+  let metaBinding: MetaBinding | null = null;
+  if (escalation !== null) {
+    const excluded = new Set([...(frozen?.files ?? []).map((file) => file.path), ...(frozen?.scope.hidden ?? []), ...(frozen?.references ?? []).map((reference) => reference.spec)]);
+    const bound = await missionMetaBinding(host, scope.scopeId, consultations, metaFiles, scope.fs, excluded);
+    if (!bound.ok) {
+      host.status = `${bound.error} Nothing was authorized.`;
+      await host.postState();
+      return;
+    }
+    metaBinding = bound.binding;
   }
   const granted = await host.missions.update(missionId, expectedRevision, (draft) => {
     const result = grantMission(
       draft,
       {
-        model: host.generationModel('local'),
+        provider: main.provider,
+        model: main.model,
         mode,
         escalation:
-          escalation === null
+          escalation === null || advisor === null || !advisor.ok
             ? null
             : {
-                model: host.selectedCloudModel(),
-                maxConsultations: escalation.maxConsultations,
+                model: advisor.model,
+                maxConsultations: consultations,
                 // Never raised later; RAME Code only counts against them.
-                ...chooseAdvisoryLimits(escalation.maxConsultations, { maxOutputTokens: MISSION_CONSULT_OUTPUT_TOKENS, ...escalation.limits }),
+                ...chooseAdvisoryLimits(consultations, { maxOutputTokens: MISSION_CONSULT_OUTPUT_TOKENS, ...escalation.limits }),
+                preauth: metaBinding,
               },
         tests:
           mode === 'autonomous-workspace'
@@ -344,6 +419,7 @@ export async function startMission(
             : null,
         acceptance: frozen,
         bootstrap,
+        ...(runsPerTask !== null ? { runsPerTask } : {}),
         web: webGrant,
       },
       Date.now(),
@@ -391,6 +467,7 @@ export async function startMission(
   } finally {
     host.missionStarting = null;
   }
+  await continueUnderFullAccess(host, missionId);
 }
 
 /**
@@ -472,6 +549,42 @@ export async function resumeMission(
   } finally {
     host.missionStarting = null;
   }
+  await continueUnderFullAccess(host, missionId);
+}
+
+/** Automatic retries of a blocked Mission under Full Access, in a row (forgotten when it is no longer blocked). */
+const autoRetries = new Map<string, number>();
+
+/**
+ * Full Access with its Meta part (Autonomy & Permissions): when a run left
+ * the Mission blocked, its advice is sent to Meta without the card, within
+ * the Meta pre-authorization, and the Mission is retried with that advice;
+ * at most MAX_AUTO_RETRIES times in a row, then it waits for the user.
+ * Without Full Access's Meta part nothing happens here: the card stays.
+ */
+async function continueUnderFullAccess(host: ProviderHost, missionId: string): Promise<void> {
+  const before = host.disposed ? null : host.missions.get(missionId);
+  if (before === null || before.status !== 'blocked') {
+    autoRetries.delete(missionId);
+    return;
+  }
+  if (host.consultOffer?.missionId !== missionId || !(await autoConsult(host))) {
+    return;
+  }
+  const mission = host.missions.get(missionId);
+  if (mission === null || mission.status !== 'blocked' || !mission.auto?.pendingAdvice) {
+    return;
+  }
+  const tries = autoRetries.get(missionId) ?? 0;
+  if (tries >= MAX_AUTO_RETRIES) {
+    host.status = `${host.status} Full Access already retried this Mission ${MAX_AUTO_RETRIES} times with Meta's advice; it waits for you now.`;
+    await host.postState();
+    return;
+  }
+  autoRetries.set(missionId, tries + 1);
+  host.status = `Meta's advice was kept; Full Access retries the Mission with it (automatic retry ${tries + 1} of ${MAX_AUTO_RETRIES}).`;
+  await host.postState();
+  await resumeMission(host, missionId, mission.revision);
 }
 
 /** Pause (resumable) or cancel (final) at once: the current internal run is stopped. */
@@ -535,8 +648,10 @@ export async function runMissionAutonomous(
     await host.postState();
     return;
   }
-  if (mission.grant === null || mission.grant.model !== host.generationModel('local')) {
-    host.status = 'Authorize the Mission for the current local model before running it.';
+  if (mission.grant === null || mission.grant.model !== host.generationModel(mission.grant.provider)) {
+    host.status = mission.grant === null
+      ? 'Authorize the Mission before running it.'
+      : `This Mission was authorized for ${mainModelName(missionMain(host, mission.id))}, which is not the model selected for it now; RAME does not switch its main model. Select it again, or authorize the Mission again.`;
     await host.postState();
     return;
   }
@@ -568,6 +683,10 @@ export async function runMissionAutonomous(
   const live = (): boolean => !host.disposed && host.missionAuto === auto;
   const testCommands = (await host.testCommandContext(scope.root)).allowlist.map((entry) => entry.id);
   let ended = '';
+  // Why the Mission blocked, when a stronger model's advice could help (not for a check that cannot be trusted).
+  let adviceReason: string | null = null;
+  // The end of the last failing test's output in this loop, for the advisor (made safe before it is shown or sent).
+  let failingOutput: { commandId: string; text: string } | null = null;
   try {
     for (;;) {
       if (!live()) {
@@ -617,7 +736,8 @@ export async function runMissionAutonomous(
       host.pinnedRunRoot = scope.root;
       host.hostPromptText = prompt.trim();
       try {
-        await host.sendMessage(prompt, 'agent', providerToRuntime('local'));
+        // Every task with the Mission's own main model: never a silent switch to another one.
+        await host.sendMessage(prompt, 'agent', providerToRuntime(mission.grant?.provider ?? 'local'));
       } finally {
         host.pinnedRunRoot = null;
         host.hostPromptText = null;
@@ -654,6 +774,7 @@ export async function runMissionAutonomous(
         runContext.packageJsonRaw.length > 0 &&
         runContext.allowlist.length > 0 &&
         bootstrapCandidates.length > 0;
+      failingOutput = outcome.failingOutput ?? failingOutput;
       const observation: RunObservation = {
         outcome: outcome.outcome,
         writes: outcome.writes ?? [],
@@ -728,7 +849,10 @@ export async function runMissionAutonomous(
         await updateActiveMission(host, (draft) => blockMission(draft, `${unrecoverable}.`, Date.now()));
         break;
       }
-      if (next === 'continue' && (assessment as RunAssessment | null)?.blockedByVerifier === true) {
+      // Without progress (or at the run budget) the host still checks a run that is otherwise done, itself and
+      // without the model: only a passing host result completes the task; otherwise the Mission blocks.
+      const stalled = next === 'blocked';
+      if ((next === 'continue' || stalled) && (assessment as RunAssessment | null)?.blockedByVerifier === true) {
         // The run is otherwise verified: the host re-runs the verifiers that
         // failed, itself, and only their passing result accepts the task.
         if (await recheckBlockingVerifiers(host, missionId, runContext, conditions, scope.root)) {
@@ -759,6 +883,25 @@ export async function runMissionAutonomous(
             // Closed or reloaded while the check ran: nothing is recorded here.
             break;
           }
+          if (acceptanceResult.verification?.kind === 'unprotected') {
+            host.status = `${UNPROTECTED_VERIFICATION_WARNING} Result: verification without isolation.`;
+            await host.postState();
+            await updateActiveMission(host, (draft) => {
+              note(draft, UNPROTECTED_VERIFICATION_WARNING);
+              if (acceptanceResult.verification?.changed) {
+                note(draft, `verification changed from protected to unprotected: ${acceptanceResult.verification.reason}`);
+              }
+              return { ok: true, value: draft };
+            });
+          }
+          if (acceptanceResult.remeasured !== undefined) {
+            // The host measured again once, by itself: the first measurement stays in the record.
+            const first = `acceptance re-measured by the host (no model involved; same criteria): the first measurement was inconclusive (${acceptanceResult.remeasured}), so the host measured once more`;
+            await updateActiveMission(host, (draft) => {
+              splitHostNote(first).forEach((part, index) => note(draft, index === 0 ? part : `${ACCEPTANCE_CONTINUED}${part}`));
+              return { ok: true, value: draft };
+            });
+          }
           if (acceptanceResult.interrupted && host.missionAuto!.stop === null) {
             // Stopped before it finished, but not by the user: an interruption, not a failed check.
             await updateActiveMission(host, (draft) => interrupt(draft, `The acceptance check ${latest.grant!.acceptance!.commandId} was interrupted before it finished; nothing was concluded from it.`, Date.now()));
@@ -783,6 +926,14 @@ export async function runMissionAutonomous(
             await updateActiveMission(host, (draft) => (stopNow === 'pause' ? pauseMission(draft, Date.now()) : cancelMission(draft, Date.now())));
             break;
           }
+          if (acceptanceResult.inconclusive) {
+            // Inconclusive twice: never a pass, and not a fault the agent is asked to fix. The user reviews it.
+            await updateActiveMission(host, (draft) => {
+              splitHostNote(`acceptance (run by the host): ${acceptanceResult.summary}`).forEach((part, index) => note(draft, index === 0 ? part : `${ACCEPTANCE_CONTINUED}${part}`));
+              return blockMission(draft, 'NOT COUNTED: the host measured the acceptance check twice and both measurements were inconclusive (the runs disagree more than allowed). The Mission is not passed; retry it when the machine is less busy, or review the criteria.', Date.now());
+            });
+            break;
+          }
           let decision = 'continue' as 'complete-task' | 'continue' | 'blocked';
           await updateActiveMission(host, (draft) => {
             const approvedScope = draft.grant?.acceptance?.scope;
@@ -804,6 +955,13 @@ export async function runMissionAutonomous(
           }
           if (decision === 'blocked') {
             await updateActiveMission(host, (draft) => blockMission(draft, `the user's acceptance check kept failing (${acceptanceResult.summary}).`, Date.now()));
+            adviceReason = `the acceptance check kept failing (${acceptanceResult.summary})`;
+            break;
+          }
+          if (decision === 'continue' && stalled) {
+            const summary = (assessment as RunAssessment | null)?.summary ?? '';
+            await updateActiveMission(host, (draft) => blockMission(draft, `${MAX_NO_PROGRESS_RUNS} internal runs in a row without verifiable progress, or the run ceiling was reached (last: ${summary}; the acceptance check run by the host did not pass).`, Date.now()));
+            adviceReason = `${MAX_NO_PROGRESS_RUNS} internal runs in a row without verifiable progress (last: ${summary})`;
             break;
           }
           if (decision === 'continue') {
@@ -821,10 +979,11 @@ export async function runMissionAutonomous(
         await updateActiveMission(host, (draft) =>
           blockMission(draft, `${MAX_NO_PROGRESS_RUNS} internal runs in a row without verifiable progress, or the run ceiling was reached (last: ${summary}).`, Date.now()),
         );
+        adviceReason = `${MAX_NO_PROGRESS_RUNS} internal runs in a row without verifiable progress (last: ${summary})`;
         break;
       }
       if (outcome.capabilityReason && live()) {
-        await consultForMission(host, missionId, outcome.capabilityReason, outcome.hostRecord, scope.scopeId);
+        await consultForMission(host, missionId, outcome.capabilityReason, outcome.hostRecord, scope.scopeId, scope.root);
       }
     }
   } finally {
@@ -845,6 +1004,10 @@ export async function runMissionAutonomous(
     if (done !== null) {
       appendMissionReport(host, done);
       host.status = ended || done.note;
+      if (adviceReason !== null && done.status === 'blocked') {
+        // Only offered: the card shows the exact text, and nothing is sent without the user's approval.
+        offerMissionConsult(host, missionId, scope.root, scope.scopeId, adviceReason, failingOutput);
+      }
     }
     await host.refreshMemoryView();
     await host.postState();
@@ -1035,7 +1198,8 @@ export function missionViewRuntime(host: ProviderHost, mission: MissionRecord): 
     authorizing: isAuthorizing(host, mission.id),
     leaseToken: host.leaseToken,
     isLeaseAlive: (lease) => host.isLeaseAlive(lease),
-    cloudEscalationAllowed: host.settings.allowCloudEscalation,
+    // The card offers Meta consultations only under the workspace's pre-authorization.
+    cloudEscalationAllowed: host.settings.allowCloudEscalation && metaAllowance(host, mission.scopeId) !== 0,
     testCommands: host.missionTestCommands,
     setup: host.missionSetup,
     startRequest: host.missionStartRequest?.missionId === mission.id ? host.missionStartRequest : null,

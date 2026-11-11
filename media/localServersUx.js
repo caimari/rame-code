@@ -6,6 +6,19 @@
   'use strict';
 
   var ES = {
+    'Reload in LM Studio with more context': 'Recargar en LM Studio con más contexto',
+    'Reload in LM Studio with a {0}-token context': 'Recargar en LM Studio con {0} tokens de contexto',
+    'The request does not fit the local model\'s context': 'La petición no cabe en el contexto del modelo local',
+    'The model is loaded with too little context for this thread. Nothing was cut. Reload it with more context using the button below, or start a new thread, then send again.':
+      'El modelo está cargado con muy poco contexto para este hilo. No se recortó nada. Recárgalo con más contexto con el botón de abajo, o empieza un hilo nuevo, y vuelve a enviar.',
+    'The model is loaded with too little context for this thread. Nothing was cut. Load it with a larger context in its server, or start a new thread, then send again.':
+      'El modelo está cargado con muy poco contexto para este hilo. No se recortó nada. Cárgalo con más contexto en su servidor, o empieza un hilo nuevo, y vuelve a enviar.',
+    'Waiting for your confirmation…': 'Esperando tu confirmación…',
+    '{0} (in use — the server does not list it now)': '{0} (en uso — el servidor ya no lo lista)',
+    '{0} (in use — Find models lists the others)': '{0} (en uso — «Buscar modelos» lista los demás)',
+    'The local server has no model ready': 'El servidor local no tiene ningún modelo listo',
+    'The server answered, but it has no model loaded for this request. Load the model in the server (in LM Studio: Developer → Load model, or lms load), or choose a model it lists in the runtime settings, then send again. A server setup problem is not a reason to run the request with Spark.':
+      'El servidor respondió, pero no tiene ningún modelo cargado para esta petición. Carga el modelo en el servidor (en LM Studio: Developer → Load model, o lms load), o elige un modelo de los que lista en los ajustes del runtime, y vuelve a enviar. Un problema de configuración del servidor no es motivo para ejecutar la petición con Spark.',
     'Model servers: Ollama, LM Studio, llama-server': 'Servidores de modelos: Ollama, LM Studio, llama-server',
     'Use a model server you run yourself. RAME connects to it and never starts or stops it. LM Studio and llama-server can serve Muse Glimmer.':
       'Usa un servidor de modelos que ejecutas tú. RAME se conecta a él y nunca lo arranca ni lo para. LM Studio y llama-server pueden servir Muse Glimmer.',
@@ -24,24 +37,44 @@
     'My SearXNG': 'Mi SearXNG',
     'SearXNG address (JSON format enabled)': 'Dirección de SearXNG (con formato JSON activado)',
     'Save web access': 'Guardar acceso web',
-    'Default OFF. Agent and Chat, local model only; a Mission has its own web permission, chosen when you authorize it. Each search or page read is shown and waits for your approval in Chat and, except in Workspace full, in Agent. Local and private addresses are refused, and a query or URL with a key or a file path is not sent. Page text is untrusted data, never instructions.':
-      'Desactivado por defecto. Agente y Chat, solo con un modelo local; una Misión tiene su propio permiso web, que eliges al autorizarla. Cada búsqueda o lectura se muestra y espera tu aprobación en Chat y, salvo en Workspace full, en el Agente. Se rechazan las direcciones locales y privadas, y no se envía una consulta o URL con una clave o una ruta de fichero. El texto de las páginas es un dato no confiable, nunca instrucciones.',
+    'Default OFF. Agent and Chat, with the main model (local or Meta: with Meta, the pages it reads go to Meta as tool results, never into an advisor\'s consultation); a Mission has its own web permission, chosen when you authorize it. Each search or page read is shown and waits for your approval in Chat and in Agent, whatever the profile, unless Autonomy & Permissions below pre-authorizes it. Local and private addresses are refused, and a query or URL with a key or a file path is not sent. Page text is untrusted data, never instructions.':
+      'Desactivado por defecto. Agente y Chat, con el modelo principal (local o Meta: con Meta, las páginas que lee llegan a Meta como resultados de herramientas, nunca a una consulta del asesor); una Misión tiene su propio permiso web, que eliges al autorizarla. Cada búsqueda o lectura se muestra y espera tu aprobación en Chat y en el Agente, sea cual sea el perfil, salvo que Autonomía y permisos (más abajo) lo autorice de antemano. Se rechazan las direcciones locales y privadas, y no se envía una consulta o URL con una clave o una ruta de fichero. El texto de las páginas es un dato no confiable, nunca instrucciones.',
     'Find models first.': 'Busca primero los modelos.',
     'Web access for this Mission': 'Acceso web para esta Misión',
     'Allow this Mission to search the web and read pages (read-only)': 'Permitir que esta Misión busque en la web y lea páginas (solo lectura)',
     'Searches, at most': 'Búsquedas, como máximo',
+    'Test isolation': 'Aislamiento de los tests',
+    'not recorded': 'no registrado',
+    'no isolation: the command runs with your permissions': 'sin aislamiento: el comando se ejecuta con tus permisos',
+    'isolated: writes only in the project, temporary and package-cache folders; network allowed': 'aislado: escribe solo en las carpetas del proyecto, temporal y de cachés de paquetes; con red',
+    'isolated and closed: writes only in the project, temporary and package-cache folders; no network': 'aislado y cerrado: escribe solo en las carpetas del proyecto, temporal y de cachés de paquetes; sin red',
+    'protected verifier: exact project reads, no ambient files, no TCP': 'verificador protegido: lecturas exactas del proyecto, sin ficheros del entorno, sin TCP',
     'Page reads, at most': 'Lecturas de páginas, como máximo',
     'Authorized domains for page reads (optional; for example nodejs.org, docs.python.org)': 'Dominios autorizados para leer páginas (opcional; por ejemplo nodejs.org, docs.python.org)',
     'nodejs.org, docs.python.org': 'nodejs.org, docs.python.org',
-    "Default OFF. Local model only. Within this budget an autonomous Mission searches and reads without asking each time; a supervised Mission still asks. Queries leave this computer: plain words only, never code, keys or file paths, and the host counts and records every request. Pages are read only from this Mission's own search results, or only from the domains above if you list some. 15 s and 2 MiB per page. Web access adds no write, terminal, memory or file permission, and web text is never sent to Meta.":
-      'Desactivado por defecto. Solo con un modelo local. Dentro de este presupuesto, una Misión autónoma busca y lee sin preguntar cada vez; una Misión supervisada sigue preguntando. Las consultas salen de este ordenador: solo palabras normales, nunca código, claves ni rutas de ficheros, y el host cuenta y registra cada petición. Solo se leen páginas que devolvieron las búsquedas de esta Misión o, si indicas dominios, solo de esos dominios. 15 s y 2 MiB por página. El acceso web no añade permisos de escritura, terminal, memoria ni ficheros, y el texto web nunca se envía a Meta.',
+    'Default OFF. Within this budget an autonomous Mission searches and reads without asking each time; a supervised Mission still asks. Queries leave this computer: plain words only, never code, keys or file paths, and the host counts and records every request. Pages are read only from this Mission\'s own search results, or only from the domains above if you list some. 15 s and 2 MiB per page. Web access adds no write, terminal, memory or file permission. Web text is never put in a consultation of the advisor; with Meta as the Mission\'s main model, the pages it reads go to Meta as tool results.':
+      'Desactivado por defecto. Dentro de este presupuesto, una Misión autónoma busca y lee sin preguntar cada vez; una Misión supervisada sigue preguntando. Las consultas salen de este ordenador: solo palabras normales, nunca código, claves ni rutas de ficheros, y el host cuenta y registra cada petición. Solo se leen páginas que devolvieron las búsquedas de esta Misión o, si indicas dominios, solo de esos dominios. 15 s y 2 MiB por página. El acceso web no añade permisos de escritura, terminal, memoria ni ficheros. El texto web nunca entra en una consulta del asesor; con Meta como modelo principal de la Misión, las páginas que lee llegan a Meta como resultados de herramientas.',
     'Terminal commands': 'Comandos de terminal',
     'Agent works only inside the active workspace. Symlink and path escapes are blocked; .git, .env files, credential and key material, secret stores, auth files, and repository control files are protected. Tests run only from an exact derived allowlist with shell:false; arbitrary commands run only through the optional terminal tool (OFF by default), each shown first; allowlisted package scripts still execute with your OS permissions and may access files, network, or shells. Ask and Safe-auto require approval before they run, while Workspace-full may run them without prompting and is high risk. Cloud work needs your existing escalation consent and never switches providers silently. Tamper resistance is not claimed.':
       'El Agente trabaja solo dentro del workspace activo. Se bloquean las salidas por enlaces simbólicos y rutas; .git, los ficheros .env, credenciales y claves, almacenes de secretos, ficheros de autenticación y de control del repositorio están protegidos. Las pruebas solo se ejecutan desde una lista exacta derivada, con shell:false; los comandos arbitrarios solo pasan por la herramienta opcional de terminal (desactivada por defecto), que muestra cada uno antes; los scripts permitidos siguen ejecutándose con tus permisos del sistema y pueden acceder a ficheros, red o shells. Preguntar y Auto seguro piden aprobación antes de ejecutarlos; Acceso total puede ejecutarlos sin preguntar y es de alto riesgo. El trabajo en la nube necesita tu consentimiento de escalado y nunca cambia de proveedor en silencio. No se afirma resistencia a manipulaciones.',
     'Allow Agent to run terminal commands (bash, sh or PowerShell) in the project folder': 'Permitir que el Agente ejecute comandos de terminal (bash, sh o PowerShell) en la carpeta del proyecto',
     'Save terminal access': 'Guardar acceso a terminal',
-    'Default OFF. Only with a local model, and never in Mission runs. You see each command exactly before it runs and approve it, in every profile, Workspace full included. The card warns when a line chains commands, runs a script you cannot see, uses sudo or the network, or installs software, but a command line never shows all its effects. A command runs with your permissions: it can change any file, use the network or install software. There is no sandbox. Time and output are limited. Stop signals the command and its normal process group, but a deliberately detached process may survive.':
-      'Desactivado por defecto. Solo con un modelo local y nunca en las ejecuciones de una Misión. Ves cada comando exacto antes de que se ejecute y lo apruebas, en todos los perfiles, también en Workspace full. La tarjeta avisa cuando una línea encadena comandos, ejecuta un script que no ves, usa sudo o la red, o instala programas, pero una línea de comandos nunca muestra todos sus efectos. Un comando se ejecuta con tus permisos: puede cambiar cualquier fichero, usar la red o instalar programas. No hay sandbox. El tiempo y la salida están limitados. Detener señala el comando y su grupo normal de procesos, pero un proceso desacoplado deliberadamente puede sobrevivir.',
+    'What a command may do (isolation, the same in every autonomy mode)': 'Qué puede hacer un comando (aislamiento, igual en cualquier modo de autonomía)',
+    'What local processes may do (isolation, the same in every autonomy mode)': 'Qué pueden hacer los procesos locales (aislamiento, igual en cualquier modo de autonomía)',
+    'Project (default): write only in the project, temporary and package-cache folders; network allowed': 'Proyecto (predeterminado): escribir solo en las carpetas del proyecto, temporal y de cachés de paquetes; con red',
+    'Closed: like Project, and no network': 'Cerrado: como Proyecto, y sin red',
+    'Total: no isolation, a command runs with your permissions': 'Total: sin aislamiento, un comando se ejecuta con tus permisos',
+    'Total: no isolation, local processes run with your permissions': 'Total: sin aislamiento, los procesos locales se ejecutan con tus permisos',
+    'Default OFF. For the main model, local or Meta (with Meta, a command\'s output goes to Meta), and never in Mission runs. You see each command exactly before it runs and approve it, in every profile, Workspace full included, unless Full Access includes commands. The isolation level also protects allowlisted tests, non-container long jobs and non-administrator installs. Project and Closed fail closed when Linux Landlock cannot be applied; Closed also blocks TCP. Administrator installs remain explicit and open in a VS Code terminal without Landlock. Container jobs keep their own container isolation. Files you can read stay readable, DNS is not blocked, and programs already running keep their rights. Total runs with your permissions. Stop signals the normal process group, but a deliberately detached process may survive.':
+      'Desactivado por defecto. Para el modelo principal, local o Meta (con Meta, la salida del comando llega a Meta), y nunca en ejecuciones de Misión. Cada comando se muestra exactamente y se aprueba salvo que Acceso total incluya comandos. El nivel de aislamiento también protege tests permitidos, trabajos largos sin contenedor e instalaciones no administrativas. Proyecto y Cerrado fallan de forma cerrada si no se puede aplicar Landlock; Cerrado bloquea además TCP. Las instalaciones administrativas siguen siendo explícitas y se abren en un terminal de VS Code sin Landlock. Los trabajos en contenedor conservan su propio aislamiento. Los ficheros legibles siguen siéndolo, DNS no se bloquea y los procesos ya iniciados conservan sus permisos. Total se ejecuta con tus permisos. Detener señala el grupo normal de procesos, pero uno desacoplado deliberadamente puede sobrevivir.',
+    'Checking whether commands can be isolated on this system…': 'Comprobando si se pueden aislar los comandos en este sistema…',
+    'Isolation available on this system (Linux Landlock).': 'Aislamiento disponible en este sistema (Landlock de Linux).',
+    'Isolation is not available here: {0}. With Project or Closed, commands are not run; choose Total to run them without isolation.': 'El aislamiento no está disponible aquí: {0}. Con Proyecto o Cerrado los comandos no se ejecutan; elige Total para ejecutarlos sin aislamiento.',
+    'Isolation is not available here: {0}. With Project or Closed, protected local processes are not run; choose Total to run them without isolation.': 'El aislamiento no está disponible aquí: {0}. Con Proyecto o Cerrado los procesos locales protegidos no se ejecutan; elige Total para ejecutarlos sin aislamiento.',
+    'Total: commands run without isolation, with your permissions.': 'Total: los comandos se ejecutan sin aislamiento, con tus permisos.',
+    'Total: local processes run without isolation, with your permissions.': 'Total: los procesos locales se ejecutan sin aislamiento, con tus permisos.',
+    'Default OFF. For the main model, local or Meta (with Meta, a command\'s output goes to Meta), and never in Mission runs. You see each command exactly before it runs and approve it, in every profile, Workspace full included, unless Full Access includes commands. The card warns when a line chains commands, runs a script you cannot see, uses sudo or the network, or installs software, but a command line never shows all its effects. Isolation (Linux, Landlock): Project and Closed stop writes outside the project, temporary and package-cache folders, and sudo cannot gain rights; Closed also blocks TCP. Files you can read stay readable (as in Codex\'s sandbox), DNS is not blocked, and programs already running keep their rights. Where the isolation cannot be applied (Windows, macOS, no Landlock or no python3) a command is not run unless you choose Total. With Total a command runs with your permissions: it can change any file, use the network or install software. Time and output are limited. Stop signals the command and its normal process group, but a deliberately detached process may survive.':
+      'Desactivado por defecto. Para el modelo principal, local o Meta (con Meta, la salida de un comando llega a Meta), y nunca en las ejecuciones de una Misión. Ves cada comando exacto antes de que se ejecute y lo apruebas, en todos los perfiles, también en Workspace full, salvo que el acceso total incluya los comandos. La tarjeta avisa cuando una línea encadena comandos, ejecuta un script que no ves, usa sudo o la red, o instala programas, pero una línea de comandos nunca muestra todos sus efectos. Aislamiento (Linux, Landlock): Proyecto y Cerrado impiden escribir fuera de las carpetas del proyecto, temporal y de cachés de paquetes, y sudo no puede ganar permisos; Cerrado además bloquea TCP. Los ficheros que puedes leer siguen siendo legibles (como en el sandbox de Codex), el DNS no se bloquea y los programas que ya se están ejecutando conservan sus permisos. Donde no se puede aplicar el aislamiento (Windows, macOS, sin Landlock o sin python3) un comando no se ejecuta salvo que elijas Total. Con Total un comando se ejecuta con tus permisos: puede cambiar cualquier fichero, usar la red o instalar programas. El tiempo y la salida están limitados. Detener señala el comando y su grupo normal de procesos, pero un proceso desacoplado deliberadamente puede sobrevivir.',
     'In use: {0} on {1}.': 'En uso: {0} en {1}.',
     'No external model server in use.': 'No se usa ningún servidor de modelos externo.',
     'tools': 'herramientas',
@@ -157,7 +190,18 @@
     if (select) {
       var previous = select.value || servers.model;
       while (select.firstChild) select.removeChild(select.firstChild);
-      (scan ? scan.models : []).forEach(function (model) {
+      var models = scan ? scan.models : [];
+      // The saved model is always shown, even before "Find models" and when the server no longer lists it
+      // (an LM Studio name that existed only while the model was loaded).
+      var saved = servers.model && (!scan || scan.endpoint === servers.endpoint) ? servers.model : '';
+      var savedListed = models.some(function (model) { return model.id === saved; });
+      if (saved && !savedListed) {
+        var kept = document.createElement('option');
+        kept.value = saved;
+        kept.textContent = tf(scan ? '{0} (in use — the server does not list it now)' : '{0} (in use — Find models lists the others)', saved);
+        select.appendChild(kept);
+      }
+      models.forEach(function (model) {
         var option = document.createElement('option');
         option.value = model.id;
         option.textContent = describeModel(model);
@@ -165,7 +209,7 @@
       });
       if (previous) select.value = previous;
       if (!select.value && select.options.length > 0) select.selectedIndex = 0;
-      select.disabled = !scan || scan.models.length === 0;
+      select.disabled = models.length === 0;
     }
     var lanRow = el('serverLanRow');
     if (lanRow) lanRow.hidden = !(scan && scan.scope === 'private');
@@ -191,6 +235,20 @@
     if (searx) searx.disabled = engine ? engine.value !== 'searxng' : false;
     var shell = el('shellEnabled');
     if (shell && document.activeElement !== shell) shell.checked = Boolean(servers.shell && servers.shell.enabled);
+    var level = el('shellIsolation');
+    var isolation = servers.shell && servers.shell.isolation ? servers.shell.isolation : 'project';
+    if (level && document.activeElement !== level) level.value = isolation;
+    var levelNote = el('shellIsolationStatus');
+    if (levelNote) {
+      var problem = servers.shell ? servers.shell.problem : null;
+      levelNote.textContent = isolation === 'total'
+        ? t('Total: local processes run without isolation, with your permissions.')
+        : problem === null || problem === undefined
+          ? t('Checking whether commands can be isolated on this system…')
+          : problem === ''
+            ? t('Isolation available on this system (Linux Landlock).')
+            : tf('Isolation is not available here: {0}. With Project or Closed, protected local processes are not run; choose Total to run them without isolation.', problem);
+    }
     renderIdentity(data);
   }
 
@@ -289,7 +347,8 @@
       post({ type: 'localIdentity', action: 'cancel-hash' });
     });
     on('shellSave', 'click', function () {
-      post({ type: 'shellAccessSet', enabled: Boolean(el('shellEnabled').checked) });
+      var level = el('shellIsolation');
+      post({ type: 'shellAccessSet', enabled: Boolean(el('shellEnabled').checked), isolation: level && ['project', 'closed', 'total'].indexOf(level.value) >= 0 ? level.value : 'project' });
     });
     on('webSave', 'click', function () {
       post({
@@ -494,6 +553,13 @@
     if (server) server.addEventListener('change', pick('server'));
     var configure = el('localSourceConfigure');
     if (configure) configure.addEventListener('click', function () { openCard('cardRuntime'); });
+    var reload = el('localIssueReload');
+    if (reload) {
+      reload.addEventListener('click', function () {
+        // The host asks for a modal confirmation before LM Studio is touched.
+        if (h && h.vscode && h.markPending(reload, t('Waiting for your confirmation…'))) h.vscode.postMessage({ type: 'localIssueReload' });
+      });
+    }
     var change = el('localSourceChange');
     if (change) change.addEventListener('click', function () { openCard('cardModels'); });
     var review = el('authorizationPendingReview');
@@ -544,12 +610,40 @@
     if (busy.length > 0) settle(data && data.status);
     renderChoice(data);
     renderHeader(data);
+    renderSetupIssue(data);
+    renderReload(data);
     // main.js draws the Mission card, the permission chip and the controls after this: adjust them once it has.
     Promise.resolve().then(function () {
       renderAuthorization(data);
       renderTaskNumber(data);
       renderMissionPermission(data);
     });
+  }
+
+  // The local server answered that it has no model ready (remoteUx drew the card just before):
+  // say what to do in that server. Its delegation reason is empty, so no Spark button shows.
+  function renderSetupIssue(data) {
+    var issue = data && data.remote && data.remote.localIssue ? data.remote.localIssue : null;
+    if (!issue || issue.kind !== 'setup') return;
+    setText(el('local-issue-heading'), t('The local server has no model ready'));
+    setText(el('localIssueHint'), t('The server answered, but it has no model loaded for this request. Load the model in the server (in LM Studio: Developer → Load model, or lms load), or choose a model it lists in the runtime settings, then send again. A server setup problem is not a reason to run the request with Spark.'));
+  }
+
+  // LM Studio refused for lack of context: offer to reload the model with the context the host proposes.
+  function renderReload(data) {
+    var issue = data && data.remote && data.remote.localIssue ? data.remote.localIssue : null;
+    var button = el('localIssueReload');
+    if (!button) return;
+    var tokens = issue && typeof issue.reload === 'number' ? issue.reload : 0;
+    button.hidden = tokens === 0;
+    if (tokens > 0) setText(button, tf('Reload in LM Studio with a {0}-token context', tokens));
+    // A context refusal: the server answered, but the model never worked on the request.
+    if (issue && issue.context === true) {
+      setText(el('local-issue-heading'), t('The request does not fit the local model\'s context'));
+      setText(el('localIssueHint'), t(tokens > 0
+        ? 'The model is loaded with too little context for this thread. Nothing was cut. Reload it with more context using the button below, or start a new thread, then send again.'
+        : 'The model is loaded with too little context for this thread. Nothing was cut. Load it with a larger context in its server, or start a new thread, then send again.'));
+    }
   }
 
   // In a Mission thread the Agent selector does not govern: it shows the Mission's own permission and cannot be changed there.

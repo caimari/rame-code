@@ -19,13 +19,13 @@ export function buildMissionReportEntry(mission: MissionRecord, evidence: string
   const lines = [
     `mission: ${mission.status}${report !== null ? ' (every task verified by the host: a passing test after its last change, nothing uncertain)' : ''}`,
     `mission: tasks ${mission.tasks.map((task) => `${task.title.slice(0, 60)} [${task.status}, ${task.runs} run(s)]`).join('; ')}`,
-    `mission: internal runs ${mission.taskRunsUsed}; grant ${mission.grant?.mode ?? 'none'}${mission.grant?.escalation ? `; Meta consultations ${mission.grant.escalation.used}/${mission.grant.escalation.maxConsultations}` : ''}`,
+    `mission: internal runs ${mission.taskRunsUsed}; grant ${mission.grant?.mode ?? 'none'}${mission.grant?.escalation ? `; Meta consultations ${mission.grant.escalation.used}/${mission.grant.escalation.maxConsultations ?? 'no count limit'}` : ''}`,
     mission.grant?.acceptance
       ? `mission: user acceptance check ${mission.grant.acceptance.commandId} (frozen: ${mission.grant.acceptance.files.map((file) => file.path).join(', ')}, package.json) — ${acceptanceState(mission).summary || 'not run'}`
       : 'mission: no user acceptance check; completion means the project and agent tests passed',
     ...(mission.grant?.tests
       ? [
-          `mission: trusted project; tests granted ${mission.grant.tests.commandIds.join(', ')} for package.json ${mission.grant.tests.packageJsonHash.slice(0, 12)}…; test scripts run with your user permissions (path checks are not an operating-system sandbox)`,
+          `mission: trusted project; tests granted ${mission.grant.tests.commandIds.join(', ')} for package.json ${mission.grant.tests.packageJsonHash.slice(0, 12)}…`,
         ]
       : []),
     `mission: files changed ${changed.length > 0 ? changed.slice(0, 12).join(', ') : 'none'}`,
@@ -35,13 +35,14 @@ export function buildMissionReportEntry(mission: MissionRecord, evidence: string
           `mission: tests run ${report.tests.length > 0 ? report.tests.join(' | ') : 'none'}`,
           `mission: time ${report.minutes} min since authorization`,
           `mission: models ${report.models.join('; ')}; Meta consultations ${report.metaConsultations}`,
-          'mission: no sandbox: test scripts ran with your user permissions and could reach other files, the network, or other processes',
+          `mission: test isolation ${report.isolation.length > 0 ? report.isolation.join(' | ') : 'not recorded'}; files you can read stayed readable`,
         ]
       : []),
     ...evidence,
     `mission: ${mission.note}`,
   ];
-  // The level reached, in the title itself: conventional, protected or reinforced.
+  // The level reached, in the title itself: conventional, protected,
+  // reinforced or explicitly without isolation.
   const level = reportLevel(Boolean(mission.grant?.acceptance), acceptanceState(mission).summary);
   return {
     title: report !== null ? `Mission completed and verified by the host (${level}).` : `Mission ${mission.status.replace('_', ' ')} — status note, not a final report.`,
@@ -55,6 +56,15 @@ export function buildMissionReportEntry(mission: MissionRecord, evidence: string
  * could not be observed (the host's acceptance note says "start and end only").
  */
 export function reportLevel(hasAcceptance: boolean, acceptanceSummary: string): string {
-  const reached = !hasAcceptance ? 'conventional' : /; reinforced level: /.test(acceptanceSummary) ? 'reinforced' : 'protected';
+  if (hasAcceptance && /verification: unprotected/.test(acceptanceSummary)) {
+    return /host file record at start and end only/.test(acceptanceSummary)
+      ? 'verification without isolation, start and end only'
+      : 'verification without isolation';
+  }
+  const reached = !hasAcceptance
+    ? 'conventional'
+    : /; reinforced level: /.test(acceptanceSummary)
+      ? 'reinforced'
+      : 'protected';
   return /host file record at start and end only/.test(acceptanceSummary) ? `${reached} level, start and end only` : `${reached} level`;
 }

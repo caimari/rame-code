@@ -48,7 +48,7 @@ The public Mission bundle is a **RECORDED extraction from a REAL run**. Its sour
 - The real run required human supervision and did not use Meta Model API.
 - The real run's host summary says 36 answered local inferences while its final evidence view contains 37. Both counts are preserved.
 - On Windows, acceptance integrity compares start and end state; temporary change-and-restore detection is not claimed.
-- A check can be weak. The reinforced case runner narrows some attacks but does not make expected values secret.
+- A check can be weak. On supported Linux the reinforced verifier hides expected values, gives one input at a time, denies sockets and confines reads. On unsupported hosts it runs with a prominent unprotected warning and label; evaluated code could then read hidden cases and alter results. Equivalent Windows/macOS isolation remains a goal.
 - Direct Meta Chat has three recorded real responses. The complete privacy matrix and Advisory/Delegated/cloud-Agent tool paths remain tested against a simulated API rather than validated end to end against the live service.
 - This is a v0.2.0 experimental preview release, not a production security boundary.
 

@@ -35,21 +35,27 @@ import { diffBaseline, judgeChanges, type AcceptanceManifest, type ProjectChange
 import { runTraced } from './acceptanceScopeHost.js';
 import { parseTrace, scopeViolations, TRACE_RUNTIME_DIR, type ParsedTrace } from './acceptanceTrace.js';
 import { CASES_FILE, parseCasesSpec, runHostCases } from './hostCases.js';
+import { type FrozenReference, HOST_SPEC_FILE, runDifferential } from './referenceCheck.js';
+import { metricSource, METRIC_RESULTS_ENV, parseResultsFile, type CheckResult } from './metricAcceptance.js';
+import { runMeasuredAcceptance } from './metricRun.js';
 import type { MissionRecord } from './missionStore.js';
 import type { ProviderHost } from './providerTypes.js';
+import { protectedProjectAccess, protectedVerifierSecret } from './protectedVerifier.js';
+import { currentVerificationMode, type VerificationMode } from './shellIsolation.js';
+import type { CommandIsolation } from './settingsStore.js';
 import { changeTimesTrusted, FINGERPRINT_VERSION, foldersTouched, printsOf, snapshotProject, touchedBetween, type Snapshot } from './projectSnapshot.js';
 
-export interface AcceptanceResult {
-  passed: boolean;
-  summary: string;
-  output: string;
-  /** The criteria themselves changed. */
-  tampered: boolean;
-  /** RAME cannot verify the run against what the user authorized. */
-  unverifiable?: true;
-  interrupted?: true;
-  /** Files the user approved as writable in a scope review during this run. */
-  approved?: string[];
+/**
+ * `tampered`: the criteria themselves changed. `unverifiable`: RAME cannot
+ * verify the run against what the user authorized. `approved`: files the
+ * user approved as writable in a scope review during this run.
+ */
+export type AcceptanceResult = CheckResult;
+
+/** A protected→unprotected transition is evidence, never a reason to stop the same Mission. */
+export function verificationChanged(mission: Pick<MissionRecord, 'evidence'>, mode: VerificationMode): boolean {
+  const earlier = [...(mission.evidence ?? [])].reverse().find((entry) => /verification: (?:protected|unprotected)/.test(entry.text));
+  return mode.kind === 'unprotected' && earlier?.text.includes('verification: protected') === true;
 }
 
 type Frozen = ReadonlyArray<{ path: string; hash: string }>;
@@ -63,7 +69,52 @@ export async function runAcceptance(host: ProviderHost, mission: MissionRecord, 
   const controller = new AbortController();
   host.acceptanceController = controller;
   try {
-    return await runAcceptanceWith(host, mission, root, fs, controller);
+    const mode = await currentVerificationMode();
+    const changed = verificationChanged(mission, mode);
+    const finish = (result: AcceptanceResult): AcceptanceResult => ({
+      ...result,
+      summary: `${result.summary}; verification: ${mode.kind}`,
+      verification: { kind: mode.kind, reason: mode.reason, ...(changed ? { changed: true as const } : {}) },
+    });
+    const acceptance = mission.grant?.acceptance ?? null;
+    if (acceptance?.metrics === undefined) {
+      return finish(await runAcceptanceWith(host, mission, root, fs, controller, {}, mode));
+    }
+    // Numeric criteria: every measured run uses the host's explicit verification mode; files the
+    // user approved in a scope review stay approved for the next run. An
+    // inconclusive measurement is measured again once, by the host alone.
+    let current = mission;
+    const frozen = [...acceptance.files.map((file) => file.path), 'package.json'];
+    const measured = await runMeasuredAcceptance(acceptance.metrics, root, frozen, async () => {
+      const dir = await mkdtemp(path.join(os.tmpdir(), 'rame-metrics-'));
+      const file = path.join(dir, 'declared.json');
+      let run: AcceptanceResult;
+      try {
+        run = await runAcceptanceWith(host, current, root, fs, controller, { [METRIC_RESULTS_ENV]: file }, mode);
+        if (run.passed) {
+          const declared = parseResultsFile(await readFile(file, 'utf8').catch(() => ''));
+          const needed = acceptance.metrics?.criteria.filter((criterion) => metricSource(criterion.metric) === 'project-declared') ?? [];
+          if (needed.length > 0 && !declared.ok) {
+            return { ...run, passed: false, summary: `project-declared metrics are invalid: ${declared.error}` };
+          }
+          const values = declared.ok ? declared.values : {};
+          run = {
+            ...run,
+            // Host observations always win a same-named project declaration.
+            hostMetrics: { ...values, ...(run.hostMetrics ?? {}) },
+            metricSources: Object.fromEntries(acceptance.metrics!.criteria.map((criterion) => [criterion.metric, metricSource(criterion.metric)])),
+          };
+        }
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+      if (run.approved && acceptance.scope) {
+        const scope = { ...acceptance.scope, writable: [...new Set([...acceptance.scope.writable, ...run.approved])] };
+        current = { ...current, grant: { ...current.grant!, acceptance: { ...acceptance, scope } } };
+      }
+      return run;
+    }, { stopped: () => controller.signal.aborted || host.disposed });
+    return finish(measured);
   } finally {
     if (host.acceptanceController === controller) {
       host.acceptanceController = null;
@@ -86,7 +137,7 @@ function usedByCheck(trace: ParsedTrace | null, frozen: readonly string[], entri
   return new Set((trace?.edges ?? []).filter((edge) => edge.by === null || mine.has(edge.by)).map((edge) => edge.path));
 }
 
-async function runAcceptanceWith(host: ProviderHost, mission: MissionRecord, root: string, fs: AgentFs, controller: AbortController): Promise<AcceptanceResult> {
+async function runAcceptanceWith(host: ProviderHost, mission: MissionRecord, root: string, fs: AgentFs, controller: AbortController, env: Record<string, string> = {}, mode: VerificationMode = { kind: 'protected', reason: '' }): Promise<AcceptanceResult> {
   const acceptance = mission.grant?.acceptance ?? null;
   if (acceptance === null) {
     return { passed: true, summary: 'no acceptance check', output: '', tampered: false };
@@ -117,7 +168,23 @@ async function runAcceptanceWith(host: ProviderHost, mission: MissionRecord, roo
   if (controller.signal.aborted || host.disposed) {
     return stopped(id);
   }
-  const run = await runTraced(host, command, root, false, controller);
+  const hidden = new Set(manifest.hidden);
+  const access = protectedProjectAccess(
+    root,
+    // The implementation and its dependencies may have been created by the
+    // Mission after authorization.  Give the verifier the current recorded
+    // project view, then let the integrity/scope review below decide whether
+    // each new path was authorized.  Host-only specifications and recognized
+    // secrets remain absent from the child view.
+    [...before.files.keys()].filter((file) => !hidden.has(file) && !protectedVerifierSecret(file)),
+    [...manifest.writable, ...manifest.outputs],
+    null,
+    [TRACE_RUNTIME_DIR],
+  );
+  if (!access.ok) {
+    return unverifiable(`the protected verifier view could not be built: ${access.error}`);
+  }
+  const run = await runTraced(host, command, root, false, controller, env, access.access, mode);
   if (run.interrupted || host.disposed) {
     // Paused, cancelled or closed while the check ran: not a result. The caller applies the stop.
     return stopped(id);
@@ -151,7 +218,16 @@ async function runAcceptanceWith(host: ProviderHost, mission: MissionRecord, roo
   if (code !== 0) {
     return { passed: false, summary: `${id} exit=${code ?? 'unknown'} with every frozen file intact`, output: run.output, tampered: false };
   }
-  const reinforced = await runFrozenCases(acceptance.files, root, fs, controller);
+  const reinforced = await runFrozenCases(
+    acceptance.files,
+    root,
+    fs,
+    controller,
+    acceptance.references ?? [],
+    host.settings.shell?.isolation ?? 'project',
+    [...mid.files.keys()].filter((file) => !hidden.has(file) && !protectedVerifierSecret(file)),
+    mode,
+  );
   if (reinforced.kind === 'interrupted' || host.disposed) {
     return stopped(id);
   }
@@ -190,8 +266,15 @@ async function runAcceptanceWith(host: ProviderHost, mission: MissionRecord, roo
   const level =
     reinforced.kind === 'passed'
       ? `; reinforced level: ${reinforced.summary}; ${integrity}`
-      : `; protected level (frozen check exit code; ${integrity}; no host-compared cases)`;
-  return { passed: true, summary: `${id} exit=0 with every frozen file intact${level}${node}`, output: run.output, tampered: false, ...(approved ? { approved } : {}) };
+      : `; ${mode.kind === 'protected' ? 'protected verification' : 'verification without isolation'} (frozen check exit code; ${integrity}; no host-compared cases)`;
+  return {
+    passed: true,
+    summary: `${id} exit=0 with every frozen file intact${level}${node}`,
+    output: run.output,
+    tampered: false,
+    hostMetrics: { wall_ms: run.elapsedMs, exit_code: 0 },
+    ...(approved ? { approved } : {}),
+  };
 }
 
 /** One host record of the project; on failure, why (or that it was stopped). */
@@ -274,12 +357,20 @@ async function runFrozenCases(
   root: string,
   fs: AgentFs,
   controller: AbortController,
+  references: readonly FrozenReference[] = [],
+  isolation: CommandIsolation = 'project',
+  visibleFiles: readonly string[] = [],
+  mode: VerificationMode = { kind: 'protected', reason: '' },
 ): Promise<{ kind: 'none' | 'passed' | 'failed' | 'tampered' | 'interrupted' | 'unverifiable'; summary: string }> {
   const specs = files.filter((file) => CASES_FILE.test(file.path));
-  if (specs.length === 0) {
+  if (specs.length === 0 && references.length === 0) {
     return { kind: 'none', summary: '' };
   }
   let total = 0;
+  const protectedAccess = protectedProjectAccess(root, visibleFiles, [], null, [TRACE_RUNTIME_DIR]);
+  if (!protectedAccess.ok) {
+    return { kind: 'unverifiable', summary: `the protected case view could not be built: ${protectedAccess.error}` };
+  }
   for (const file of specs) {
     let text: string;
     try {
@@ -300,7 +391,7 @@ async function runFrozenCases(
     const dir = await mkdtemp(path.join(os.tmpdir(), 'rame-cases-'));
     const traceFile = path.join(dir, 'trace.jsonl');
     try {
-      const outcome = await runHostCases(root, parsed.spec, { signal: controller.signal, trace: { file: traceFile, root, preload: path.join(TRACE_RUNTIME_DIR, 'acceptance-trace.cjs') } });
+      const outcome = await runHostCases(root, parsed.spec, { signal: controller.signal, isolation, protectedAccess: protectedAccess.access, verificationMode: mode, trace: { file: traceFile, root, preload: path.join(TRACE_RUNTIME_DIR, 'acceptance-trace.cjs') } });
       if (outcome.interrupted) {
         return { kind: 'interrupted', summary: '' };
       }
@@ -308,7 +399,7 @@ async function runFrozenCases(
       if (trace.processes === 0) {
         return { kind: 'unverifiable', summary: `RAME could not observe the host-compared cases in ${file.path}` };
       }
-      const leaks = trace.edges.filter((edge) => CASES_FILE.test(edge.path) && edge.kind !== 'entry').map((edge) => edge.path);
+      const leaks = trace.edges.filter((edge) => HOST_SPEC_FILE.test(edge.path) && edge.kind !== 'entry').map((edge) => edge.path);
       if (leaks.length > 0) {
         return { kind: 'unverifiable', summary: `the code under test read the expected values in ${[...new Set(leaks)].join(', ')} while the host-compared cases ran` };
       }
@@ -316,7 +407,9 @@ async function runFrozenCases(
         return { kind: 'failed', summary: `the host-compared cases in ${file.path} are incomplete: ${outcome.reason}` };
       }
       if (outcome.status === 'failed') {
-        const first = outcome.failed.slice(0, 3).map((entry) => `case ${entry.index + 1} (${entry.call}) ${entry.reason}`).join('; ');
+        // The inputs of the failing cases help the agent find the fault; their expected values are never shown.
+        const input = (index: number) => (JSON.stringify(parsed.spec.cases[index]?.args ?? []) ?? '').slice(1, -1).slice(0, 120);
+        const first = outcome.failed.slice(0, 3).map((entry) => `case ${entry.index + 1} (${entry.call}(${input(entry.index)})) ${entry.reason}`).join('; ');
         return { kind: 'failed', summary: `${outcome.failed.length} of ${outcome.total} host-compared cases in ${file.path} failed: ${first}` };
       }
       total += outcome.total;
@@ -324,5 +417,27 @@ async function runFrozenCases(
       await rm(dir, { recursive: true, force: true });
     }
   }
-  return { kind: 'passed', summary: `${total} host-compared case(s) passed outside the code under test` };
+  // The differential comparison with the frozen original, on fresh inputs every time.
+  const differential: string[] = [];
+  for (const reference of references) {
+    const frozenSpec = files.find((file) => file.path === reference.spec);
+    let text: string;
+    try {
+      text = await fs.readText(reference.spec);
+    } catch {
+      return { kind: 'tampered', summary: `${reference.spec} could not be read` };
+    }
+    if (frozenSpec === undefined || hashContent(text) !== frozenSpec.hash) {
+      return { kind: 'tampered', summary: `${reference.spec} changed since the Mission was authorized` };
+    }
+    const outcome = await runDifferential(root, reference, text, { signal: controller.signal, isolation, protectedAccess: protectedAccess.access, verificationMode: mode });
+    if (outcome.kind === 'interrupted') {
+      return { kind: 'interrupted', summary: '' };
+    }
+    if (outcome.kind !== 'passed') {
+      return { kind: outcome.kind, summary: outcome.summary };
+    }
+    differential.push(outcome.summary);
+  }
+  return { kind: 'passed', summary: [...(specs.length > 0 ? [`${total} host-compared case(s) passed outside the code under test`] : []), ...differential].join('; ') };
 }

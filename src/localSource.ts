@@ -15,6 +15,10 @@ import { probeLocalProps } from './generationController.js';
 import { classifyEndpoint, modelFitness, scanLocalServer } from './localServers.js';
 import { lastScan, recordScan } from './localSourceState.js';
 import { recordMissionWebRequest, validateMissionWebRequest } from './missionWeb.js';
+import { advisorRefusal } from './advisorModels.js';
+import { recordMissionRunsRequest } from './missionProgress.js';
+import { catalogIds, mainModelOf } from './advisorHost.js';
+import { ISOLATION_WORDS } from './shellIsolation.js';
 import type { LocalSourceMessage } from './localSourceView.js';
 import type { ProviderHost } from './providerTypes.js';
 import { EMPTY_EXTERNAL_LOCAL, type ExternalLocalChoice } from './settingsStore.js';
@@ -109,14 +113,39 @@ export async function handleLocalSourceMessage(host: ProviderHost, message: Loca
       }
       return;
     }
-    case 'shellAccessSet':
-      host.settings = { ...host.settings, shell: { enabled: message.enabled } };
+    case 'shellAccessSet': {
+      const isolation = message.isolation ?? host.settings.shell?.isolation ?? 'project';
+      host.settings = { ...host.settings, shell: { enabled: message.enabled, isolation } };
       host.persistSettings();
       host.status = message.enabled
-        ? 'Terminal commands ON for Agent (run_command): each command is shown exactly and waits for your approval in every profile, Workspace full included. It runs with your permissions in the project folder: no sandbox.'
+        ? `Terminal commands ON for Agent (run_command), ${ISOLATION_WORDS[isolation]}. Each command is shown exactly and waits for your approval in every profile, Workspace full included, unless Full Access includes commands.${isolation === 'total' ? '' : ' Where the isolation cannot be applied, a command is not run.'}`
         : 'Terminal commands OFF: Agent cannot run shell commands.';
       await host.postState();
       return;
+    }
+    case 'missionRunsSet':
+      // Kept until this Mission is authorized; validated again there (missionProgress.ts runBudget).
+      recordMissionRunsRequest(host, message.missionId, message.runsPerTask);
+      return;
+    case 'advisorModelSet': {
+      if (message.model === '') {
+        host.settings = { ...host.settings, advisorModel: '' };
+        host.persistSettings();
+        host.status = 'No advisor model: the main model works without consulting another model.';
+        await host.postState();
+        return;
+      }
+      const main = mainModelOf(host);
+      const refusal = advisorRefusal(main, message.model, catalogIds(host));
+      // Kept even when it cannot advise the main model chosen now (it may advise another one); each consultation checks again.
+      host.settings = { ...host.settings, advisorModel: message.model };
+      host.persistSettings();
+      host.status = refusal === null
+        ? `Advisor model: ${message.model}. ${main.provider === 'local' ? 'The local model' : `Meta ${main.model}`} keeps the tools and may consult it when stuck, within your permissions and budgets.`
+        : `Advisor model saved as ${message.model}, but it cannot advise the main model now: ${refusal}.`;
+      await host.postState();
+      return;
+    }
     case 'webAccessSet': {
       const url = message.searxngUrl.trim();
       if (message.search === 'searxng') {
@@ -130,7 +159,7 @@ export async function handleLocalSourceMessage(host: ProviderHost, message: Loca
       host.settings = { ...host.settings, web: { enabled: message.enabled, search: message.search, searxngUrl: url } };
       host.persistSettings();
       host.status = message.enabled
-        ? `Web access ON for Agent: web_search (${message.search === 'searxng' ? 'your SearXNG' : 'DuckDuckGo'}) and web_fetch, read-only. Each call is shown and, except in Workspace full, needs your approval.`
+        ? `Web access ON for Agent: web_search (${message.search === 'searxng' ? 'your SearXNG' : 'DuckDuckGo'}) and web_fetch, read-only. Each call is shown and needs your approval, unless Autonomy & Permissions pre-authorizes it.`
         : 'Web access OFF: Agent cannot search or read web pages.';
       await host.postState();
       return;

@@ -5,7 +5,7 @@
  * (a plan that was only created is never "completed").
  */
 
-import type { MissionRecord } from './missionStore.js';
+import { currentTask, type MissionRecord, type MissionResult } from './missionStore.js';
 
 export type MissionPhase =
   | 'planning'
@@ -71,7 +71,7 @@ export function missionPhase(mission: MissionRecord, live: MissionLiveFacts): Mi
   }
 }
 
-export type AcceptanceState = 'none' | 'not_run' | 'passed' | 'failed' | 'tampered';
+export type AcceptanceState = 'none' | 'not_run' | 'passed' | 'failed' | 'inconclusive' | 'tampered';
 
 const ACCEPTANCE_PREFIX = 'acceptance (run by the host): ';
 // A pass ends here or continues with its level ("; reinforced: …"); ", but …" is a failure.
@@ -90,6 +90,10 @@ export function acceptanceState(mission: MissionRecord): { state: AcceptanceStat
     return { state: 'not_run', summary: '' };
   }
   const summary = last.text.slice(ACCEPTANCE_PREFIX.length);
+  // Measured twice by the host and unreliable both times: not verified, but not a fault of the code either.
+  if (summary.startsWith('metrics inconclusive')) {
+    return { state: 'inconclusive', summary };
+  }
   return { state: ACCEPTANCE_PASSED.test(summary) ? 'passed' : 'failed', summary };
 }
 
@@ -102,6 +106,26 @@ export interface MissionFinalReport {
   minutes: number;
   models: string[];
   metaConsultations: string;
+  /** The isolation each test really ran with, as the host noted it at run time. */
+  isolation: string[];
+}
+
+/** Prefix of the host record line that notes the isolation a test ran with. */
+export const TEST_ISOLATION_PREFIX = 'test isolation: ';
+
+/** Host side, before a Mission test starts: note the isolation it gets (deduplicated). */
+export function noteTestIsolation(mission: MissionRecord, label: string): MissionResult<MissionRecord> {
+  const task = currentTask(mission);
+  const text = `${TEST_ISOLATION_PREFIX}${label}`.slice(0, 300);
+  if (task !== null && !mission.evidence.some((entry) => entry.kind === 'host-record' && entry.text === text)) {
+    mission.evidence.push({ taskId: task.id, kind: 'host-record', text, at: Date.now() });
+  }
+  return { ok: true, value: mission };
+}
+
+/** Distinct isolation levels the host noted for this Mission's test runs. */
+export function missionTestIsolation(mission: MissionRecord): string[] {
+  return [...new Set(mission.evidence.filter((entry) => entry.kind === 'host-record' && entry.text.startsWith(TEST_ISOLATION_PREFIX)).map((entry) => entry.text.slice(TEST_ISOLATION_PREFIX.length)))];
 }
 
 const MAX_REPORT_LINES = 12;
@@ -171,6 +195,7 @@ export function missionFinalReport(mission: MissionRecord): MissionFinalReport |
     internalRuns: mission.taskRunsUsed,
     minutes: Math.max(0, Math.round((mission.updatedAt - startedAt) / 6000) / 10),
     models,
-    metaConsultations: escalation === null ? 'none allowed' : `${escalation.used} of ${escalation.maxConsultations} (${escalation.model})`,
+    metaConsultations: escalation === null ? 'none allowed' : `${escalation.used} of ${escalation.maxConsultations ?? 'no count limit'} (${escalation.model})`,
+    isolation: missionTestIsolation(mission),
   };
 }

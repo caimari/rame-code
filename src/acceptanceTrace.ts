@@ -291,7 +291,8 @@ export function insideFolder(rel: string, folder: string): boolean {
   return target === dir || target.startsWith(`${dir}/`);
 }
 
-const CASES_PATH = /\.rame-cases\.json$/i;
+// Host-side acceptance descriptions: cases (expected values) and references (how inputs are generated).
+const CASES_PATH = /\.rame-(?:cases|reference)\.json$/i;
 
 /**
  * At run time, what the trace shows outside the authorized scope:

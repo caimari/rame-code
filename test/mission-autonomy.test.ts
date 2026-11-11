@@ -140,7 +140,8 @@ test('verification comes only from host data: a passing test after the last chan
   assert.equal(readsOnly.progress, false, 'reading alone is not progress');
   const first = assessRun(mission, base);
   assert.equal(first.progress, true);
-  const again = assessRun({ ...mission, auto: { ...mission.auto!, lastSignature: first.signature } }, base);
+  // Since 08-11 (missionProgress.ts) progress is measured against the state and results the Mission already reached.
+  const again = assessRun({ ...mission, auto: { ...mission.auto!, lastSignature: first.signature, ...first.memory } }, base);
   assert.equal(again.progress, false, 'the same state again is not progress');
 });
 
@@ -341,6 +342,8 @@ test('Mission escalation stays within its grant: model, count, output budget, pa
   const advice = { diagnosis: 'Write final into a.txt.', steps: ['Patch a.txt.'], checks: ['npm:test passes.'] };
   await withHarness({ settings: { allowCloudEscalation: true } }, async (h) => {
     h.secretValues.set(API_KEY_SECRET, 'fake-key-mission-escalation');
+    // The user pre-authorized Meta for Missions of this workspace (Autonomy & Permissions).
+    await h.preauthorize({ meta: 1 });
     await h.writeFile('secret-notes.txt', 'FILE-CONTENT-NEVER-SENT-551');
     const mission = await createMission(h);
     fakeCloud.handler = () => Response.json({ choices: [{ message: { role: 'assistant', content: JSON.stringify(advice) }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } });

@@ -209,9 +209,12 @@ export class OutputCutOffError extends Error {
 
 /** The request cannot fit the context window; nothing was cut or sent. */
 export class GenerationContextError extends Error {
-  constructor(message: string) {
+  /** The input tokens the refused request needs, when known (the reload offer sizes itself on it). */
+  readonly neededTokens: number | null;
+  constructor(message: string, neededTokens: number | null = null) {
     super(message);
     this.name = 'GenerationContextError';
+    this.neededTokens = neededTokens;
   }
 }
 
@@ -289,6 +292,7 @@ export function resolveOutputBudget(
           (provider === 'local'
             ? 'Start a new thread or raise the local context size.'
             : 'Start a new thread with a shorter request.'),
+        promptTokens,
       );
     }
     if (budget > free) {

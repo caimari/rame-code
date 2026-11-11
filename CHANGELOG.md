@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Python 3.14 printed a `DeprecationWarning` from the isolation launcher (`runtime/rame-isolate.py`) on every isolated command, test and job, mixed into their output; the packed Landlock structure now states its layout explicitly (same 12-byte layout as before). It would become an error in Python 3.19. Found by CI on `ubuntu-latest`.
+- Two timing tests failed intermittently on slower CI machines, where an acceptance run with no wait at all took up to 1133 ms of start-up (RAME's trace hooks plus process start-up, see the limitation below): P4 (Programme, «twice as fast» than a 1200 ms baseline) and B-27 (Mission, absolute `wall_ms <= 1000`). Their fixtures now wait 3200 ms (P4) and 3000 ms against `<= 2500` (B-27), so the code under test, not the machine, decides; the criteria, the partial fix that must not meet P4, and the forging attempt that must not pass B-27 are unchanged in kind.
+
+### Known limitations
+
+- A Programme baseline is measured without RAME's trace hooks, while a Mission's frozen acceptance runs load them (they detect what the check reads). The acceptance figure therefore carries extra start-up cost the baseline does not: about +60 ms on a fast Linux desktop and about +300–450 ms on CI runners. The bias only makes a relative criterion stricter (a real improvement near the limit can fail; a false one cannot pass). Measuring both the same way is planned.
+
 ## [0.3.0] - 2026-11-11
 
 ### Added
